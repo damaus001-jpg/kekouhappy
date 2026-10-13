@@ -1,0 +1,296 @@
+diff --git a/app/maoyi/controlProtocol.node.ts b/app/maoyi/controlProtocol.node.ts
+index 9ef7f7f..0cba0cb 100644
+--- a/app/maoyi/controlProtocol.node.ts
++++ b/app/maoyi/controlProtocol.node.ts
+@@ -64,6 +64,11 @@ export type MaoyiControlCommand =
+       ownerProcessId: number;
+     }>
+   | Readonly<{ type: 'window.show'; bounds?: MaoyiWindowBounds }>
++  | Readonly<{
++      type: 'window.present';
++      requestId: string;
++      bounds: MaoyiWindowBounds;
++    }>
+   | Readonly<{ type: 'window.focus' }>
+   | Readonly<{ type: 'window.hide' }>
+   | Readonly<{
+@@ -120,6 +125,12 @@ export type MaoyiControlEvent =
+       type: 'window.bounds-changed';
+       bounds: MaoyiWindowBounds;
+     }>
++  | Readonly<{
++      type: 'window.presentation-applied';
++      requestId: string;
++      visible: boolean;
++      bounds: MaoyiWindowBounds;
++    }>
+   | Readonly<{ type: 'window.closed' }>
+   | Readonly<{ type: 'closed' }>
+   | Readonly<{ type: 'window.owner-attached'; ownerProcessId: number }>
+@@ -155,7 +166,13 @@ export type MaoyiControlEvent =
+       appliedCount: number;
+     }>
+   | Readonly<{ type: 'script.result'; requestId: string; result: unknown }>
+-  | Readonly<{ type: 'error'; requestId?: string; message: string }>
++  | Readonly<{
++      type: 'error';
++      requestId?: string;
++      message: string;
++      visible?: boolean;
++      bounds?: MaoyiWindowBounds;
++    }>
+   | Readonly<{ type: 'transport.error'; code: string }>;
+ 
+ type MaoyiControlPayload<T> = Readonly<{
+@@ -462,6 +479,19 @@ export function parseMaoyiControlCommand(
+       const bounds = parseBounds(value.bounds);
+       return bounds ? { type: 'window.show', bounds } : undefined;
+     }
++    case 'window.present': {
++      if (
++        !hasOnlyKeys(value, ['type', 'requestId', 'bounds']) ||
++        !isBoundedString(value.requestId, 160) ||
++        value.requestId.length === 0
++      ) {
++        return undefined;
++      }
++      const bounds = parseBounds(value.bounds);
++      return bounds
++        ? { type: 'window.present', requestId: value.requestId, bounds }
++        : undefined;
++    }
+     case 'window.focus':
+     case 'window.hide':
+     case 'shutdown':
+diff --git a/app/maoyi/windowController.main.ts b/app/maoyi/windowController.main.ts
+index cc3ded7..4083cec 100644
+--- a/app/maoyi/windowController.main.ts
++++ b/app/maoyi/windowController.main.ts
+@@ -20,6 +20,7 @@ const windowControllerKey = Symbol.for('maoyi.signal.window-controller.v1');
+ type GuardedWindowMethods = Readonly<{
+   show: () => void;
+   showInactive: () => void;
++  moveTop: () => void;
+   focus: () => void;
+   restore: () => void;
+   maximize: () => void;
+@@ -170,6 +171,30 @@ export function startMaoyiWindowController(
+     mainWindow.setBounds(bounds, false);
+   };
+ 
++  const getPresentationBounds = (
++    fallback: MaoyiWindowBounds
++  ): MaoyiWindowBounds => {
++    if (!mainWindow || mainWindow.isDestroyed()) {
++      return fallback;
++    }
++    try {
++      return mainWindow.getBounds();
++    } catch {
++      return fallback;
++    }
++  };
++
++  const getPresentationVisible = (): boolean => {
++    if (!mainWindow || mainWindow.isDestroyed()) {
++      return false;
++    }
++    try {
++      return mainWindow.isVisible();
++    } catch {
++      return false;
++    }
++  };
++
+   const attachOwnerToWindow = (window: BrowserWindow): boolean => {
+     if (!ownerDescriptor || window.isDestroyed()) {
+       return false;
+@@ -216,11 +241,80 @@ export function startMaoyiWindowController(
+     if (pendingBounds) {
+       applyBounds(pendingBounds);
+     }
+-    if (!mainWindow.isVisible()) {
+-      guardedMethods.get(mainWindow)?.show();
++    const originals = guardedMethods.get(mainWindow);
++    if (!originals || mainWindow.webContents.isDestroyed()) {
++      hideAllWindows();
++      return;
++    }
++    try {
++      originals.show();
++      originals.moveTop();
++      mainWindow.webContents.invalidate();
++    } catch {
++      hideAllWindows();
++      bridge.send({ type: 'transport.error', code: 'window-show-failed' });
++    }
++  };
++
++  const presentMainWindow = (
++    command: Extract<MaoyiControlCommand, { type: 'window.present' }>
++  ): void => {
++    const sendError = (message: string): void => {
++      desiredVisible = false;
++      hideAllWindows();
++      bridge.send({
++        type: 'error',
++        requestId: command.requestId,
++        message,
++        visible: getPresentationVisible(),
++        bounds: getPresentationBounds(command.bounds),
++      });
++    };
++
++    if (
++      stopped ||
++      !transportAuthenticated ||
++      !runtimeReady ||
++      securityLocked ||
++      !ownerAttached ||
++      !mainWindow ||
++      mainWindow.isDestroyed() ||
++      mainWindow.webContents.isDestroyed()
++    ) {
++      sendError('Signal window presentation is unavailable while locked');
++      return;
++    }
++
++    desiredVisible = true;
++    const originals = guardedMethods.get(mainWindow);
++    if (!originals) {
++      sendError('Signal window presentation methods are unavailable');
++      return;
+     }
+-    if (!mainWindow.webContents.isDestroyed()) {
++
++    try {
++      applyBounds(command.bounds);
++      if (!canExposeWindows()) {
++        sendError('Signal window presentation security gate was closed');
++        return;
++      }
++      originals.show();
++      originals.moveTop();
+       mainWindow.webContents.invalidate();
++      const bounds = getPresentationBounds(command.bounds);
++      const visible = mainWindow.isVisible() && canExposeWindows();
++      if (!visible) {
++        sendError('Signal window did not become visible');
++        return;
++      }
++      bridge.send({
++        type: 'window.presentation-applied',
++        requestId: command.requestId,
++        visible,
++        bounds,
++      });
++    } catch (error) {
++      sendError(safeErrorMessage(error));
+     }
+   };
+ 
+@@ -231,6 +325,7 @@ export function startMaoyiWindowController(
+     const originals: GuardedWindowMethods = {
+       show: window.show.bind(window),
+       showInactive: window.showInactive.bind(window),
++      moveTop: window.moveTop.bind(window),
+       focus: window.focus.bind(window),
+       restore: window.restore.bind(window),
+       maximize: window.maximize.bind(window),
+@@ -424,8 +519,20 @@ export function startMaoyiWindowController(
+-      case 'window.owner':
++      case 'window.owner': {
++        const ownerMatches =
++          ownerAttached &&
++          ownerDescriptor?.handle === command.handle &&
++          ownerDescriptor.ownerProcessId === command.ownerProcessId;
++        if (ownerMatches) {
++          bridge.send({
++            type: 'window.owner-attached',
++            ownerProcessId: command.ownerProcessId,
++          });
++          return;
++        }
+         ownerDescriptor = {
+           handle: command.handle,
+           ownerProcessId: command.ownerProcessId,
+         };
+         applyOwner();
+         return;
++      }
+       case 'window.bounds-changed':
+@@ -442,6 +549,9 @@ export function startMaoyiWindowController(
+         desiredVisible = true;
+         showMainWindow();
+         return;
++      case 'window.present':
++        presentMainWindow(command);
++        return;
+       case 'window.focus':
+         if (canExposeWindows() && mainWindow && !mainWindow.isDestroyed()) {
+           guardedMethods.get(mainWindow)?.focus();
+@@ -546 +656,4 @@ export function startMaoyiWindowController(
+   });
++  Reflect.set(globalThis, windowControllerKey, controller);
++  return controller;
++}
+diff --git a/ts/test-node/maoyi/controlProtocol_test.node.ts b/ts/test-node/maoyi/controlProtocol_test.node.ts
+index 51aa13b..a83ce89 100644
+--- a/ts/test-node/maoyi/controlProtocol_test.node.ts
++++ b/ts/test-node/maoyi/controlProtocol_test.node.ts
+@@ -92,6 +92,55 @@ describe('Maoyi typed control protocol', () => {
+         bounds: { x: 10, y: 20, width: 800, height: 600 },
+       }
+     );
++    const presentationBounds = { x: 30, y: 40, width: 900, height: 700 };
++    assert.deepEqual(
++      parseMaoyiControlCommand({
++        type: 'window.present',
++        requestId: 'present-1',
++        bounds: presentationBounds,
++      }),
++      {
++        type: 'window.present',
++        requestId: 'present-1',
++        bounds: presentationBounds,
++      }
++    );
++    for (const invalidPresentation of [
++      {
++        type: 'window.present',
++        bounds: presentationBounds,
++      },
++      {
++        type: 'window.present',
++        requestId: '',
++        bounds: presentationBounds,
++      },
++      {
++        type: 'window.present',
++        requestId: 'x'.repeat(161),
++        bounds: presentationBounds,
++      },
++      {
++        type: 'window.present',
++        requestId: 'present-2',
++      },
++      {
++        type: 'window.present',
++        requestId: 'present-3',
++        bounds: { ...presentationBounds, width: 0 },
++      },
++      {
++        type: 'window.present',
++        requestId: 'present-4',
++        bounds: presentationBounds,
++        force: true,
++      },
++    ]) {
++      assert.equal(
++        parseMaoyiControlCommand(invalidPresentation),
++        undefined
++      );
++    }
+     assert.deepEqual(
+       parseMaoyiControlCommand(smartReplyResult),
+       smartReplyResult

@@ -1,0 +1,12 @@
+diff --git a/app/main.main.ts b/app/main.main.ts
+--- a/app/main.main.ts
++++ b/app/main.main.ts
+@@ -737,7 +737,8 @@
+   if (isMaoyiEmbedLaunch()) {
+     Object.assign(windowOptions, {
+       show: false,
++      backgroundColor: '#08090d',
+       frame: false,
+       hasShadow: false,
+       thickFrame: false,
+       skipTaskbar: true,

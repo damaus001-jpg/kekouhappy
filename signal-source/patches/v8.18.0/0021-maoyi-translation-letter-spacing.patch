@@ -1,0 +1,15 @@
+diff --git a/stylesheets/_modules.scss b/stylesheets/_modules.scss
+--- a/stylesheets/_modules.scss
++++ b/stylesheets/_modules.scss
+@@ -1177,9 +1177,9 @@
+ 
+ .module-message__maoyi-translation {
+   @include mixins.font-body-1;
++  letter-spacing: 0.3px;
+ 
+-  border-block-start: 1px solid
+-    color-mix(in srgb, currentColor 24%, transparent);
++  border-block-start: 1px solid #d8c081;
+   color: #0b7654;
+   margin-block-start: 5px;
+   overflow-wrap: break-word;

@@ -1,0 +1,17 @@
+const fs = require('node:fs');
+const ts = require('typescript');
+const assert = require('node:assert/strict');
+const source = fs.readFileSync(require('node:path').join(__dirname, '../electron/main.ts'), 'utf8');
+const start = source.indexOf('function normalizeTranslationModel(');
+const end = source.indexOf('function sanitizeConfig(', start);
+assert.ok(start >= 0 && end > start);
+const code = ts.transpileModule(source.slice(start, end), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+const normalize = new Function('defaultModel', `${code};return normalizeTranslationModel;`)('deepseek-flash');
+assert.equal(normalize('deepseek-v4-pro', false), 'deepseek-flash', 'Temporary Pro default must migrate');
+assert.equal(normalize('deepseek-v4-pro', true), 'deepseek-v4-pro', 'Subsequent explicit Pro selection must remain usable');
+assert.equal(normalize('deepseek-v4-flash', false), 'deepseek-flash', 'Old Flash alias must use current official ID');
+assert.equal(normalize('deepseek-v4-flash', true), 'deepseek-flash');
+assert.equal(normalize('deepseek-flash', true), 'deepseek-flash');
+for (const invalid of [null, undefined, '', 'bad model', {}]) assert.equal(normalize(invalid, false), 'deepseek-flash');
+assert.match(source, /flashDefaultApplied: true/);
+console.log('Translation model migration checks passed');

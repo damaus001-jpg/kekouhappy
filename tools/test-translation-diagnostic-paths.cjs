@@ -1,0 +1,18 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const { deriveDataRoot, isOwnedDataRoot } = require('../signal-guard/df-bootstrap.cjs');
+const { diagnosticDataPath, migrateDiagnosticDataRoot } = require('./translation-diagnostic-paths.cjs');
+const testRoot = fs.mkdtempSync(path.resolve(__dirname, '../.tmp/diagnostic-path-test-'));
+const previous = path.join(testRoot, '.tmp', 'translation-diagnostics-client', 'user-data');
+fs.mkdirSync(previous, { recursive: true });
+fs.writeFileSync(path.join(previous, 'login-state.txt'), 'preserved-login');
+const target = migrateDiagnosticDataRoot(testRoot);
+assert.equal(target, diagnosticDataPath(testRoot));
+assert.equal(fs.readFileSync(path.join(target, 'login-state.txt'), 'utf8'), 'preserved-login');
+assert.equal(isOwnedDataRoot(target), true);
+assert.equal(deriveDataRoot(path.join(target, 'SignalInstances', 'Signal-test')), target);
+assert.equal(migrateDiagnosticDataRoot(testRoot), target);
+fs.mkdirSync(previous);
+assert.throws(() => migrateDiagnosticDataRoot(testRoot), /refusing to overwrite/);
+console.log('diagnostic-paths: Signal guard accepts root, migration preserves data, conflicting roots are rejected');

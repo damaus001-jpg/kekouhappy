@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "translationSource": "config/translation-prompts.default.json",
+  "smartReplySource": "config/smart-reply-prompt.default.txt",
+  "hashAlgorithm": "sha256-utf8-normalized-content",
+  "chineseToEnglishSha256": "43b7637c555d0e8c2f99563f41f178b1e7c60c06a2c60b1642dc92d104e26d25",
+  "englishToChineseSha256": "f8d7a2780a0f3d1dab06ab4a3e2e06c991070ead1679a55ccdd056baabbebf3f",
+  "smartReplySha256": "5b9dd5ce9078955c33f4dfe63486f497939334196b44f9b46b19a7195f9f7dd2",
+  "combinedSha256": "9b9a44123aba306b0b21ea05a4a701132103e43f0f4bf45b9035699f24ff5c99",
+  "containsDeepSeekApiKey": false
+}

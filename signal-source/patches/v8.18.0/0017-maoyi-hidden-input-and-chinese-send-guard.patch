@@ -1,0 +1,256 @@
+diff --git a/app/maoyi/windowController.main.ts b/app/maoyi/windowController.main.ts
+index ebae402..ec019b0 100644
+--- a/app/maoyi/windowController.main.ts
++++ b/app/maoyi/windowController.main.ts
+@@ -112,12 +112,39 @@ export function startMaoyiWindowController(
+       return;
+     }
+     try {
++      if (window.isFocused()) {
++        window.blur();
++      }
++      window.setFocusable(false);
+       guardedMethods.get(window)?.hide();
+     } catch {
+       // A destroyed native window is already hidden from the user.
+     }
+   };
+ 
++  const enableWindowInput = (window: BrowserWindow): boolean => {
++    if (window.isDestroyed() || !canExposeWindows()) {
++      rawHide(window);
++      return false;
++    }
++    try {
++      window.setFocusable(true);
++      return true;
++    } catch {
++      rawHide(window);
++      return false;
++    }
++  };
++
++  const enableAllWindowInput = (): boolean => {
++    for (const window of windows) {
++      if (!enableWindowInput(window)) {
++        return false;
++      }
++    }
++    return true;
++  };
++
+   const hideAllWindows = (): void => {
+     for (const window of windows) {
+       rawHide(window);
+@@ -262,6 +289,10 @@ export function startMaoyiWindowController(
+       return;
+     }
+     try {
++      if (!enableAllWindowInput()) {
++        hideAllWindows();
++        return;
++      }
+       originals.show();
+       originals.moveTop();
+       mainWindow.webContents.invalidate();
+@@ -313,6 +344,10 @@ export function startMaoyiWindowController(
+         sendError('Signal window presentation security gate was closed');
+         return;
+       }
++      if (!enableAllWindowInput()) {
++        sendError('Signal window input gate was closed');
++        return;
++      }
+       originals.show();
+       originals.moveTop();
+       mainWindow.webContents.invalidate();
+@@ -358,28 +393,28 @@ export function startMaoyiWindowController(
+       show: {
+         configurable: true,
+         value: () => {
+-          if (canExposeWindows()) originals.show();
++          if (enableWindowInput(window)) originals.show();
+           else originals.hide();
+         },
+       },
+       showInactive: {
+         configurable: true,
+         value: () => {
+-          if (canExposeWindows()) originals.showInactive();
++          if (enableWindowInput(window)) originals.showInactive();
+           else originals.hide();
+         },
+       },
+       focus: {
+         configurable: true,
+         value: () => {
+-          if (canExposeWindows()) originals.focus();
++          if (enableWindowInput(window)) originals.focus();
+           else originals.hide();
+         },
+       },
+       restore: {
+         configurable: true,
+         value: () => {
+-          if (canExposeWindows()) originals.restore();
++          if (enableWindowInput(window)) originals.restore();
+           else originals.hide();
+         },
+       },
+@@ -391,6 +426,12 @@ export function startMaoyiWindowController(
+       },
+     });
+ 
++    try {
++      window.setFocusable(false);
++    } catch {
++      // A window that is closing cannot receive user input.
++    }
++
+     window.on('show', () => {
+       hideWhenBlocked();
+       bridge.send({
+diff --git a/ts/maoyi/outgoingTextGuard.std.ts b/ts/maoyi/outgoingTextGuard.std.ts
+new file mode 100644
+index 0000000..e03abaa
+--- /dev/null
++++ b/ts/maoyi/outgoingTextGuard.std.ts
+@@ -0,0 +1,28 @@
++// Copyright 2026 Signal Messenger, LLC
++// SPDX-License-Identifier: AGPL-3.0-only
++
++export const maoyiOutgoingTextGuardVersion =
++  'df.signal.outgoing-text-guard.v1' as const;
++
++const hanTextPattern = /\p{Script=Han}/u;
++
++export class MaoyiOutgoingTextBlockedError extends Error {
++  constructor() {
++    super('Maoyi blocked outgoing text containing Chinese characters');
++    this.name = 'MaoyiOutgoingTextBlockedError';
++  }
++}
++
++export function containsMaoyiBlockedChineseText(
++  value: string | undefined
++): boolean {
++  return Boolean(value && hanTextPattern.test(value));
++}
++
++export function assertMaoyiOutgoingTextAllowed(
++  value: string | undefined
++): void {
++  if (containsMaoyiBlockedChineseText(value)) {
++    throw new MaoyiOutgoingTextBlockedError();
++  }
++}
+diff --git a/ts/models/conversations.preload.ts b/ts/models/conversations.preload.ts
+index 12e19c3..22f398c 100644
+--- a/ts/models/conversations.preload.ts
++++ b/ts/models/conversations.preload.ts
+@@ -118,6 +118,7 @@ import { migrateColor } from '../util/migrateColor.node.ts';
+ import { isNotNil } from '../util/isNotNil.std.ts';
+ import { signalProtocolStore } from '../SignalProtocolStore.preload.ts';
+ import { shouldSaveNotificationAvatarToDisk } from '../services/notifications.preload.ts';
++import { assertMaoyiOutgoingTextAllowed } from '../maoyi/outgoingTextGuard.std.ts';
+ import { storageServiceUploadJob } from '../services/storage.preload.ts';
+ import { challengeHandler } from '../services/challengeHandler.preload.ts';
+ import { sendUsernameChangeSyncMessage } from '../services/username.preload.ts';
+@@ -4237,6 +4238,8 @@ export class ConversationModel {
+       extraReduxActions?: () => void;
+     } = {}
+   ): Promise<MessageAttributesType | undefined> {
++    assertMaoyiOutgoingTextAllowed(body);
++
+     if (this.isGroupV1AndDisabled()) {
+       return;
+     }
+diff --git a/ts/state/ducks/composer.preload.ts b/ts/state/ducks/composer.preload.ts
+index eeb6d45..ddfc39d 100644
+--- a/ts/state/ducks/composer.preload.ts
++++ b/ts/state/ducks/composer.preload.ts
+@@ -111,6 +111,7 @@ import {
+ import { isPoll } from '../../messages/helpers.std.ts';
+ import type { Emoji } from '../../axo/emoji.std.ts';
+ import { isFeaturedEnabledNoRedux } from '../../util/isFeatureEnabled.dom.ts';
++import { containsMaoyiBlockedChineseText } from '../../maoyi/outgoingTextGuard.std.ts';
+ 
+ const { debounce, isEqual } = lodash;
+ 
+@@ -543,6 +544,17 @@ async function withPreSendChecks(
+   const draftAttachments =
+     options.draftAttachments ?? conversation.attributes.draftAttachments;
+ 
++  if (containsMaoyiBlockedChineseText(message)) {
++    log.error('Maoyi blocked outgoing composer text containing Chinese', {
++      textLength: message?.length ?? 0,
++    });
++    dispatch({
++      type: SHOW_TOAST,
++      payload: { toastType: ToastType.Error },
++    });
++    return;
++  }
++
+   try {
+     dispatch(updateComposerDisabled(conversationId, true));
+ 
+diff --git a/ts/test-node/maoyi/outgoingTextGuard_test.node.ts b/ts/test-node/maoyi/outgoingTextGuard_test.node.ts
+new file mode 100644
+index 0000000..bab4ae0
+--- /dev/null
++++ b/ts/test-node/maoyi/outgoingTextGuard_test.node.ts
+@@ -0,0 +1,32 @@
++// Copyright 2026 Signal Messenger, LLC
++// SPDX-License-Identifier: AGPL-3.0-only
++
++import assert from 'node:assert/strict';
++
++import {
++  assertMaoyiOutgoingTextAllowed,
++  containsMaoyiBlockedChineseText,
++  MaoyiOutgoingTextBlockedError,
++} from '../../maoyi/outgoingTextGuard.std.ts';
++
++describe('Maoyi outgoing text guard', () => {
++  it('blocks Chinese and mixed Chinese/English text before send', () => {
++    const mixed =
++      '今天和我的好朋友CoCo度过了愉快的一天。我买了几件衣服，她还送了我一个包';
++    assert.equal(containsMaoyiBlockedChineseText(mixed), true);
++    assert.throws(() => assertMaoyiOutgoingTextAllowed(mixed), {
++      name: MaoyiOutgoingTextBlockedError.name,
++    });
++  });
++
++  it('allows reviewed English and standalone URLs', () => {
++    assert.doesNotThrow(() =>
++      assertMaoyiOutgoingTextAllowed(
++        'I had a lovely day with my good friend CoCo'
++      )
++    );
++    assert.doesNotThrow(() =>
++      assertMaoyiOutgoingTextAllowed('https://example.com/path?a=1')
++    );
++  });
++});
+diff --git a/ts/util/sendEditedMessage.preload.ts b/ts/util/sendEditedMessage.preload.ts
+index 9efe7a5..5fa8c83 100644
+--- a/ts/util/sendEditedMessage.preload.ts
++++ b/ts/util/sendEditedMessage.preload.ts
+@@ -41,6 +41,7 @@ import { timeAndLogIfTooLong } from './timeAndLogIfTooLong.std.ts';
+ import { makeQuote } from './makeQuote.preload.ts';
+ import { getMessageSentTimestamp } from './getMessageSentTimestamp.std.ts';
+ import { itemStorage } from '../textsecure/Storage.preload.ts';
++import { assertMaoyiOutgoingTextAllowed } from '../maoyi/outgoingTextGuard.std.ts';
+ 
+ const log = createLogger('sendEditedMessage');
+ 
+@@ -64,6 +65,8 @@ export async function sendEditedMessage(
+     targetMessageId: string;
+   }
+ ): Promise<void> {
++  assertMaoyiOutgoingTextAllowed(body);
++
+   const conversation = window.ConversationController.get(conversationId);
+   strictAssert(conversation, 'no conversation found');
+ 

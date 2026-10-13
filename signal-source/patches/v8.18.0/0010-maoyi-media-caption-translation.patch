@@ -1,0 +1,126 @@
+diff --git a/ts/maoyi/messageProjection.std.ts b/ts/maoyi/messageProjection.std.ts
+--- a/ts/maoyi/messageProjection.std.ts
++++ b/ts/maoyi/messageProjection.std.ts
+@@ -6,9 +6,11 @@ export type MaoyiMessageProjectionInput = Readonly<{
+   id: string;
+   conversationId: string;
+   text?: string;
+   direction: 'incoming' | 'outgoing';
+   timestamp: number;
+-  attachments?: ReadonlyArray<unknown>;
++  attachments?: ReadonlyArray<
++    Readonly<{ contentType?: string }>
++  >;
+   textAttachment?: unknown;
+   attachmentDroppedDueToSize?: boolean;
+   contact?: unknown;
+@@ -58,6 +60,22 @@ export function legacyMaoyiSourceHash(text: string): string {
+   return (hash >>> 0).toString(36);
+ }
+ 
++function hasTranslatableMediaCaptionPayload(
++  message: MaoyiMessageProjectionInput
++): boolean {
++  const attachments = message.attachments;
++  return Boolean(
++    attachments?.length &&
++      attachments.every(attachment => {
++        const contentType = attachment.contentType?.toLowerCase();
++        return Boolean(
++          contentType?.startsWith('image/') ||
++            contentType?.startsWith('video/')
++        );
++      })
++  );
++}
++
+ function hasExcludedMessagePayload(
+   message: MaoyiMessageProjectionInput
+ ): boolean {
+@@ -65,7 +83,8 @@ function hasExcludedMessagePayload(
+     message.contact != null &&
+     (!Array.isArray(message.contact) || message.contact.length > 0);
+   return Boolean(
+-    message.attachments?.length ||
++    (message.attachments?.length &&
++      !hasTranslatableMediaCaptionPayload(message)) ||
+     message.textAttachment ||
+     message.attachmentDroppedDueToSize ||
+     hasEmbeddedContact ||
+diff --git a/ts/test-node/maoyi/messageProjection_test.node.ts b/ts/test-node/maoyi/messageProjection_test.node.ts
+--- a/ts/test-node/maoyi/messageProjection_test.node.ts
++++ b/ts/test-node/maoyi/messageProjection_test.node.ts
+@@ -45,6 +45,45 @@ describe('Maoyi message projection', () => {
+     });
+   });
+ 
++  it('adds English image and video captions to the existing text projection', () => {
++    const ordinaryText = projectMaoyiMessage(
++      message({ text: 'Ordinary message' })
++    );
++    assert.ok(ordinaryText);
++    assert.equal(ordinaryText.sourceText, 'Ordinary message');
++
++    const imageCaption = projectMaoyiMessage(
++      message({
++        text: 'Image caption',
++        attachments: [{ contentType: 'image/jpeg' }],
++      })
++    );
++    assert.ok(imageCaption);
++    assert.equal(imageCaption.sourceText, 'Image caption');
++    assert.equal(imageCaption.direction, 'incoming');
++
++    const videoCaption = projectMaoyiMessage(
++      message({
++        text: 'Video caption',
++        direction: 'outgoing',
++        attachments: [{ contentType: 'video/mp4' }],
++      })
++    );
++    assert.ok(videoCaption);
++    assert.equal(videoCaption.sourceText, 'Video caption');
++    assert.equal(videoCaption.direction, 'outgoing');
++
++    assert.equal(
++      projectMaoyiMessage(
++        message({
++          text: '',
++          attachments: [{ contentType: 'image/png' }],
++        })
++      ),
++      undefined
++    );
++  });
++
+   it('treats only a decoded empty contact list as no embedded contact', () => {
+     assert.deepEqual(
+       projectMaoyiMessage(message({ contact: [] })),
+@@ -57,7 +96,7 @@ describe('Maoyi message projection', () => {
+     );
+   });
+ 
+-  it('excludes non-English, oversized, attachment, and special bubbles', () => {
++  it('excludes non-English, oversized, unsupported attachment, and special bubbles', () => {
+     assert.equal(projectMaoyiMessage(message({ text: '你好' })), undefined);
+     assert.equal(
+       projectMaoyiMessage(message({ text: 'Hello 你好' })),
+@@ -72,6 +111,18 @@ describe('Maoyi message projection', () => {
+ 
+     const excluded: ReadonlyArray<Partial<MaoyiMessageProjectionInput>> = [
+       { attachments: [{}] },
++      { attachments: [{ contentType: 'audio/mpeg' }] },
++      { attachments: [{ contentType: 'application/pdf' }] },
++      {
++        attachments: [
++          { contentType: 'image/jpeg' },
++          { contentType: 'application/pdf' },
++        ],
++      },
++      {
++        attachments: [{ contentType: 'video/mp4' }],
++        isTapToView: true,
++      },
+       { textAttachment: {} },
+       { attachmentDroppedDueToSize: true },
+       { contact: {} },

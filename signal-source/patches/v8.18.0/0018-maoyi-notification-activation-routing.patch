@@ -1,0 +1,335 @@
+diff --git a/app/WindowsNotifications.main.ts b/app/WindowsNotifications.main.ts
+index c582877..d79a615 100644
+--- a/app/WindowsNotifications.main.ts
++++ b/app/WindowsNotifications.main.ts
+@@ -1,6 +1,8 @@
+ // Copyright 2017 Signal Messenger, LLC
+ // SPDX-License-Identifier: AGPL-3.0-only
+ 
++import { randomBytes } from 'node:crypto';
++
+ import { ipcMain as ipc } from 'electron';
+ import type { IpcMainInvokeEvent } from 'electron';
+ 
+@@ -13,7 +15,11 @@ import { createLogger } from '../ts/logging/log.std.ts';
+ import { AUMID } from './startup_config.main.ts';
+ import type { WindowsNotificationData } from '../ts/services/notifications.preload.ts';
+ import OS from '../ts/util/os/osMain.node.ts';
+-import { renderWindowsToast } from './renderWindowsToast.std.tsx';
++import { getMaoyiControlBridge } from './maoyi/controlBridge.main.ts';
++import {
++  getWindowsNotificationSignalRoute,
++  renderWindowsToast,
++} from './renderWindowsToast.std.tsx';
+ 
+ export { sendDummyKeystroke };
+ 
+@@ -34,7 +40,15 @@ if (OS.isWindows()) {
+         // First, clear all previous notifications - we want just one
+         // notification at a time
+         notifier.remove(NOTIFICATION_ID);
+-        notifier.show(renderWindowsToast(data), NOTIFICATION_ID);
++        const activationId = randomBytes(32).toString('base64url');
++        const route = getWindowsNotificationSignalRoute(data).href;
++        getMaoyiControlBridge()?.send({
++          type: 'notification.route.register',
++          activationId,
++          route,
++        });
++        const activationUrl = `maoyi-translator://signal-notification/v1/${activationId}`;
++        notifier.show(renderWindowsToast(data, activationUrl), NOTIFICATION_ID);
+       } catch (error) {
+         log.error(
+           `Windows Notifications: Failed to show notification: ${error.stack}`
+diff --git a/app/maoyi/controlProtocol.node.ts b/app/maoyi/controlProtocol.node.ts
+index 0cba0cb..5baf3df 100644
+--- a/app/maoyi/controlProtocol.node.ts
++++ b/app/maoyi/controlProtocol.node.ts
+@@ -142,6 +142,11 @@ export type MaoyiControlEvent =
+     }>
+   | Readonly<{ type: 'shutdown.ack' }>
+   | Readonly<{ type: 'protocol.opened'; requestId?: string }>
++  | Readonly<{
++      type: 'notification.route.register';
++      activationId: string;
++      route: string;
++    }>
+   | Readonly<{ type: 'conversation.changed'; conversationId: string }>
+   | (Readonly<{ type: 'message.added' }> & MaoyiVisibleMessage)
+   | (Readonly<{ type: 'translation.refresh.request'; requestId: string }> &
+diff --git a/app/renderWindowsToast.std.tsx b/app/renderWindowsToast.std.tsx
+index 52f401a..eeba5e3 100644
+--- a/app/renderWindowsToast.std.tsx
++++ b/app/renderWindowsToast.std.tsx
+@@ -43,13 +43,29 @@ function Audio(props: { src: string }) {
+   return createElement('audio', props);
+ }
+ 
+-export function renderWindowsToast({
+-  avatarPath,
+-  body,
+-  heading,
++export function getWindowsNotificationSignalRoute({
+   token,
+   type,
+-}: WindowsNotificationData): string {
++}: Pick<WindowsNotificationData, 'token' | 'type'>): URL {
++  if (type === NotificationType.Message || type === NotificationType.Reaction) {
++    return showConversationRoute.toAppUrl({ token });
++  }
++  if (type === NotificationType.IncomingGroupCall) {
++    return startCallLobbyRoute.toAppUrl({ token });
++  }
++  if (type === NotificationType.IncomingCall) {
++    return showWindowRoute.toAppUrl({});
++  }
++  if (type === NotificationType.IsPresenting) {
++    return cancelPresentingRoute.toAppUrl({});
++  }
++  throw missingCaseError(type);
++}
++
++export function renderWindowsToast(
++  { avatarPath, body, heading, type }: WindowsNotificationData,
++  activationUrl: string
++): string {
+   // Note: with these templates, the first <text> is one line, bolded
+   //   https://learn.microsoft.com/en-us/previous-versions/windows/apps/hh761494(v=win.10)?redirectedfrom=MSDN#toastimageandtext02
+   //   https://learn.microsoft.com/en-us/previous-versions/windows/apps/hh761494(v=win.10)?redirectedfrom=MSDN#toasttext02
+@@ -58,32 +74,23 @@ export function renderWindowsToast({
+     <Image id="1" src={pathToUri(avatarPath)} hint-crop="circle" />
+   ) : null;
+   const template = avatarPath ? 'ToastImageAndText02' : 'ToastText02';
+-  let launch: URL;
+-
+   let audio: ReactNode | undefined;
+ 
+   // Note:
+   //   1) this maps to the notify() function in services/notifications.ts
+   //   2) this also maps to the url-handling in main.ts
+   if (type === NotificationType.Message || type === NotificationType.Reaction) {
+-    launch = showConversationRoute.toAppUrl({
+-      token,
+-    });
+     audio = <Audio src="ms-winsoundevent:Notification.IM" />;
+-  } else if (type === NotificationType.IncomingGroupCall) {
+-    launch = startCallLobbyRoute.toAppUrl({
+-      token,
+-    });
+-  } else if (type === NotificationType.IncomingCall) {
+-    launch = showWindowRoute.toAppUrl({});
+-  } else if (type === NotificationType.IsPresenting) {
+-    launch = cancelPresentingRoute.toAppUrl({});
+-  } else {
++  } else if (
++    type !== NotificationType.IncomingGroupCall &&
++    type !== NotificationType.IncomingCall &&
++    type !== NotificationType.IsPresenting
++  ) {
+     throw missingCaseError(type);
+   }
+ 
+   return renderToStaticMarkup(
+-    <Toast launch={launch.href} activationType="protocol">
++    <Toast launch={activationUrl} activationType="protocol">
+       <Visual>
+         <Binding template={template}>
+           {image}
+diff --git a/ts/test-node/app/renderWindowsToast_test.std.tsx b/ts/test-node/app/renderWindowsToast_test.std.tsx
+index 4907df6..a9fed18 100644
+--- a/ts/test-node/app/renderWindowsToast_test.std.tsx
++++ b/ts/test-node/app/renderWindowsToast_test.std.tsx
+@@ -3,21 +3,30 @@
+ 
+ import { assert } from 'chai';
+ 
+-import { renderWindowsToast } from '../../../app/renderWindowsToast.std.tsx';
++import {
++  getWindowsNotificationSignalRoute,
++  renderWindowsToast,
++} from '../../../app/renderWindowsToast.std.tsx';
+ import { NotificationType } from '../../types/notifications.std.ts';
+ 
+ describe('renderWindowsToast', () => {
++  const activationUrl =
++    'maoyi-translator://signal-notification/v1/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
++
+   it('handles toast with image', () => {
+-    const xml = renderWindowsToast({
+-      avatarPath: 'C:/temp/ab/abcd',
+-      body: 'Hi there!',
+-      heading: 'Alice',
+-      token: 'token',
+-      type: NotificationType.Message,
+-    });
++    const xml = renderWindowsToast(
++      {
++        avatarPath: 'C:/temp/ab/abcd',
++        body: 'Hi there!',
++        heading: 'Alice',
++        token: 'token',
++        type: NotificationType.Message,
++      },
++      activationUrl
++    );
+ 
+     const expected = [
+-      '<toast launch="sgnl://show-conversation?token=token" activationType="protocol">',
++      `<toast launch="${activationUrl}" activationType="protocol">`,
+       '<visual>',
+       '<binding template="ToastImageAndText02">',
+       '<image id="1" src="file:///C:/temp/ab/abcd" hint-crop="circle"></image>',
+@@ -33,15 +42,18 @@ describe('renderWindowsToast', () => {
+   });
+ 
+   it('handles toast with no image', () => {
+-    const xml = renderWindowsToast({
+-      body: 'Hi there!',
+-      heading: 'Alice',
+-      token: 'token',
+-      type: NotificationType.Message,
+-    });
++    const xml = renderWindowsToast(
++      {
++        body: 'Hi there!',
++        heading: 'Alice',
++        token: 'token',
++        type: NotificationType.Message,
++      },
++      activationUrl
++    );
+ 
+     const expected = [
+-      '<toast launch="sgnl://show-conversation?token=token" activationType="protocol">',
++      `<toast launch="${activationUrl}" activationType="protocol">`,
+       '<visual>',
+       '<binding template="ToastText02">',
+       '<text id="1">Alice</text>',
+@@ -56,15 +68,18 @@ describe('renderWindowsToast', () => {
+   });
+ 
+   it('handles toast with messageId and storyId', () => {
+-    const xml = renderWindowsToast({
+-      body: 'Hi there!',
+-      heading: 'Alice',
+-      token: 'token',
+-      type: NotificationType.Message,
+-    });
++    const xml = renderWindowsToast(
++      {
++        body: 'Hi there!',
++        heading: 'Alice',
++        token: 'token',
++        type: NotificationType.Message,
++      },
++      activationUrl
++    );
+ 
+     const expected = [
+-      '<toast launch="sgnl://show-conversation?token=token" activationType="protocol">',
++      `<toast launch="${activationUrl}" activationType="protocol">`,
+       '<visual>',
+       '<binding template="ToastText02">',
+       '<text id="1">Alice</text>',
+@@ -79,15 +94,18 @@ describe('renderWindowsToast', () => {
+   });
+ 
+   it('handles toast with for incoming call', () => {
+-    const xml = renderWindowsToast({
+-      body: 'Hi there!',
+-      heading: 'Alice',
+-      token: 'token',
+-      type: NotificationType.IncomingCall,
+-    });
++    const xml = renderWindowsToast(
++      {
++        body: 'Hi there!',
++        heading: 'Alice',
++        token: 'token',
++        type: NotificationType.IncomingCall,
++      },
++      activationUrl
++    );
+ 
+     const expected = [
+-      '<toast launch="sgnl://show-window" activationType="protocol">',
++      `<toast launch="${activationUrl}" activationType="protocol">`,
+       '<visual>',
+       '<binding template="ToastText02">',
+       '<text id="1">Alice</text>',
+@@ -101,15 +119,18 @@ describe('renderWindowsToast', () => {
+   });
+ 
+   it('handles toast with for incoming group call', () => {
+-    const xml = renderWindowsToast({
+-      body: 'Hi there!',
+-      heading: 'Alice',
+-      token: 'token',
+-      type: NotificationType.IncomingGroupCall,
+-    });
++    const xml = renderWindowsToast(
++      {
++        body: 'Hi there!',
++        heading: 'Alice',
++        token: 'token',
++        type: NotificationType.IncomingGroupCall,
++      },
++      activationUrl
++    );
+ 
+     const expected = [
+-      '<toast launch="sgnl://start-call-lobby?token=token" activationType="protocol">',
++      `<toast launch="${activationUrl}" activationType="protocol">`,
+       '<visual>',
+       '<binding template="ToastText02">',
+       '<text id="1">Alice</text>',
+@@ -123,15 +144,18 @@ describe('renderWindowsToast', () => {
+   });
+ 
+   it('handles toast with for presenting screen', () => {
+-    const xml = renderWindowsToast({
+-      body: 'Hi there!',
+-      heading: 'Alice',
+-      token: 'token',
+-      type: NotificationType.IsPresenting,
+-    });
++    const xml = renderWindowsToast(
++      {
++        body: 'Hi there!',
++        heading: 'Alice',
++        token: 'token',
++        type: NotificationType.IsPresenting,
++      },
++      activationUrl
++    );
+ 
+     const expected = [
+-      '<toast launch="sgnl://cancel-presenting" activationType="protocol">',
++      `<toast launch="${activationUrl}" activationType="protocol">`,
+       '<visual>',
+       '<binding template="ToastText02">',
+       '<text id="1">Alice</text>',
+@@ -143,4 +167,23 @@ describe('renderWindowsToast', () => {
+ 
+     assert.strictEqual(xml, expected);
+   });
++
++  it('keeps the internal Signal route out of the Windows activation URL', () => {
++    const route = getWindowsNotificationSignalRoute({
++      token: 'token',
++      type: NotificationType.Message,
++    });
++    assert.strictEqual(route.href, 'sgnl://show-conversation?token=token');
++    const xml = renderWindowsToast(
++      {
++        body: 'Hi there!',
++        heading: 'Alice',
++        token: 'token',
++        type: NotificationType.Message,
++      },
++      activationUrl
++    );
++    assert.notInclude(xml, 'sgnl://');
++    assert.include(xml, activationUrl);
++  });
+ });

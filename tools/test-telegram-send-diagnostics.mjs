@@ -1,0 +1,16 @@
+import assert from 'node:assert/strict';
+import { mkdtemp, readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { TranslationDiagnostics } from '../dist-electron/translation-diagnostics.js';
+const directory=await mkdtemp(join(process.cwd(),'.tmp','telegram-diagnostics-test-'));
+const log=new TranslationDiagnostics(directory);
+log.record('renderer:telegram-enter-decision',{platform:'telegram-k',sequence:2,decision:'page-global-handled',composerKind:'default',hasReady:true,hasPending:false,hasChinese:false,text:'PRIVATE_CHAT_TEXT',apiKey:'PRIVATE_API_KEY',contactTitle:'PRIVATE_CONTACT'});
+log.record('renderer:composer-send-authorization',{platform:'telegram-k',requestId:'private-proof-id',ok:true,conversationSignaturePresent:true});
+log.record('renderer:composer-native-send-result',{platform:'telegram-k',ok:false,method:'enter',reason:'send-not-accepted'});
+await log.flush();
+const rows=log.events;
+assert.equal(rows[0].sequence,2);assert.equal(rows[0].decision,'page-global-handled');assert.equal(rows[0].hasReady,true);assert.equal(rows[0].hasPending,false);
+assert.equal(rows[1].ok,true);assert.notEqual(rows[1].requestId,'private-proof-id');assert.equal(rows[2].method,'enter');assert.equal(rows[2].reason,'send-not-accepted');
+const stored=await readFile(join(directory,`${log.sessionId}.jsonl`),'utf8');
+for(const secret of ['PRIVATE_CHAT_TEXT','PRIVATE_API_KEY','PRIVATE_CONTACT','private-proof-id'])assert.ok(!stored.includes(secret));
+console.log('telegram-send-diagnostics: Enter decision, ready/pending, authorization and send result retained; chat, names, keys excluded');

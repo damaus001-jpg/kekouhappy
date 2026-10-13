@@ -1,0 +1,84 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const runtime = fs.readFileSync(path.join(root, 'src', 'smart-reply-runtime.ts'), 'utf8');
+const app = fs.readFileSync(path.join(root, 'src', 'App.vue'), 'utf8');
+
+assert.match(runtime, /platform === 'signal'\) return false/);
+assert.match(runtime, /exactDirection/);
+assert.match(runtime, /dataId\.startsWith\('true_'\)/);
+assert.match(runtime, /dataId\.startsWith\('false_'\)/);
+assert.match(runtime, /depth < 10/);
+assert.match(runtime, /whatsappPrePlainAuthor/);
+assert.match(runtime, /data-pre-plain-text/);
+assert.match(runtime, /data-icon="tail-out"/);
+assert.match(runtime, /data-icon="tail-in"/);
+assert.match(runtime, /data-icon="msg-dblcheck"/);
+assert.match(runtime, /whatsappAuthorDirections/);
+assert.match(runtime, /whatsappConversationLabels/);
+assert.match(runtime, /whatsappSelfAuthors/);
+assert.match(runtime, /visuallyAtEnd/);
+assert.match(runtime, /reverseAtEnd/);
+assert.match(runtime, /data-testid="message-in"/);
+assert.match(runtime, /data-testid="message-out"/);
+assert.doesNotMatch(runtime, /innerWidth\s*\/\s*2/);
+assert.match(runtime, /isNearConversationEnd\(latest\.bubble\)/);
+assert.match(runtime, /filter\(\(row\) => row\.direction === 'incoming'\)\.slice\(-3\)/);
+assert.match(runtime, /eligibleMessageKeys/);
+assert.match(runtime, /rows\.slice\(0, anchorIndex \+ 1\)/);
+assert.match(runtime, /liveRows\.slice\(0, liveAnchorIndex \+ 1\)/);
+assert.match(runtime, /state: 'eligible'/);
+assert.match(runtime, /state: 'unavailable'/);
+assert.match(runtime, /smartConversationSignature.*split\('::'\)\[0\]/);
+assert.match(runtime, /\.slice\(-8\)/);
+assert.match(runtime, /liveContext\.at\(-1\)\?\.speaker !== 'other'/);
+assert.match(runtime, /action: 'smart-reply-request'/);
+assert.match(runtime, /action: 'smart-reply-select'/);
+assert.match(runtime, /normalizeConversationSignature/);
+assert.match(runtime, /replace\(\/\\\\s\+\/g, ' '\)\.trim\(\)\.slice\(0, 360\)/);
+assert.match(runtime, /english\.textContent/);
+assert.match(runtime, /chinese\.textContent/);
+assert.doesNotMatch(runtime, /innerHTML\s*=\s*String\(reply/);
+const triggerBranch = runtime.slice(runtime.indexOf('const trigger = (event)'), runtime.indexOf("if (platform === 'telegram') button.addEventListener"));
+assert.doesNotMatch(triggerBranch, /df-smart-reply-panel[^\n]*remove/);
+const loadingBranch = runtime.slice(runtime.indexOf("if (payload.state === 'loading')"), runtime.indexOf("if (payload.state === 'error')"));
+assert.doesNotMatch(loadingBranch, /removePanel\(\)/);
+const successBranch = runtime.slice(runtime.indexOf("if (payload.state === 'error')"), runtime.indexOf("const panel = document.createElement('div')"));
+assert.match(successBranch, /removePanel\(\)/);
+
+assert.match(app, /window\.chatTranslator\.generateSmartReplies/);
+assert.match(app, /messages\.at\(-1\)\?\.speaker !== 'other'/);
+assert.match(app, /result\.replies\.find\(\(item\) => item\.id === id && item\.english === english\)/);
+assert.match(app, /writeNativeComposer\(profileId, approved\.english, \{ instant: true \}\)/);
+const selectionBranch = app.slice(app.indexOf("if (action === 'smart-reply-select')"), app.indexOf("if (action === 'bubble-refresh')"));
+assert.doesNotMatch(selectionBranch, /sendNativeComposer|queueSend|dispatchEvent\([^)]*Enter/);
+assert.doesNotMatch(selectionBranch, /10\s*\*\s*60_000/);
+const requestBranch = app.slice(app.indexOf("if (action === 'smart-reply-request')"), app.indexOf("if (action === 'smart-reply-select')"));
+assert.match(requestBranch, /smartReplyInFlightProfiles\.set\(stateKey/);
+assert.match(requestBranch, /eligibleMessageKeys\.includes\(latestMessageKey\)/);
+assert.doesNotMatch(requestBranch.slice(0, requestBranch.indexOf('try {')), /smartReplyResults\.delete\(profileId\)/);
+assert.doesNotMatch(requestBranch, /if \(!applied\) smartReplyResults\.delete/);
+assert.doesNotMatch(requestBranch, /activeProfileId\.value !== profileId \|\| \(effectiveSignature/);
+assert.match(app, /buildSmartReplyUiInstallScript\(appForPlatform\(profile\.platform\)\)/);
+assert.match(app, /async function refreshWebSmartReplyUi/);
+assert.match(app, /scheduleSmartReplyUiRefresh\(profileId, 80\)/);
+assert.match(app, /\[80, 600, 1800, 3200\]/);
+assert.match(app, /\[600, 1800, 3200\]/);
+assert.match(app, /scheduleSmartReplyUiRefresh\(profileId, 40\)/);
+assert.match(app, /currentResult\.replies/);
+assert.match(app, /state: 'idle'/);
+assert.match(runtime, /payload\.state === 'idle'/);
+assert.match(runtime, /payload\.state === 'collapse'/);
+assert.match(app, /normalizeSmartReplyConversationSignature\(value: string\)/);
+assert.match(app, /\.df-smart-reply-host, \.df-smart-reply-panel/);
+assert.match(selectionBranch, /state: 'collapse'[\s\S]*?writeNativeComposer/);
+const transientUnavailableBranch = runtime.slice(
+  runtime.indexOf("if (!latest || !isNearConversationEnd(latest.bubble))"),
+  runtime.indexOf('const eligibleRows')
+);
+assert.doesNotMatch(transientUnavailableBranch, /removeAll\(\)/);
+
+console.log('smart-reply-ui: WhatsApp/Telegram latest-three-incoming anchors, per-anchor 8-message context, persistent replay, repeat generation, and fill-only selection contracts passed');

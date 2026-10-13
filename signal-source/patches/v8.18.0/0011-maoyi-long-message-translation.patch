@@ -1,0 +1,96 @@
+diff --git a/ts/maoyi/messageProjection.std.ts b/ts/maoyi/messageProjection.std.ts
+--- a/ts/maoyi/messageProjection.std.ts
++++ b/ts/maoyi/messageProjection.std.ts
+@@ -2,6 +2,7 @@
+ // SPDX-License-Identifier: AGPL-3.0-only
+ 
+ export const maoyiMaximumSourceTextLength = 4_000;
++const signalInlineMessageBodyByteLimit = 2 * 1024;
+ 
+ export type MaoyiMessageProjectionInput = Readonly<{
+   id: string;
+@@ -12,7 +13,7 @@ export type MaoyiMessageProjectionInput = Readonly<{
+   attachments?: ReadonlyArray<
+     Readonly<{ contentType?: string }>
+   >;
+-  textAttachment?: unknown;
++  textAttachment?: Readonly<{ contentType?: string }>;
+   attachmentDroppedDueToSize?: boolean;
+   contact?: unknown;
+   deletedForEveryone?: boolean;
+@@ -77,6 +78,25 @@ function hasTranslatableMediaCaptionPayload(
+   );
+ }
+ 
++function hasCompleteLongMessageBody(
++  message: MaoyiMessageProjectionInput
++): boolean {
++  if (
++    message.textAttachment?.contentType?.toLowerCase() !==
++    'text/x-signal-plain'
++  ) {
++    return false;
++  }
++
++  // Signal keeps only a <= 2 KiB inline preview until a long-message attachment
++  // has been decoded. Publishing only bodies above that boundary prevents a
++  // partial preview from being translated and cached as if it were complete.
++  return (
++    new TextEncoder().encode(message.text ?? '').byteLength >
++    signalInlineMessageBodyByteLimit
++  );
++}
++
+ function hasExcludedMessagePayload(
+   message: MaoyiMessageProjectionInput
+ ): boolean {
+@@ -86,7 +108,7 @@ function hasExcludedMessagePayload(
+   return Boolean(
+     (message.attachments?.length &&
+       !hasTranslatableMediaCaptionPayload(message)) ||
+-    message.textAttachment ||
++    (message.textAttachment && !hasCompleteLongMessageBody(message)) ||
+     message.attachmentDroppedDueToSize ||
+     hasEmbeddedContact ||
+     message.deletedForEveryone ||
+diff --git a/ts/test-node/maoyi/messageProjection_test.node.ts b/ts/test-node/maoyi/messageProjection_test.node.ts
+--- a/ts/test-node/maoyi/messageProjection_test.node.ts
++++ b/ts/test-node/maoyi/messageProjection_test.node.ts
+@@ -94,6 +94,37 @@ describe('Maoyi message projection', () => {
+     );
+   });
+ 
++  it('projects only complete decoded Signal long-message bodies', () => {
++    const completeLongBody = `Long message ${'a'.repeat(2_100)}`;
++    const projection = projectMaoyiMessage(
++      message({
++        text: completeLongBody,
++        textAttachment: { contentType: 'text/x-signal-plain' },
++      })
++    );
++    assert.ok(projection);
++    assert.equal(projection.sourceText, completeLongBody);
++
++    assert.equal(
++      projectMaoyiMessage(
++        message({
++          text: 'a'.repeat(2_048),
++          textAttachment: { contentType: 'text/x-signal-plain' },
++        })
++      ),
++      undefined
++    );
++    assert.equal(
++      projectMaoyiMessage(
++        message({
++          text: completeLongBody,
++          textAttachment: { contentType: 'application/pdf' },
++        })
++      ),
++      undefined
++    );
++  });
++
+   it('excludes non-English, oversized, unsupported attachment, and special bubbles', () => {
+     assert.equal(projectMaoyiMessage(message({ text: '你好' })), undefined);
+     assert.equal(

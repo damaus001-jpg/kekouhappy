@@ -1,0 +1,26 @@
+.runtime/
+.recovery/
+.tmp/
+.package-secrets/
+.package-staging/
+dist/
+dist-electron/
+release/
+internal-tools/*.exe
+node_modules/
+*.log
+
+# The exact Signal 8.18.0 source archive is retained for disaster recovery.
+# Extracted sources and generated build trees remain local-only.
+reference-sources/*/
+reference-sources/*.zip
+!reference-sources/Signal-Desktop-v8.18.0.zip
+.pnpm-store/
+.pnpm-store-complete/
+.toolchains/
+
+# Operator-provided source materials stay local; application assets are in src/assets.
+/人设信息.txt
+/人设完整故事线.txt
+/小智加持.jpg
+/logo参考.PNG

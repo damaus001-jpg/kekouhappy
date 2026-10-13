@@ -1,0 +1,240 @@
+diff --git a/ts/components/CompositionArea.dom.tsx b/ts/components/CompositionArea.dom.tsx
+--- a/ts/components/CompositionArea.dom.tsx
++++ b/ts/components/CompositionArea.dom.tsx
+@@ -89,6 +89,7 @@ import { PollCreateModal } from './PollCreateModal.dom.tsx';
+ import { useDocumentKeyDown } from '../hooks/useDocumentKeyDown.dom.ts';
+ import { hasDraft } from '../util/hasDraft.std.ts';
+ import { registerMaoyiSmartReplyComposerWriter } from '../maoyi/smartReplyComposer.std.ts';
++import { MaoyiComposerReview } from '../maoyi/ComposerReview.dom.tsx';
+ import type { ContactNameColorType } from '../types/Colors.std.ts';
+ import type { Emoji } from '../axo/emoji.std.ts';
+ import { AxoConfirmDialog } from '../axo/AxoConfirmDialog.dom.tsx';
+@@ -1147,7 +1148,10 @@ export const CompositionArea = memo(function CompositionAreaInner({
+   }
+ 
+   return (
+-    <div className="CompositionArea">
++    <div
++      className="CompositionArea"
++      data-df-signal-conversation-id={conversationId}
++    >
+       {attachmentToEdit &&
+         'url' in attachmentToEdit &&
+         attachmentToEdit.url && (
+@@ -1281,6 +1285,7 @@ export const CompositionArea = memo(function CompositionAreaInner({
+           </div>
+         ) : null}
+       </div>
++      <MaoyiComposerReview />
+       <div
+         className={classNames('CompositionArea__row', {
+           'CompositionArea__row--padded': !isViewOnceActive && large,
+         })}
+diff --git a/ts/maoyi/ComposerReview.dom.tsx b/ts/maoyi/ComposerReview.dom.tsx
+new file mode 100644
+--- /dev/null
++++ b/ts/maoyi/ComposerReview.dom.tsx
+@@ -0,0 +1,203 @@
++// Copyright 2026 Maoyi
++// SPDX-License-Identifier: AGPL-3.0-only
++
++import {
++  useEffect,
++  useLayoutEffect,
++  useRef,
++  useState,
++  type JSX,
++  type SyntheticEvent,
++} from 'react';
++
++type ComposerReviewStatus = 'hidden' | 'loading' | 'ready' | 'error';
++
++type ComposerReviewState = Readonly<{
++  status: ComposerReviewStatus;
++  text: string;
++}>;
++
++type ComposerReviewWindow = Window &
++  typeof globalThis & {
++    __dfComposerReviewState?: ComposerReviewState;
++    __dfComposerReviewEnabled?: boolean;
++  };
++
++const EVENT_NAME = 'df-composer-review-state';
++const SETTING_EVENT_NAME = 'df-composer-review-setting';
++const SETTING_KEY = 'df-composer-review-enabled-v1';
++const HIDDEN_STATE: ComposerReviewState = { status: 'hidden', text: '' };
++
++function readInitialState(): ComposerReviewState {
++  return (
++    (window as ComposerReviewWindow).__dfComposerReviewState ?? HIDDEN_STATE
++  );
++}
++
++function readInitialEnabled(): boolean {
++  try {
++    return window.localStorage.getItem(SETTING_KEY) !== '0';
++  } catch {
++    return true;
++  }
++}
++
++export function MaoyiComposerReview(): JSX.Element | null {
++  const [review, setReview] = useState<ComposerReviewState>(readInitialState);
++  const [enabled, setEnabled] = useState(readInitialEnabled);
++  const reviewTextRef = useRef<HTMLTextAreaElement | null>(null);
++
++  useEffect(() => {
++    const typedWindow = window as ComposerReviewWindow;
++    typedWindow.__dfComposerReviewEnabled = enabled;
++    try {
++      window.localStorage.setItem(SETTING_KEY, enabled ? '1' : '0');
++    } catch {
++      // Signal may temporarily deny storage during early startup.
++    }
++    window.dispatchEvent(
++      new CustomEvent(SETTING_EVENT_NAME, { detail: { enabled } })
++    );
++    if (!enabled) {
++      setReview(HIDDEN_STATE);
++    }
++  }, [enabled]);
++
++  useEffect(() => {
++    const onReviewState = (event: Event): void => {
++      const detail = (event as CustomEvent<ComposerReviewState>).detail;
++      if (
++        !detail ||
++        !['hidden', 'loading', 'ready', 'error'].includes(detail.status)
++      ) {
++        return;
++      }
++      setReview({
++        status: detail.status,
++        text: typeof detail.text === 'string' ? detail.text : '',
++      });
++    };
++
++    window.addEventListener(EVENT_NAME, onReviewState);
++    return () => window.removeEventListener(EVENT_NAME, onReviewState);
++  }, []);
++
++  const reviewVisible = enabled && review.status !== 'hidden';
++  const isReady = reviewVisible && review.status === 'ready';
++  const displayText =
++    review.status === 'loading'
++      ? '正在把英文回译成中文…'
++      : review.status === 'error'
++        ? '回译失败，请再次按回车重试'
++        : review.text;
++
++  useLayoutEffect(() => {
++    const textarea = reviewTextRef.current;
++    if (!textarea || !reviewVisible) {
++      return;
++    }
++
++    textarea.style.height = 'auto';
++    const contentHeight = textarea.scrollHeight;
++    textarea.style.height = `${Math.min(72, Math.max(34, contentHeight))}px`;
++    textarea.style.overflowY = contentHeight > 72 ? 'auto' : 'hidden';
++  }, [displayText, reviewVisible]);
++
++  const stopComposerKeyHandling = (event: SyntheticEvent): void => {
++    event.stopPropagation();
++  };
++
++  return (
++    <section
++      aria-label="Signal 回译设置"
++      className="df-composer-review"
++      data-df-composer-review="source-native"
++      style={{
++        background: reviewVisible ? '#fff4c2' : 'transparent',
++        border: reviewVisible ? '1px solid #dec86e' : '0',
++        borderRadius: 14,
++        boxSizing: 'border-box',
++        color: '#2f2a1f',
++        margin: '0 12px 8px',
++        padding: reviewVisible ? '8px 14px 12px' : '2px',
++        width: 'calc(100% - 24px)',
++      }}
++    >
++      <div
++        style={{
++          alignItems: 'center',
++          color: '#756948',
++          display: 'flex',
++          fontSize: 12,
++          justifyContent: 'space-between',
++          lineHeight: '22px',
++          marginBottom: reviewVisible ? 5 : 0,
++        }}
++      >
++        <span>{reviewVisible ? '中文修改框' : ''}</span>
++        <span style={{ alignItems: 'center', display: 'flex', gap: 8 }}>
++          {isReady ? <span>请核对语义</span> : null}
++          <button
++            aria-checked={enabled}
++            aria-label="回译"
++            data-df-composer-review-toggle="true"
++            onClick={() => setEnabled(value => !value)}
++            onKeyDown={stopComposerKeyHandling}
++            role="switch"
++            style={{
++              background: enabled ? '#d5b94f' : '#c7c7c7',
++              border: 0,
++              borderRadius: 12,
++              color: '#2f2a1f',
++              cursor: 'pointer',
++              fontSize: 12,
++              lineHeight: '22px',
++              minWidth: 62,
++              padding: '0 10px',
++            }}
++            type="button"
++          >
++            回译 {enabled ? '开' : '关'}
++          </button>
++        </span>
++      </div>
++      {reviewVisible ? (
++        <textarea
++          aria-label="回译中文，可编辑但不会发送"
++          data-df-composer-review-text="true"
++          ref={reviewTextRef}
++          readOnly={!isReady}
++          rows={1}
++          value={displayText}
++          onBeforeInput={stopComposerKeyHandling}
++          onChange={event => {
++            if (isReady) {
++              setReview(current => ({ ...current, text: event.target.value }));
++            }
++          }}
++          onKeyDown={stopComposerKeyHandling}
++          onKeyPress={stopComposerKeyHandling}
++          onKeyUp={stopComposerKeyHandling}
++          style={{
++            background: '#fffbed',
++            border: '1px solid #d8ca9a',
++            borderRadius: 10,
++            boxSizing: 'border-box',
++            color: '#302d26',
++            display: 'block',
++            font: 'inherit',
++            height: 34,
++            lineHeight: '20px',
++            maxHeight: 72,
++            minHeight: 34,
++            outline: 'none',
++            overflowY: 'hidden',
++            padding: '7px 11px',
++            resize: 'none',
++            width: '100%',
++          }}
++        />
++      ) : null}
++    </section>
++  );
++}

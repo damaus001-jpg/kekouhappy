@@ -1,0 +1,98 @@
+{
+  "schemaVersion": 1,
+  "baseline": "8.18.0",
+  "patches": [
+    {
+      "file": "0001-maoyi-launcher-startup-guard.patch",
+      "sha256": "BF51154AB6A72B80D255EFA0A9A361F4F83F572D17D5A248667CA25A0520F8D8"
+    },
+    {
+      "file": "0002-maoyi-typed-control-bridge.patch",
+      "sha256": "E4268FA2FAE0FBAEEA6ABF463C5A91CACD0F917E43C82211DA30DF76DB83B632"
+    },
+    {
+      "file": "0003-maoyi-window-security-controller.patch",
+      "sha256": "2737648A3D828DED0F9DA316B915EB4620971802D3E4E092B1760EE120E4CCC9"
+    },
+    {
+      "file": "0004-maoyi-source-translation-cache-bridge.patch",
+      "sha256": "E1A261466D7D9F6C38896C7236C9E27067871320123F0BE86EE00A09ADF8F7A8"
+    },
+    {
+      "file": "0005-maoyi-realtime-message-translation.patch",
+      "sha256": "43B1CBDDF3E1A9C5CDBD0B03EAA33BC464D63A214880D26F495045635823DFD6"
+    },
+    {
+      "file": "0006-maoyi-source-bubble-refresh.patch",
+      "sha256": "1E124603EC29EFE3F4B4090D70DCC9F891F48D253C5ED174CD6668B0B4A8E7A6"
+    },
+    {
+      "file": "0007-maoyi-incoming-auto-translation-stability.patch",
+      "sha256": "F260FAC184A6080E4055CF2BEA8205987841430B8DCF4E834DD0081594656B02"
+    },
+    {
+      "file": "0008-maoyi-source-smart-reply-request.patch",
+      "sha256": "579BBE111DBF5D81018C7016F74FD10E3BD1498A4BE2920FE009B6D70D83FC91"
+    },
+    {
+      "file": "0009-maoyi-refresh-real-state.patch",
+      "sha256": "848B7A1E90E9C86A17F1343BB47ECF782817D2E1EE60C26172A418D2EEC2BCBC"
+    },
+    {
+      "file": "0010-maoyi-media-caption-translation.patch",
+      "sha256": "6FA5F0C6DA1A72ADE4BABE6C080286FD78319270B8A453E012C192C285249071"
+    },
+    {
+      "file": "0011-maoyi-long-message-translation.patch",
+      "sha256": "1E857B05B9C75C5980432AA02131CE327B12C979A8E2C517B103BA646AAD78B8"
+    },
+    {
+      "file": "0012-maoyi-source-composer-review.patch",
+      "sha256": "91EDDC177148B77F414794852824E3636000DC424D8AA761E38F04F994B1A89B"
+    },
+    {
+      "file": "0013-maoyi-dark-window-background.patch",
+      "sha256": "0A50854993F2127CC2C8661131E84FC0E587373AE5A139358D6F94BAFEC897A8"
+    },
+    {
+      "file": "0014-maoyi-deterministic-window-presentation.patch",
+      "sha256": "4B4AD98E8E2459737090E9CDD71ACA8137ECD36F1EE93D361C5EF5DFA3E8F89E"
+    },
+    {
+      "file": "0015-maoyi-owner-chain-fail-closed.patch",
+      "sha256": "601C73FF60B4B36FDA8A3EFF8646B54232598BCFB205AA15A47080CBCD296DD6"
+    },
+    {
+      "file": "0016-maoyi-three-incoming-smart-reply-anchors.patch",
+      "sha256": "412F1915C7E58208AD140BBE8F80A75760361AA45F60004BB495686EE569A607"
+    },
+    {
+      "file": "0017-maoyi-hidden-input-and-chinese-send-guard.patch",
+      "sha256": "F2FFFB502466D362932B6E5CE1463B1CE7A93B6164A7D51F3D1654FCC2D36809"
+    },
+    {
+      "file": "0018-maoyi-notification-activation-routing.patch",
+      "sha256": "8E35A4A99A160382004F2074E6745D7DFB41F0755B8E91DBE99176A73B6B8BCB"
+    },
+    {
+      "file": "0019-maoyi-whatsapp-dark-bubble-colors.patch",
+      "sha256": "80ED6A370986444E3874801DD0E1D03D034DED7880291FC7B3F169018C53A533"
+    },
+    {
+      "file": "0020-maoyi-preserve-translations-on-ordinary-hide.patch",
+      "sha256": "7F09D27A8282D4066EBAC6E1A7E67760AD93AF9E6D6CB4CD59422A914632DBBE"
+    },
+    {
+      "file": "0021-maoyi-translation-letter-spacing.patch",
+      "sha256": "C729AB8EE716F2A85AB9A7162DF49A30BBB713A733832EFFD399326B41A64DB2"
+    },
+    {
+      "file": "0022-maoyi-refresh-without-translation.patch",
+      "sha256": "199F14510C60C57653677F7C903E93EF8FB5D73805140244DDEB910EFB6E63F1"
+    },
+    {
+      "file": "0023-maoyi-translation-recovery.patch",
+      "sha256": "53327F562599C71BF9A9616E733CEB1EB2529C647BFE1F94D74CAEE9169AC668"
+    }
+  ]
+}

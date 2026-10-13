@@ -1,0 +1,242 @@
+diff --git a/app/maoyi/windowController.main.ts b/app/maoyi/windowController.main.ts
+index 2668121..ebae402 100644
+--- a/app/maoyi/windowController.main.ts
++++ b/app/maoyi/windowController.main.ts
+@@ -14,6 +14,7 @@ import type {
+ import {
+   applyMaoyiWindowOwner,
+   type MaoyiOwnerDescriptor,
++  verifyMaoyiWindowOwner,
+ } from './windowsOwner.node.ts';
+ 
+ const windowControllerKey = Symbol.for('maoyi.signal.window-controller.v1');
+@@ -207,6 +208,25 @@ export function startMaoyiWindowController(
+     return applyMaoyiWindowOwner(window, ownerDescriptor);
+   };
+ 
++  const rejectOwner = (): void => {
++    ownerAttached = false;
++    desiredVisible = false;
++    hideAllWindows();
++    bridge.send({ type: 'transport.error', code: 'owner-rejected' });
++  };
++
++  const attachOwnerToAuxiliaryWindows = (): boolean => {
++    for (const window of windows) {
++      if (window === mainWindow) {
++        continue;
++      }
++      if (!attachOwnerToWindow(window)) {
++        return false;
++      }
++    }
++    return true;
++  };
++
+   const applyOwner = (): void => {
+     ownerAttached = false;
+     hideAllWindows();
+@@ -215,22 +235,16 @@ export function startMaoyiWindowController(
+     }
+     try {
+       ownerAttached = attachOwnerToWindow(mainWindow);
+-      if (!ownerAttached) {
+-        bridge.send({ type: 'transport.error', code: 'owner-rejected' });
++      if (!ownerAttached || !attachOwnerToAuxiliaryWindows()) {
++        rejectOwner();
+         return;
+       }
+-      for (const window of windows) {
+-        if (window !== mainWindow) {
+-          attachOwnerToWindow(window);
+-        }
+-      }
+       bridge.send({
+         type: 'window.owner-attached',
+         ownerProcessId: ownerDescriptor.ownerProcessId,
+       });
+     } catch {
+-      ownerAttached = false;
+-      bridge.send({ type: 'transport.error', code: 'owner-rejected' });
++      rejectOwner();
+     }
+   };
+ 
+@@ -522,6 +536,20 @@ export function startMaoyiWindowController(
+           ownerDescriptor?.handle === command.handle &&
+           ownerDescriptor.ownerProcessId === command.ownerProcessId;
+         if (ownerMatches) {
++          try {
++            if (
++              !mainWindow ||
++              mainWindow.isDestroyed() ||
++              !ownerDescriptor ||
++              !verifyMaoyiWindowOwner(mainWindow, ownerDescriptor) ||
++              !attachOwnerToAuxiliaryWindows()
++            ) {
++              throw new Error('Signal owner relationship is no longer valid');
++            }
++          } catch {
++            applyOwner();
++            return;
++          }
+           bridge.send({
+             type: 'window.owner-attached',
+             ownerProcessId: command.ownerProcessId,
+@@ -601,12 +629,13 @@ export function startMaoyiWindowController(
+   ): void => {
+     try {
+       guardWindow(window);
+-      if (ownerDescriptor) {
+-        attachOwnerToWindow(window);
++      if (ownerDescriptor && !attachOwnerToWindow(window)) {
++        rejectOwner();
++        return;
+       }
+     } catch {
+       rawHide(window);
+-      bridge.send({ type: 'transport.error', code: 'window-guard-failed' });
++      rejectOwner();
+     }
+   };
+   app.on('browser-window-created', onBrowserWindowCreated);
+diff --git a/app/maoyi/windowsOwner.node.ts b/app/maoyi/windowsOwner.node.ts
+index c33efab..8df65a9 100644
+--- a/app/maoyi/windowsOwner.node.ts
++++ b/app/maoyi/windowsOwner.node.ts
+@@ -1,7 +1,7 @@
+ // Copyright 2026 Signal Messenger, LLC
+ // SPDX-License-Identifier: AGPL-3.0-only
+ 
+-import { setWindowOwner } from '@signalapp/windows-ucv';
++import { hasWindowOwner, setWindowOwner } from '@signalapp/windows-ucv';
+ import type { BrowserWindow } from 'electron';
+ 
+ export type MaoyiOwnerDescriptor = Readonly<{
+@@ -23,3 +23,18 @@ export function applyMaoyiWindowOwner(
+   }
+   return setWindowOwner(childHandle, ownerHandle, descriptor.ownerProcessId);
+ }
++
++export function verifyMaoyiWindowOwner(
++  window: BrowserWindow,
++  descriptor: MaoyiOwnerDescriptor
++): boolean {
++  if (process.platform !== 'win32') {
++    return false;
++  }
++  const childHandle = Buffer.from(window.getNativeWindowHandle());
++  const ownerHandle = Buffer.from(descriptor.handle, 'base64url');
++  if (childHandle.length !== 8 || ownerHandle.length !== 8) {
++    return false;
++  }
++  return hasWindowOwner(childHandle, ownerHandle, descriptor.ownerProcessId);
++}
+diff --git a/packages/windows-ucv/addon.cpp b/packages/windows-ucv/addon.cpp
+index e5fdf13..ef72972 100644
+--- a/packages/windows-ucv/addon.cpp
++++ b/packages/windows-ucv/addon.cpp
+@@ -206,6 +206,59 @@ Napi::Value SetWindowOwner(const Napi::CallbackInfo& info) {
+   return Napi::Boolean::New(env, true);
+ }
+ 
++Napi::Value HasWindowOwner(const Napi::CallbackInfo& info) {
++  auto env = info.Env();
++  if (info.Length() != 3 || !info[0].IsBuffer() || !info[1].IsBuffer() ||
++      !info[2].IsNumber()) {
++    Napi::TypeError::New(
++        env,
++        "Expected child handle, owner handle, and owner process identifier")
++        .ThrowAsJavaScriptException();
++    return env.Undefined();
++  }
++
++  auto child_buffer = info[0].As<Napi::Buffer<uint8_t>>();
++  auto owner_buffer = info[1].As<Napi::Buffer<uint8_t>>();
++  if (child_buffer.Length() != sizeof(uintptr_t) ||
++      owner_buffer.Length() != sizeof(uintptr_t)) {
++    Napi::TypeError::New(env, "Window handles have an invalid size")
++        .ThrowAsJavaScriptException();
++    return env.Undefined();
++  }
++
++  uintptr_t child_value = 0;
++  uintptr_t owner_value = 0;
++  memcpy(&child_value, child_buffer.Data(), sizeof(child_value));
++  memcpy(&owner_value, owner_buffer.Data(), sizeof(owner_value));
++  auto child = reinterpret_cast<HWND>(child_value);
++  auto owner = reinterpret_cast<HWND>(owner_value);
++  if (!IsWindow(child) || !IsWindow(owner)) {
++    Napi::Error::New(env, "A window handle is no longer valid")
++        .ThrowAsJavaScriptException();
++    return env.Undefined();
++  }
++
++  DWORD child_process_id = 0;
++  DWORD owner_process_id = 0;
++  DWORD child_session_id = 0;
++  DWORD owner_session_id = 0;
++  GetWindowThreadProcessId(child, &child_process_id);
++  GetWindowThreadProcessId(owner, &owner_process_id);
++  auto expected_owner_process_id = info[2].As<Napi::Number>().Uint32Value();
++  if (child_process_id != GetCurrentProcessId() || owner_process_id == 0 ||
++      owner_process_id != expected_owner_process_id ||
++      GetAncestor(owner, GA_ROOT) != owner ||
++      !ProcessIdToSessionId(child_process_id, &child_session_id) ||
++      !ProcessIdToSessionId(owner_process_id, &owner_session_id) ||
++      child_session_id != owner_session_id) {
++    Napi::Error::New(env, "Window ownership validation failed")
++        .ThrowAsJavaScriptException();
++    return env.Undefined();
++  }
++
++  return Napi::Boolean::New(env, GetWindow(child, GW_OWNER) == owner);
++}
++
+ Napi::Object Init(Napi::Env env, Napi::Object exports) {
+   exports.Set(Napi::String::New(env, "checkAvailability"),
+               Napi::Function::New(env, CheckAvailability));
+@@ -213,6 +266,8 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
+               Napi::Function::New(env, RequestVerification));
+   exports.Set(Napi::String::New(env, "setWindowOwner"),
+               Napi::Function::New(env, SetWindowOwner));
++  exports.Set(Napi::String::New(env, "hasWindowOwner"),
++              Napi::Function::New(env, HasWindowOwner));
+   return exports;
+ }
+ 
+diff --git a/packages/windows-ucv/index.ts b/packages/windows-ucv/index.ts
+index 16a224a..ded4112 100644
+--- a/packages/windows-ucv/index.ts
++++ b/packages/windows-ucv/index.ts
+@@ -36,6 +36,11 @@ type BindingType = Readonly<{
+     ownerHandle: Buffer<ArrayBuffer>,
+     ownerProcessId: number,
+   ): boolean;
++  hasWindowOwner(
++    childHandle: Buffer<ArrayBuffer>,
++    ownerHandle: Buffer<ArrayBuffer>,
++    ownerProcessId: number,
++  ): boolean;
+ }>;
+ 
+ let binding: BindingType | undefined;
+@@ -114,3 +119,18 @@ export function setWindowOwner(
+   }
+   return binding.setWindowOwner(childHandle, ownerHandle, ownerProcessId);
+ }
++
++/**
++ * Verify an existing top-level owner relationship without changing either
++ * window's visibility, position, size, z-order, or activation state.
++ */
++export function hasWindowOwner(
++  childHandle: Buffer<ArrayBuffer>,
++  ownerHandle: Buffer<ArrayBuffer>,
++  ownerProcessId: number,
++): boolean {
++  if (!binding) {
++    throw new Error('This library works only on Windows');
++  }
++  return binding.hasWindowOwner(childHandle, ownerHandle, ownerProcessId);
++}

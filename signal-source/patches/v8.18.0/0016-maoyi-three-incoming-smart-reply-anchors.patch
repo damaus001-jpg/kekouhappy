@@ -1,0 +1,474 @@
+diff --git a/ts/maoyi/smartReplyContext.std.ts b/ts/maoyi/smartReplyContext.std.ts
+index 07eb05a..48b0f5e 100644
+--- a/ts/maoyi/smartReplyContext.std.ts
++++ b/ts/maoyi/smartReplyContext.std.ts
+@@ -6,6 +6,7 @@ import type { MaoyiMessageProjection } from './messageProjection.std.ts';
+ export const maoyiSmartReplyContextVersion =
+   'df.signal.smart-reply-context.v1' as const;
+ export const maoyiSmartReplyMaximumContextMessages = 8;
++export const maoyiSmartReplyMaximumTriggerMessages = 3;
+ 
+ export type MaoyiSmartReplySuggestionId = 'reply_1' | 'reply_2' | 'reply_3';
+ 
+@@ -38,7 +39,8 @@ function projectionsExactlyMatch(
+ 
+ export function selectMaoyiSmartReplyContext(
+   conversationId: string,
+-  messages: ReadonlyArray<MaoyiMessageProjection>
++  messages: ReadonlyArray<MaoyiMessageProjection>,
++  trigger?: MaoyiMessageProjection
+ ): ReadonlyArray<MaoyiMessageProjection> {
+   const seen = new Set<string>();
+   for (const message of messages) {
+@@ -52,12 +54,48 @@ export function selectMaoyiSmartReplyContext(
+     seen.add(normalizedMessageId);
+   }
+ 
+-  const latest = messages.at(-1);
+-  if (!latest || latest.direction !== 'incoming') {
++  const eligibleTriggerIds = selectMaoyiSmartReplyTriggerIds(
++    conversationId,
++    messages
++  );
++  const selectedTrigger = trigger ?? messages.at(-1);
++  if (
++    !selectedTrigger ||
++    !eligibleTriggerIds.includes(selectedTrigger.messageId)
++  ) {
++    return [];
++  }
++  const triggerIndex = messages.findIndex(message =>
++    projectionsExactlyMatch(message, selectedTrigger)
++  );
++  if (triggerIndex < 0) {
+     return [];
+   }
++  return messages.slice(
++    Math.max(0, triggerIndex - maoyiSmartReplyMaximumContextMessages + 1),
++    triggerIndex + 1
++  );
++}
+ 
+-  return messages.slice(-maoyiSmartReplyMaximumContextMessages);
++export function selectMaoyiSmartReplyTriggerIds(
++  conversationId: string,
++  messages: ReadonlyArray<MaoyiMessageProjection>
++): ReadonlyArray<string> {
++  const seen = new Set<string>();
++  for (const message of messages) {
++    const normalizedMessageId = message.messageId.toLowerCase();
++    if (
++      message.conversationId !== conversationId ||
++      seen.has(normalizedMessageId)
++    ) {
++      return [];
++    }
++    seen.add(normalizedMessageId);
++  }
++  return messages
++    .filter(message => message.direction === 'incoming')
++    .slice(-maoyiSmartReplyMaximumTriggerMessages)
++    .map(message => message.messageId);
+ }
+ 
+ export function isMaoyiSmartReplyTrigger(
+diff --git a/ts/maoyi/smartReplyRuntime.preload.ts b/ts/maoyi/smartReplyRuntime.preload.ts
+index cf0369c..fecccb6 100644
+--- a/ts/maoyi/smartReplyRuntime.preload.ts
++++ b/ts/maoyi/smartReplyRuntime.preload.ts
+@@ -17,8 +17,12 @@ const emptyReplies: ReadonlyArray<MaoyiSmartReplySuggestion> = Object.freeze(
+   []
+ );
+ const listeners = new Set<() => void>();
+-let snapshot: SmartReplySnapshot | undefined;
+-let pendingTrigger: MaoyiMessageProjection | undefined;
++const snapshots = new Map<string, SmartReplySnapshot>();
++const pendingTriggers = new Map<string, MaoyiMessageProjection>();
++
++function triggerKey(trigger: MaoyiMessageProjection): string {
++  return `${trigger.conversationId}::${trigger.messageId.toLowerCase()}`;
++}
+ 
+ function projectionsExactlyMatch(
+   left: MaoyiMessageProjection,
+@@ -49,51 +53,64 @@ export function applyMaoyiSmartReplyResult(
+   trigger: MaoyiMessageProjection,
+   replies: ReadonlyArray<MaoyiSmartReplySuggestion>
+ ): void {
+-  pendingTrigger = undefined;
+-  snapshot = Object.freeze({
+-    trigger,
+-    replies: Object.freeze(replies.map(reply => Object.freeze({ ...reply }))),
+-  });
++  const key = triggerKey(trigger);
++  pendingTriggers.delete(key);
++  snapshots.set(
++    key,
++    Object.freeze({
++      trigger,
++      replies: Object.freeze(replies.map(reply => Object.freeze({ ...reply }))),
++    })
++  );
+   emit();
+ }
+ 
+ export function applyMaoyiSmartReplyPending(
+   trigger: MaoyiMessageProjection
+ ): void {
+-  pendingTrigger = trigger;
+-  snapshot = undefined;
++  const key = triggerKey(trigger);
++  pendingTriggers.set(key, trigger);
++  snapshots.delete(key);
+   emit();
+ }
+ 
+ export function clearMaoyiSmartReplyRuntime(): void {
+-  if (!snapshot && !pendingTrigger) {
++  if (!snapshots.size && !pendingTriggers.size) {
+     return;
+   }
+-  snapshot = undefined;
+-  pendingTrigger = undefined;
++  snapshots.clear();
++  pendingTriggers.clear();
+   emit();
+ }
+ 
++export function clearMaoyiSmartReplyForTrigger(
++  trigger: MaoyiMessageProjection
++): void {
++  const key = triggerKey(trigger);
++  const removedSnapshot = snapshots.delete(key);
++  const removedPending = pendingTriggers.delete(key);
++  if (removedSnapshot || removedPending) emit();
++}
++
+ export function getMaoyiSmartReplyPending(
+   trigger: MaoyiMessageProjection | undefined
+ ): boolean {
++  if (!trigger) return false;
++  const pendingTrigger = pendingTriggers.get(triggerKey(trigger));
+   return Boolean(
+-    trigger &&
+-      pendingTrigger &&
+-      projectionsExactlyMatch(trigger, pendingTrigger)
++    pendingTrigger && projectionsExactlyMatch(trigger, pendingTrigger)
+   );
+ }
+ 
+ export function getMaoyiSmartReplies(
+   trigger: MaoyiMessageProjection | undefined
+ ): ReadonlyArray<MaoyiSmartReplySuggestion> {
+-  if (
+-    !trigger ||
+-    !snapshot ||
+-    !projectionsExactlyMatch(trigger, snapshot.trigger)
+-  ) {
++  if (!trigger) {
+     return emptyReplies;
+   }
++  const snapshot = snapshots.get(triggerKey(trigger));
++  if (!snapshot || !projectionsExactlyMatch(trigger, snapshot.trigger))
++    return emptyReplies;
+   return snapshot.replies;
+ }
+ 
+diff --git a/ts/maoyi/messageBridge.preload.ts b/ts/maoyi/messageBridge.preload.ts
+index f76d534..d5b6495 100644
+--- a/ts/maoyi/messageBridge.preload.ts
++++ b/ts/maoyi/messageBridge.preload.ts
+@@ -37,6 +37,7 @@ import {
+ import {
+   applyMaoyiSmartReplyPending,
+   applyMaoyiSmartReplyResult,
++  clearMaoyiSmartReplyForTrigger,
+   clearMaoyiSmartReplyRuntime,
+ } from './smartReplyRuntime.preload.ts';
+ 
+@@ -660,7 +661,8 @@ export function createMaoyiRendererMessageBridge(
+       const snapshot = snapshotProvider?.();
+       const context = selectMaoyiSmartReplyContext(
+         command.conversationId,
+-        snapshot?.smartReplyMessages ?? []
++        snapshot?.smartReplyMessages ?? [],
++        command.trigger
+       );
+       if (
+         expected &&
+@@ -672,7 +674,7 @@ export function createMaoyiRendererMessageBridge(
+         if (command.type === 'smartReply.result') {
+           applyMaoyiSmartReplyResult(command.trigger, command.replies);
+         } else {
+-          clearMaoyiSmartReplyRuntime();
++          clearMaoyiSmartReplyForTrigger(command.trigger);
+         }
+       }
+       return;
+@@ -778,7 +780,8 @@ export function createMaoyiRendererMessageBridge(
+         const snapshot = snapshotProvider?.();
+         const context = selectMaoyiSmartReplyContext(
+           message.conversationId,
+-          snapshot?.smartReplyMessages ?? []
++          snapshot?.smartReplyMessages ?? [],
++          message
+         );
+         if (
+           announcedConversationId !== message.conversationId ||
+@@ -788,7 +791,6 @@ export function createMaoyiRendererMessageBridge(
+           return;
+         }
+         const requestId = randomUUID();
+-        pendingSmartReplies.clear();
+         pendingSmartReplies.set(requestId, message);
+         applyMaoyiSmartReplyPending(message);
+         const accepted = await sendEvent({
+@@ -801,7 +803,7 @@ export function createMaoyiRendererMessageBridge(
+         });
+         if (!accepted) {
+           pendingSmartReplies.delete(requestId);
+-          clearMaoyiSmartReplyRuntime();
++          clearMaoyiSmartReplyForTrigger(message);
+         }
+       });
+     },
+diff --git a/ts/state/smart/Timeline.preload.tsx b/ts/state/smart/Timeline.preload.tsx
+index 9cadb06..8d1d472 100644
+--- a/ts/state/smart/Timeline.preload.tsx
++++ b/ts/state/smart/Timeline.preload.tsx
+@@ -41,7 +41,7 @@ import {
+ } from '../../maoyi/messageBridge.preload.ts';
+ import { createMaoyiVisibleProjectionSignature } from '../../maoyi/messageBatching.std.ts';
+ import { projectMaoyiVisibleMessages } from '../../maoyi/visibleMessageProjection.std.ts';
+-import { selectMaoyiSmartReplyContext } from '../../maoyi/smartReplyContext.std.ts';
++import { selectMaoyiSmartReplyTriggerIds } from '../../maoyi/smartReplyContext.std.ts';
+ 
+ type ExternalProps = {
+   id: string;
+@@ -194,19 +194,20 @@ export const SmartTimeline = memo(function SmartTimeline({
+   const visibleMessageIdsRef = useRef<Array<string>>([]);
+   const messagesRef = useRef(messages);
+   const isConversationSelectedRef = useRef(isConversationSelected);
+-  const maoyiSmartReplyContext = useMemo(() => {
++  const maoyiSmartReplyMessages = useMemo(() => {
+     if (!isConversationSelected || !haveNewest) {
+       return [];
+     }
+-    return selectMaoyiSmartReplyContext(
+-      id,
+-      projectMaoyiVisibleMessages(id, items, messages)
+-    );
++    return projectMaoyiVisibleMessages(id, items, messages);
+   }, [haveNewest, id, isConversationSelected, items, messages]);
+-  const maoyiSmartReplyMessagesRef = useRef(maoyiSmartReplyContext);
++  const maoyiSmartReplyMessageIds = useMemo(
++    () => selectMaoyiSmartReplyTriggerIds(id, maoyiSmartReplyMessages),
++    [maoyiSmartReplyMessages, id]
++  );
++  const maoyiSmartReplyMessagesRef = useRef(maoyiSmartReplyMessages);
+   messagesRef.current = messages;
+   isConversationSelectedRef.current = isConversationSelected;
+-  maoyiSmartReplyMessagesRef.current = maoyiSmartReplyContext;
++  maoyiSmartReplyMessagesRef.current = maoyiSmartReplyMessages;
+ 
+   const maoyiVisibleProjectionSignature = useMemo(() => {
+     if (!isConversationSelected) {
+@@ -283,7 +284,7 @@ export const SmartTimeline = memo(function SmartTimeline({
+       clearTargetedMessage={clearTargetedMessage}
+       closeContactSpoofingReview={closeContactSpoofingReview}
+       conversationType={conversationType}
+-      maoyiSmartReplyMessageId={maoyiSmartReplyContext.at(-1)?.messageId}
++      maoyiSmartReplyMessageIds={maoyiSmartReplyMessageIds}
+       discardMessages={discardMessages}
+       getPreferredBadge={getPreferredBadge}
+       getTimestampForMessage={getTimestampForMessage}
+diff --git a/ts/state/smart/TimelineItem.preload.tsx b/ts/state/smart/TimelineItem.preload.tsx
+index 1563d9d..9eee8d3 100644
+--- a/ts/state/smart/TimelineItem.preload.tsx
++++ b/ts/state/smart/TimelineItem.preload.tsx
+@@ -69,7 +69,7 @@ export type SmartTimelineItemProps = {
+   containerElementRef: RefObject<HTMLElement | null>;
+   containerWidthBreakpoint: WidthBreakpoint;
+   conversationId: string;
+-  maoyiSmartReplyMessageId?: string;
++  maoyiSmartReplyMessageIds?: ReadonlyArray<string>;
+   interactivity: MessageInteractivity;
+   isBlocked: boolean;
+   isGroup: boolean;
+@@ -95,7 +95,7 @@ export const SmartTimelineItem = memo(function SmartTimelineItem(
+     containerElementRef,
+     containerWidthBreakpoint,
+     conversationId,
+-    maoyiSmartReplyMessageId,
++    maoyiSmartReplyMessageIds,
+     interactivity,
+     isBlocked,
+     isGroup,
+@@ -137,7 +137,7 @@ export const SmartTimelineItem = memo(function SmartTimelineItem(
+   }, [maoyiMessageProjection]);
+   const isMaoyiSmartReplyTrigger =
+     maoyiMessageProjection?.direction === 'incoming' &&
+-    maoyiMessageProjection.messageId === maoyiSmartReplyMessageId;
++    maoyiSmartReplyMessageIds?.includes(maoyiMessageProjection.messageId);
+   const maoyiSmartReplySuggestions = useMaoyiSmartReplies(
+     maoyiMessageProjection
+   );
+diff --git a/ts/components/conversation/Timeline.dom.tsx b/ts/components/conversation/Timeline.dom.tsx
+index 3ffa995..18e1e02 100644
+--- a/ts/components/conversation/Timeline.dom.tsx
++++ b/ts/components/conversation/Timeline.dom.tsx
+@@ -73,7 +73,7 @@ export type PropsDataType = {
+ 
+ type PropsHousekeepingType = {
+   id: string;
+-  maoyiSmartReplyMessageId?: string;
++  maoyiSmartReplyMessageIds?: ReadonlyArray<string>;
+   isBlocked: boolean;
+   isConversationSelected: boolean;
+   isGroupV1AndDisabled?: boolean;
+@@ -1074,7 +1074,7 @@ export class Timeline extends Component<PropsType, StateType, SnapshotType> {
+       clearInvitedServiceIdsForNewlyCreatedGroup,
+       closeContactSpoofingReview,
+       conversationType,
+-      maoyiSmartReplyMessageId,
++      maoyiSmartReplyMessageIds,
+       hasContactSpoofingReview,
+       getPreferredBadge,
+       getTimestampForMessage,
+@@ -1218,7 +1218,7 @@ export class Timeline extends Component<PropsType, StateType, SnapshotType> {
+               containerElementRef: this.#containerRef,
+               containerWidthBreakpoint: widthBreakpoint,
+               conversationId: id,
+-              maoyiSmartReplyMessageId,
++              maoyiSmartReplyMessageIds,
+               isBlocked,
+               interactivity: MessageInteractivity.Normal,
+               isGroup,
+diff --git a/ts/test-node/maoyi/smartReplyContext_test.node.ts b/ts/test-node/maoyi/smartReplyContext_test.node.ts
+index 50e3c3a..6c09bd3 100644
+--- a/ts/test-node/maoyi/smartReplyContext_test.node.ts
++++ b/ts/test-node/maoyi/smartReplyContext_test.node.ts
+@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
+ import {
+   isMaoyiSmartReplyTrigger,
+   selectMaoyiSmartReplyContext,
++  selectMaoyiSmartReplyTriggerIds,
+ } from '../../maoyi/smartReplyContext.std.ts';
+ import {
+   projectMaoyiMessage,
+@@ -35,37 +36,62 @@ describe('Maoyi smart reply context', () => {
+     const messages = Array.from({ length: 10 }, (_, index) =>
+       projection(index, index % 2 === 0 ? 'outgoing' : 'incoming')
+     );
+-    const context = selectMaoyiSmartReplyContext(conversationId, messages);
+-    assert.deepEqual(context, messages.slice(2));
+     const latest = messages[9];
+-    const stale = messages[8];
+     assert.ok(latest);
++    const context = selectMaoyiSmartReplyContext(
++      conversationId,
++      messages,
++      latest
++    );
++    assert.deepEqual(context, messages.slice(2));
++    const stale = messages[8];
+     assert.ok(stale);
+     assert.equal(isMaoyiSmartReplyTrigger(latest, context), true);
+     assert.equal(isMaoyiSmartReplyTrigger(stale, context), false);
+   });
+ 
+-  it('does not expose a trigger when the latest valid message is outgoing', () => {
+-    const messages = [projection(1, 'incoming'), projection(2, 'outgoing')];
++  it('exposes the latest three incoming triggers even when the newest message is outgoing', () => {
++    const messages = [
++      projection(1, 'incoming'),
++      projection(2, 'outgoing'),
++      projection(3, 'incoming'),
++      projection(4, 'outgoing'),
++      projection(5, 'incoming'),
++      projection(6, 'incoming'),
++      projection(7, 'outgoing'),
++    ];
+     assert.deepEqual(
+-      selectMaoyiSmartReplyContext(conversationId, messages),
+-      []
++      selectMaoyiSmartReplyTriggerIds(conversationId, messages),
++      [messages[2]?.messageId, messages[4]?.messageId, messages[5]?.messageId]
++    );
++    const middleTrigger = messages[4];
++    assert.ok(middleTrigger);
++    const context = selectMaoyiSmartReplyContext(
++      conversationId,
++      messages,
++      middleTrigger
+     );
++    assert.deepEqual(context, messages.slice(0, 5));
++    assert.equal(isMaoyiSmartReplyTrigger(middleTrigger, context), true);
+   });
+ 
+   it('rejects duplicate identities and cross-conversation projections', () => {
+     const value = projection(1);
+     assert.deepEqual(
+-      selectMaoyiSmartReplyContext(conversationId, [value, value]),
++      selectMaoyiSmartReplyContext(conversationId, [value, value], value),
+       []
+     );
+     assert.deepEqual(
+-      selectMaoyiSmartReplyContext(conversationId, [
+-        {
+-          ...projection(2),
+-          conversationId: '44444444-4444-4444-8444-444444444444',
+-        },
+-      ]),
++      selectMaoyiSmartReplyContext(
++        conversationId,
++        [
++          {
++            ...projection(2),
++            conversationId: '44444444-4444-4444-8444-444444444444',
++          },
++        ],
++        value
++      ),
+       []
+     );
+   });
+diff --git a/ts/test-node/maoyi/sourceSmartReplyContract_test.node.ts b/ts/test-node/maoyi/sourceSmartReplyContract_test.node.ts
+index fc1638e..e9cf02a 100644
+--- a/ts/test-node/maoyi/sourceSmartReplyContract_test.node.ts
++++ b/ts/test-node/maoyi/sourceSmartReplyContract_test.node.ts
+@@ -21,21 +21,29 @@ describe('Maoyi source smart reply contract', () => {
+   const composer = source('../../maoyi/smartReplyComposer.std.ts');
+   const protocol = source('../../../app/maoyi/controlProtocol.node.ts');
+ 
+-  it('renders one native button only for the selected latest incoming projection', () => {
++  it('renders native buttons for the latest three incoming projections', () => {
+     assert.match(message, /public renderMaoyiSmartReply\(\)/);
+-    assert.match(message, /aria-busy=\{maoyiSmartReplyPending \|\| undefined\}/);
++    assert.match(
++      message,
++      /aria-busy=\{maoyiSmartReplyPending \|\| undefined\}/
++    );
+     assert.match(
+       smartTimeline,
+-      /selectMaoyiSmartReplyContext\([\s\S]*?projectMaoyiVisibleMessages\(id, items, messages\)/
++      /selectMaoyiSmartReplyTriggerIds\(id, maoyiSmartReplyMessages\)/
+     );
+     assert.match(
+       smartTimelineItem,
+-      /maoyiMessageProjection\?\.direction === 'incoming'[\s\S]*?maoyiMessageProjection\.messageId === maoyiSmartReplyMessageId/
++      /maoyiMessageProjection\?\.direction === 'incoming'[\s\S]*?maoyiSmartReplyMessageIds\?\.includes\(maoyiMessageProjection\.messageId\)/
++    );
++    assert.match(
++      message,
++      /maoyiSmartReplyPending \? '生成中\.\.\.' : '智能回复'/
+     );
+-    assert.match(message, /maoyiSmartReplyPending \? '生成中\.\.\.' : '智能回复'/);
+     assert.match(message, /disabled=\{maoyiSmartReplyPending\}/);
+     assert.match(smartReplyRuntime, /applyMaoyiSmartReplyPending/);
+     assert.match(smartReplyRuntime, /useMaoyiSmartReplyPending/);
++    assert.match(smartReplyRuntime, /const snapshots = new Map/);
++    assert.match(smartReplyRuntime, /const pendingTriggers = new Map/);
+   });
+ 
+   it('sends a bounded old-to-new canonical context through the authenticated bridge', () => {

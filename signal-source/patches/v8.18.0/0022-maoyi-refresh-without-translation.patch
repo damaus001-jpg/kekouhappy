@@ -1,0 +1,17 @@
+diff --git a/ts/components/conversation/Message.dom.tsx b/ts/components/conversation/Message.dom.tsx
+--- a/ts/components/conversation/Message.dom.tsx
++++ b/ts/components/conversation/Message.dom.tsx
+@@ -2556,7 +2556,12 @@
+   public renderMaoyiTranslation(): JSX.Element | null {
+     const { maoyiTranslationText } = this.props;
+     if (!maoyiTranslationText) {
+-      return null;
++      const refreshButton = this.renderMaoyiTranslationRefresh();
++      return refreshButton ? (
++        <div className="module-message__maoyi-translation module-message__maoyi-translation--missing">
++          {refreshButton}
++        </div>
++      ) : null;
+     }
+ 
+     const characters = Array.from(maoyiTranslationText);

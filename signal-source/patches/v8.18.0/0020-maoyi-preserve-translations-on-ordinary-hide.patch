@@ -1,0 +1,177 @@
+diff --git a/app/maoyi/messageBridge.main.ts b/app/maoyi/messageBridge.main.ts
+--- a/app/maoyi/messageBridge.main.ts
++++ b/app/maoyi/messageBridge.main.ts
+@@ -477,13 +477,35 @@
+     }
+   };
+ 
+-  const clearRendererRuntime = (): void => {
+-    currentConversationId = undefined;
++  const invalidateRendererRequests = (): void => {
+     requestLedger.invalidateAll();
+     addedMessageLedger.clear();
+     refreshRequestLedger.clear();
+     smartReplyRequestLedger.clear();
++  };
++
++  const clearRendererRuntime = (): void => {
++    currentConversationId = undefined;
++    invalidateRendererRequests();
+     sendRendererCommand({ type: 'translation.runtime.clear' });
++  };
++
++  const suspendRendererRequests = (): void => {
++    invalidateRendererRequests();
++  };
++
++  const clearOrSuspendUnavailableRuntime = (): void => {
++    if (
++      !stopped &&
++      transportAuthenticated &&
++      mainWindow &&
++      !mainWindow.isDestroyed() &&
++      !mainWindow.webContents.isDestroyed()
++    ) {
++      suspendRendererRequests();
++      return;
++    }
++    clearRendererRuntime();
+   };
+ 
+   const canForward = (): boolean =>
+@@ -505,7 +527,7 @@
+       return false;
+     }
+     if (!canForward()) {
+-      clearRendererRuntime();
++      clearOrSuspendUnavailableRuntime();
+       return false;
+     }
+ 
+@@ -594,17 +616,21 @@
+   };
+ 
+   const handleControlCommand = (command: MaoyiControlCommand): void => {
+     if (command.type === 'security.visibility' && command.locked) {
+-      clearRendererRuntime();
++      suspendRendererRequests();
+       return;
+     }
+-    if (command.type === 'window.hide' || command.type === 'shutdown') {
++    if (command.type === 'window.hide') {
++      clearOrSuspendUnavailableRuntime();
++      return;
++    }
++    if (command.type === 'shutdown') {
+       clearRendererRuntime();
+       return;
+     }
+     if (command.type === 'window.show') {
+       if (!canForward()) {
+-        clearRendererRuntime();
++        clearOrSuspendUnavailableRuntime();
+         return;
+       }
+       const requestId = randomUUID();
+@@ -623,7 +649,7 @@
+ 
+     if (command.type === 'translation.refresh.status') {
+       if (!canForward()) {
+-        clearRendererRuntime();
++        clearOrSuspendUnavailableRuntime();
+         return;
+       }
+       if (
+@@ -641,7 +667,7 @@
+       command.type === 'smartReply.error'
+     ) {
+       if (!canForward()) {
+-        clearRendererRuntime();
++        clearOrSuspendUnavailableRuntime();
+         return;
+       }
+       if (
+@@ -661,7 +687,7 @@
+       return;
+     }
+     if (!canForward()) {
+-      clearRendererRuntime();
++      clearOrSuspendUnavailableRuntime();
+       return;
+     }
+ 
+@@ -699,7 +725,7 @@
+ 
+   let attachedWindow: BrowserWindow | undefined;
+   const handleWindowUnavailable = (): void => {
+-    clearRendererRuntime();
++    clearOrSuspendUnavailableRuntime();
+   };
+   const handleWindowClosed = (): void => {
+     clearRendererRuntime();
+diff --git a/ts/test-node/maoyi/messageBridge_test.main.ts b/ts/test-node/maoyi/messageBridge_test.main.ts
+--- a/ts/test-node/maoyi/messageBridge_test.main.ts
++++ b/ts/test-node/maoyi/messageBridge_test.main.ts
+@@ -401,12 +401,41 @@
+       type: 'translation.runtime.clear',
+     });
+ 
++    exposable = true;
++    window.visible = false;
++    const commandsBeforeOrdinaryHide = window.webContents.commands.length;
++    window.emit('hide');
++    control.emitCommand({ type: 'window.hide' });
++    assert.equal(
++      window.webContents.commands.length,
++      commandsBeforeOrdinaryHide
++    );
++
++    window.visible = true;
++    control.emitCommand({ type: 'window.show' });
++    assert.equal(
++      (
++        window.webContents.commands.at(-1) as {
++          type?: string;
++        }
++      )?.type,
++      'message.snapshot.request'
++    );
++
+     exposable = false;
+     window.visible = false;
++    const commandsBeforeSecurityLock = window.webContents.commands.length;
++    control.emitCommand({
++      type: 'security.visibility',
++      locked: true,
++      revision: 1,
++    });
+     window.emit('hide');
+-    assert.deepEqual(window.webContents.commands.at(-1), {
+-      type: 'translation.runtime.clear',
+-    });
++    control.emitCommand({ type: 'window.hide' });
++    assert.equal(
++      window.webContents.commands.length,
++      commandsBeforeSecurityLock
++    );
+     assert.equal(
+       ipc.handler(event, {
+         type: 'conversation.changed',
+@@ -450,7 +479,17 @@
+         messages: [],
+       }),
+       true
+     );
++
++    const commandsBeforeTransportLoss = window.webContents.commands.length;
++    control.setAuthenticated(false);
++    assert.equal(
++      window.webContents.commands.length,
++      commandsBeforeTransportLoss + 1
++    );
++    assert.deepEqual(window.webContents.commands.at(-1), {
++      type: 'translation.runtime.clear',
++    });
+ 
+     bridge.stop();
+   });

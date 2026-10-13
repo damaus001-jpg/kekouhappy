@@ -1,0 +1,355 @@
+diff --git a/app/maoyi/controlProtocol.node.ts b/app/maoyi/controlProtocol.node.ts
+--- a/app/maoyi/controlProtocol.node.ts
++++ b/app/maoyi/controlProtocol.node.ts
+@@ -90,6 +90,7 @@
+       conversationId: string;
+       messageId: string;
+       state: 'processing' | 'idle';
++      error?: 'failed' | 'timeout' | 'busy';
+     }>
+   | Readonly<{
+       type: 'smartReply.result';
+@@ -576,7 +577,9 @@
+           'conversationId',
+           'messageId',
+           'state',
++          'error',
+         ]) &&
++        (value.error === undefined || value.error === 'failed' || value.error === 'timeout' || value.error === 'busy') &&
+         isMaoyiControlUuid(value.requestId) &&
+         isMaoyiControlUuid(value.conversationId) &&
+         isMaoyiControlUuid(value.messageId) &&
+@@ -588,6 +591,7 @@
+           conversationId: value.conversationId,
+           messageId: value.messageId,
+           state: value.state,
++          ...(value.error ? { error: value.error } : {}),
+         };
+       }
+       return undefined;
+diff --git a/app/maoyi/messageBridge.main.ts b/app/maoyi/messageBridge.main.ts
+--- a/app/maoyi/messageBridge.main.ts
++++ b/app/maoyi/messageBridge.main.ts
+@@ -460,6 +460,7 @@
+   let currentConversationId: string | undefined;
+   let transportAuthenticated = false;
+   let stopped = false;
++  let resumeTimer: ReturnType<typeof setTimeout> | undefined;
+ 
+   const sendRendererCommand = (command: MaoyiRendererCommand): boolean => {
+     if (
+@@ -519,6 +520,19 @@
+       windowController.canExposeWindows()
+     );
+ 
++  const resumeRenderer = (): void => {
++    if (resumeTimer || stopped) return;
++    resumeTimer = setTimeout(() => {
++      resumeTimer = undefined;
++      if (!canForward()) return;
++      const requestId = randomUUID();
++      if (!requestLedger.beginSnapshot(requestId, true)) return;
++      if (!sendRendererCommand({ type: 'message.snapshot.request', requestId, resyncConversation: true, resetRefreshState: true })) {
++        requestLedger.consume(requestId);
++      }
++    }, 0);
++  };
++
+   const handleRendererEvent = (
+     event: IpcMainInvokeEvent,
+     value: unknown
+@@ -571,7 +585,9 @@
+         ) {
+           return false;
+         }
+-        if (!controlBridge.send(parsed)) {
++        // Repair the launcher conversation before a user-forced request.
++        // The launcher treats an already-current conversation idempotently.
++        if (!controlBridge.send({ type: 'conversation.changed', conversationId: parsed.conversationId }) || !controlBridge.send(parsed)) {
+           refreshRequestLedger.remove(parsed.requestId);
+           return false;
+         }
+@@ -627,23 +643,12 @@
+       clearRendererRuntime();
+       return;
+     }
+-    if (command.type === 'window.show') {
++    if (command.type === 'window.show' || command.type === 'window.present') {
+       if (!canForward()) {
+         clearOrSuspendUnavailableRuntime();
+         return;
+       }
+-      const requestId = randomUUID();
+-      if (!requestLedger.beginSnapshot(requestId, true)) {
+-        return;
+-      }
+-      if (
+-        !sendRendererCommand({
+-          type: 'message.snapshot.request',
+-          requestId,
+-        })
+-      ) {
+-        requestLedger.consume(requestId);
+-      }
++      resumeRenderer();
+       return;
+     }
+ 
+@@ -695,7 +700,7 @@
+       if (!requestLedger.beginSnapshot(command.requestId)) {
+         return;
+       }
+-      if (!sendRendererCommand(command)) {
++      if (!sendRendererCommand({ ...command, resyncConversation: true })) {
+         requestLedger.consume(command.requestId);
+       }
+       return;
+@@ -719,6 +724,8 @@
+       transportAuthenticated = authenticated;
+       if (!authenticated) {
+         clearRendererRuntime();
++      } else {
++        resumeRenderer();
+       }
+     }
+   );
+@@ -739,6 +746,7 @@
+     if (!attachedWindow) {
+       return;
+     }
++    attachedWindow.off('show', resumeRenderer);
+     attachedWindow.off('hide', handleWindowUnavailable);
+     attachedWindow.off('closed', handleWindowClosed);
+     if (!attachedWindow.webContents.isDestroyed()) {
+@@ -756,16 +764,20 @@
+       removeWindowListeners();
+       mainWindow = window;
+       attachedWindow = window;
++      window.on('show', resumeRenderer);
+       window.on('hide', handleWindowUnavailable);
+       window.on('closed', handleWindowClosed);
+       window.webContents.on('did-finish-load', handleRendererLoaded);
+       clearRendererRuntime();
++      resumeRenderer();
+     },
+     stop() {
+       if (stopped) {
+         return;
+       }
+       stopped = true;
++      if (resumeTimer) clearTimeout(resumeTimer);
++      resumeTimer = undefined;
+       clearRendererRuntime();
+       removeWindowListeners();
+       ipcArgument.removeHandler(maoyiMessageEventChannel);
+diff --git a/ts/maoyi/messageBridge.preload.ts b/ts/maoyi/messageBridge.preload.ts
+--- a/ts/maoyi/messageBridge.preload.ts
++++ b/ts/maoyi/messageBridge.preload.ts
+@@ -15,6 +15,7 @@
+   applyMaoyiTranslationBatch,
+   applyMaoyiTranslationRefreshStatus,
+   clearMaoyiTranslationRuntime,
++  clearMaoyiTranslationRefreshRequests,
+ } from './translationRuntime.preload.ts';
+ import {
+   createMaoyiVisibleProjectionSignature,
+@@ -285,12 +286,16 @@
+   }
+   if (
+     value.type === 'message.snapshot.request' &&
+-    hasOnlyKeys(value, ['type', 'requestId']) &&
++    hasOnlyKeys(value, ['type', 'requestId', 'resyncConversation', 'resetRefreshState']) &&
++    (value.resyncConversation === undefined || typeof value.resyncConversation === 'boolean') &&
++    (value.resetRefreshState === undefined || typeof value.resetRefreshState === 'boolean') &&
+     isUuid(value.requestId)
+   ) {
+     return {
+       type: 'message.snapshot.request',
+       requestId: value.requestId,
++      ...(value.resyncConversation ? { resyncConversation: true } : {}),
++      ...(value.resetRefreshState ? { resetRefreshState: true } : {}),
+     };
+   }
+   if (
+@@ -301,11 +306,13 @@
+       'conversationId',
+       'messageId',
+       'state',
++      'error',
+     ]) &&
+     isUuid(value.requestId) &&
+     isUuid(value.conversationId) &&
+     isUuid(value.messageId) &&
+-    (value.state === 'processing' || value.state === 'idle')
++    (value.state === 'processing' || value.state === 'idle') &&
++    (value.error === undefined || value.error === 'failed' || value.error === 'timeout' || value.error === 'busy')
+   ) {
+     return {
+       type: 'translation.refresh.status',
+@@ -313,6 +320,7 @@
+       conversationId: value.conversationId,
+       messageId: value.messageId,
+       state: value.state,
++      ...(value.error ? { error: value.error } : {}),
+     };
+   }
+   if (
+@@ -490,12 +498,18 @@
+   };
+ 
+   const sendEvent = async (value: unknown): Promise<boolean> => {
++    let timer: ReturnType<typeof setTimeout> | undefined;
+     try {
+       return (
+-        (await transport.invoke(maoyiMessageEventChannel, value)) === true
++        (await Promise.race([
++          transport.invoke(maoyiMessageEventChannel, value),
++          new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(false), 8_000); }),
++        ])) === true
+       );
+     } catch {
+       return false;
++    } finally {
++      if (timer) clearTimeout(timer);
+     }
+   };
+ 
+@@ -693,6 +707,12 @@
+       if (!snapshot) {
+         return;
+       }
++      if (command.resyncConversation) {
++        announcedConversationId = undefined;
++        activeProjectionSignature = undefined;
++        clearPending();
++      }
++      if (command.resetRefreshState) clearMaoyiTranslationRefreshRequests();
+       const revision = normalPublishRevision;
+       await runPublish(snapshot, generation, command.requestId, revision);
+     });
+diff --git a/ts/maoyi/messageBridgeChannels.std.ts b/ts/maoyi/messageBridgeChannels.std.ts
+--- a/ts/maoyi/messageBridgeChannels.std.ts
++++ b/ts/maoyi/messageBridgeChannels.std.ts
+@@ -13,6 +13,8 @@
+   | Readonly<{
+       type: 'message.snapshot.request';
+       requestId: string;
++      resyncConversation?: boolean;
++      resetRefreshState?: boolean;
+     }>
+   | Readonly<{
+       type: 'translation.cacheResultBatch';
+@@ -26,6 +28,7 @@
+       conversationId: string;
+       messageId: string;
+       state: 'processing' | 'idle';
++      error?: 'failed' | 'timeout' | 'busy';
+     }>
+   | Readonly<{
+       type: 'smartReply.result';
+diff --git a/ts/maoyi/translationRuntime.preload.ts b/ts/maoyi/translationRuntime.preload.ts
+--- a/ts/maoyi/translationRuntime.preload.ts
++++ b/ts/maoyi/translationRuntime.preload.ts
+@@ -31,6 +31,8 @@
+ 
+ const translations = new Map<string, StoredMaoyiTranslation>();
+ const refreshRequests = new Map<string, string>();
++const refreshErrors = new Map<string, string>();
++const refreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
+ const subscribers = new Set<() => void>();
+ let estimatedBytes = 0;
+ 
+@@ -43,6 +45,7 @@
+   conversationId: string;
+   messageId: string;
+   state: 'processing' | 'idle';
++  error?: 'failed' | 'timeout' | 'busy';
+ }>;
+ 
+ export function applyMaoyiTranslationRefreshStatus(
+@@ -52,11 +55,30 @@
+   if (status.state === 'processing') {
+     if (refreshRequests.get(key) === status.requestId) return;
+     refreshRequests.set(key, status.requestId);
++    refreshErrors.delete(key);
++    const previousTimer = refreshTimers.get(key);
++    if (previousTimer) clearTimeout(previousTimer);
++    refreshTimers.set(key, setTimeout(() => {
++      if (refreshRequests.get(key) !== status.requestId) return;
++      refreshRequests.delete(key);
++      refreshTimers.delete(key);
++      refreshErrors.set(key, '翻译超时，请点击重试');
++      notifySubscribers();
++    }, 45_000));
+     notifySubscribers();
+     return;
+   }
+-  if (refreshRequests.get(key) !== status.requestId) return;
++  if (refreshRequests.has(key) && refreshRequests.get(key) !== status.requestId) return;
++  if (status.error) {
++    refreshErrors.set(key, status.error === 'timeout' ? '翻译超时，请点击重试' : status.error === 'busy' ? '翻译繁忙，请点击重试' : '翻译失败，请点击重试');
++    while (refreshErrors.size > maoyiTranslationEntryLimit) refreshErrors.delete(refreshErrors.keys().next().value!);
++  } else {
++    refreshErrors.delete(key);
++  }
+   refreshRequests.delete(key);
++  const timer = refreshTimers.get(key);
++  if (timer) clearTimeout(timer);
++  refreshTimers.delete(key);
+   notifySubscribers();
+ }
+ 
+@@ -151,6 +173,7 @@
+   results: ReadonlyArray<MaoyiTranslationResult>
+ ): number {
+   const changedKeys = new Set<string>();
++  let errorsCleared = false;
+ 
+   for (const result of results) {
+     const normalized = normalizeTranslationResult(result);
+@@ -159,6 +182,7 @@
+     }
+ 
+     const key = translationKey(normalized.conversationId, normalized.messageId);
++    if (refreshErrors.delete(key)) errorsCleared = true;
+     const existing = translations.get(key);
+     if (
+       existing &&
+@@ -180,7 +204,7 @@
+   }
+ 
+   const evicted = trimTranslationCache();
+-  if (changedKeys.size > 0 || evicted) {
++  if (changedKeys.size > 0 || evicted || errorsCleared) {
+     notifySubscribers();
+   }
+   return changedKeys.size;
+@@ -270,12 +294,26 @@
+   );
+ }
+ 
++export function useMaoyiTranslationRefreshError(projection: MaoyiMessageProjection | undefined): string {
++  const getSnapshot = useCallback(() => projection ? refreshErrors.get(translationKey(projection.conversationId, projection.messageId)) || '' : '', [projection]);
++  return useSyncExternalStore(subscribeToMaoyiTranslations, getSnapshot, getSnapshot);
++}
++
++export function clearMaoyiTranslationRefreshRequests(): void {
++  for (const timer of refreshTimers.values()) clearTimeout(timer);
++  refreshTimers.clear();
++  if (!refreshRequests.size && !refreshErrors.size) return;
++  refreshRequests.clear();
++  refreshErrors.clear();
++  notifySubscribers();
++}
++
+ export function clearMaoyiTranslationRuntime(): void {
+-  if (translations.size === 0 && refreshRequests.size === 0) {
++  if (translations.size === 0 && refreshRequests.size === 0 && refreshErrors.size === 0) {
+     return;
+   }
+   translations.clear();
+-  refreshRequests.clear();
++  clearMaoyiTranslationRefreshRequests();
+   estimatedBytes = 0;
+   notifySubscribers();
+ }

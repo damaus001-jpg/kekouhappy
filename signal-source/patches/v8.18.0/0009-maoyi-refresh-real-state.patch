@@ -1,0 +1,580 @@
+diff --git a/app/maoyi/controlProtocol.node.ts b/app/maoyi/controlProtocol.node.ts
+index c41b24f..9ef7f7f 100644
+--- a/app/maoyi/controlProtocol.node.ts
++++ b/app/maoyi/controlProtocol.node.ts
+@@ -79,6 +79,13 @@ export type MaoyiControlCommand =
+       conversationId: string;
+       results: ReadonlyArray<MaoyiTranslationCacheResult>;
+     }>
++  | Readonly<{
++      type: 'translation.refresh.status';
++      requestId: string;
++      conversationId: string;
++      messageId: string;
++      state: 'processing' | 'idle';
++    }>
+   | Readonly<{
+       type: 'smartReply.result';
+       requestId: string;
+@@ -525,6 +532,30 @@ export function parseMaoyiControlCommand(
+           }
+         : undefined;
+     }
++    case 'translation.refresh.status':
++      if (
++        isMaoyiControlBusinessPayloadWithinLimit(value) &&
++        hasOnlyKeys(value, [
++          'type',
++          'requestId',
++          'conversationId',
++          'messageId',
++          'state',
++        ]) &&
++        isMaoyiControlUuid(value.requestId) &&
++        isMaoyiControlUuid(value.conversationId) &&
++        isMaoyiControlUuid(value.messageId) &&
++        (value.state === 'processing' || value.state === 'idle')
++      ) {
++        return {
++          type: 'translation.refresh.status',
++          requestId: value.requestId,
++          conversationId: value.conversationId,
++          messageId: value.messageId,
++          state: value.state,
++        };
++      }
++      return undefined;
+     case 'smartReply.result': {
+       if (
+         !isMaoyiControlBusinessPayloadWithinLimit(value) ||
+diff --git a/app/maoyi/messageBridge.main.ts b/app/maoyi/messageBridge.main.ts
+index bbdead2..ae00ea7 100644
+--- a/app/maoyi/messageBridge.main.ts
++++ b/app/maoyi/messageBridge.main.ts
+@@ -32,6 +32,7 @@ const messageBridgeKey = Symbol.for('maoyi.signal.message-bridge.v1');
+ 
+ export const maoyiRequestCorrelationLimit = 128;
+ export const maoyiRequestCorrelationTtlMs = 30_000;
++export const maoyiRefreshCorrelationTtlMs = 4 * 60_000;
+ 
+ type RequestState =
+   | 'snapshot-forwarded'
+@@ -240,6 +241,95 @@ export class MaoyiAddedMessageLedger {
+   }
+ }
+ 
++type TranslationRefreshRequest = Extract<
++  MaoyiControlEvent,
++  { type: 'translation.refresh.request' }
++>;
++type TranslationRefreshStatus = Extract<
++  MaoyiControlCommand,
++  { type: 'translation.refresh.status' }
++>;
++
++// oxlint-disable-next-line max-classes-per-file
++export class MaoyiTranslationRefreshLedger {
++  readonly #entries = new Map<
++    string,
++    Readonly<{
++      conversationId: string;
++      messageId: string;
++      state: 'accepted' | 'processing';
++      expiresAt: number;
++    }>
++  >();
++  readonly #now: () => number;
++  readonly #limit: number;
++  readonly #ttlMs: number;
++
++  constructor(
++    now: () => number = Date.now,
++    limit = maoyiRequestCorrelationLimit,
++    ttlMs = maoyiRefreshCorrelationTtlMs
++  ) {
++    this.#now = now;
++    this.#limit = limit;
++    this.#ttlMs = ttlMs;
++  }
++
++  #prune(): void {
++    const now = this.#now();
++    for (const [requestId, entry] of this.#entries) {
++      if (entry.expiresAt <= now) this.#entries.delete(requestId);
++    }
++  }
++
++  begin(request: TranslationRefreshRequest): boolean {
++    this.#prune();
++    if (this.#entries.has(request.requestId)) return false;
++    while (this.#entries.size >= this.#limit) {
++      const oldest = this.#entries.keys().next();
++      if (oldest.done) return false;
++      this.#entries.delete(oldest.value);
++    }
++    this.#entries.set(request.requestId, {
++      conversationId: request.conversationId,
++      messageId: request.messageId,
++      state: 'accepted',
++      expiresAt: this.#now() + this.#ttlMs,
++    });
++    return true;
++  }
++
++  acceptStatus(status: TranslationRefreshStatus): boolean {
++    this.#prune();
++    const entry = this.#entries.get(status.requestId);
++    if (
++      !entry ||
++      entry.conversationId !== status.conversationId ||
++      entry.messageId !== status.messageId
++    ) {
++      return false;
++    }
++    if (status.state === 'idle') {
++      this.#entries.delete(status.requestId);
++      return true;
++    }
++    this.#entries.set(status.requestId, {
++      ...entry,
++      state: 'processing',
++      expiresAt: this.#now() + this.#ttlMs,
++    });
++    return true;
++  }
++
++  remove(requestId: string): void {
++    this.#entries.delete(requestId);
++  }
++
++  clear(): void {
++    this.#entries.clear();
++  }
++}
++
+ type SmartReplyRequest = Extract<
+   MaoyiControlEvent,
+   { type: 'smartReply.request' }
+@@ -364,7 +454,7 @@ export function startMaoyiMessageBridge(
+ 
+   const requestLedger = new MaoyiRequestLedger();
+   const addedMessageLedger = new MaoyiAddedMessageLedger();
+-  const refreshRequestLedger = new MaoyiAddedMessageLedger();
++  const refreshRequestLedger = new MaoyiTranslationRefreshLedger();
+   const smartReplyRequestLedger = new MaoyiSmartReplyRequestLedger();
+   let mainWindow: BrowserWindow | undefined;
+   let currentConversationId: string | undefined;
+@@ -455,7 +545,7 @@ export function startMaoyiMessageBridge(
+       case 'translation.refresh.request': {
+         if (
+           currentConversationId !== parsed.conversationId ||
+-          !refreshRequestLedger.accept(parsed.requestId)
++          !refreshRequestLedger.begin(parsed)
+         ) {
+           return false;
+         }
+@@ -531,6 +621,21 @@ export function startMaoyiMessageBridge(
+       return;
+     }
+ 
++    if (command.type === 'translation.refresh.status') {
++      if (!canForward()) {
++        clearRendererRuntime();
++        return;
++      }
++      if (
++        currentConversationId !== command.conversationId ||
++        !refreshRequestLedger.acceptStatus(command)
++      ) {
++        return;
++      }
++      sendRendererCommand(command);
++      return;
++    }
++
+     if (
+       command.type === 'smartReply.result' ||
+       command.type === 'smartReply.error'
+diff --git a/ts/components/conversation/Message.dom.tsx b/ts/components/conversation/Message.dom.tsx
+index 374753d..76fa257 100644
+--- a/ts/components/conversation/Message.dom.tsx
++++ b/ts/components/conversation/Message.dom.tsx
+@@ -221,6 +221,7 @@ export type PropsData = {
+   customColor?: CustomColorType;
+   conversationId: string;
+   maoyiTranslationText?: string;
++  maoyiTranslationRefreshPending?: boolean;
+   maoyiSmartReplySuggestions?: ReadonlyArray<MaoyiSmartReplySuggestion>;
+   maoyiSmartReplyPending?: boolean;
+   displayLimit?: number;
+@@ -2577,7 +2578,11 @@ export class Message extends PureComponent<Props, State> {
+   }
+ 
+   public renderMaoyiTranslationRefresh(): JSX.Element | null {
+-    const { i18n, onMaoyiTranslationRefresh } = this.props;
++    const {
++      maoyiTranslationRefreshPending,
++      i18n,
++      onMaoyiTranslationRefresh,
++    } = this.props;
+     if (!onMaoyiTranslationRefresh) {
+       return null;
+     }
+@@ -2588,14 +2593,18 @@ export class Message extends PureComponent<Props, State> {
+         type="button"
+         className="module-message__maoyi-translation-refresh"
+         aria-label={label}
++        aria-busy={maoyiTranslationRefreshPending || undefined}
++        disabled={maoyiTranslationRefreshPending}
+         title={label}
+         onClick={event => {
+           event.preventDefault();
+           event.stopPropagation();
+-          onMaoyiTranslationRefresh();
++          if (!maoyiTranslationRefreshPending) {
++            onMaoyiTranslationRefresh();
++          }
+         }}
+       >
+-        ↻
++        {maoyiTranslationRefreshPending ? '...' : '↻'}
+       </button>
+     );
+   }
+diff --git a/ts/components/conversation/TimelineItem.dom.tsx b/ts/components/conversation/TimelineItem.dom.tsx
+index 4db14b9..dd1b0b2 100644
+--- a/ts/components/conversation/TimelineItem.dom.tsx
++++ b/ts/components/conversation/TimelineItem.dom.tsx
+@@ -210,6 +210,7 @@ type PropsLocalType = {
+   containerElementRef: RefObject<HTMLElement | null>;
+   conversationId: string;
+   maoyiTranslationText?: string;
++  maoyiTranslationRefreshPending?: boolean;
+   maoyiSmartReplySuggestions?: ReadonlyArray<MaoyiSmartReplySuggestion>;
+   maoyiSmartReplyPending?: boolean;
+   onMaoyiSmartReply?: () => void;
+@@ -274,6 +275,7 @@ export const TimelineItem = memo(function TimelineItem({
+   containerElementRef,
+   conversationId,
+   maoyiTranslationText,
++  maoyiTranslationRefreshPending,
+   maoyiSmartReplySuggestions,
+   maoyiSmartReplyPending,
+   onMaoyiSmartReply,
+@@ -331,6 +333,7 @@ export const TimelineItem = memo(function TimelineItem({
+         {...reducedProps}
+         {...item.data}
+         maoyiTranslationText={maoyiTranslationText}
++        maoyiTranslationRefreshPending={maoyiTranslationRefreshPending}
+         maoyiSmartReplySuggestions={maoyiSmartReplySuggestions}
+         maoyiSmartReplyPending={maoyiSmartReplyPending}
+         onMaoyiSmartReply={onMaoyiSmartReply}
+diff --git a/ts/maoyi/messageBridge.preload.ts b/ts/maoyi/messageBridge.preload.ts
+index 0a3f83f..22a0413 100644
+--- a/ts/maoyi/messageBridge.preload.ts
++++ b/ts/maoyi/messageBridge.preload.ts
+@@ -13,6 +13,7 @@ import {
+ } from './messageProjection.std.ts';
+ import {
+   applyMaoyiTranslationBatch,
++  applyMaoyiTranslationRefreshStatus,
+   clearMaoyiTranslationRuntime,
+ } from './translationRuntime.preload.ts';
+ import {
+@@ -290,6 +291,28 @@ function parseRendererCommand(
+       requestId: value.requestId,
+     };
+   }
++  if (
++    value.type === 'translation.refresh.status' &&
++    hasOnlyKeys(value, [
++      'type',
++      'requestId',
++      'conversationId',
++      'messageId',
++      'state',
++    ]) &&
++    isUuid(value.requestId) &&
++    isUuid(value.conversationId) &&
++    isUuid(value.messageId) &&
++    (value.state === 'processing' || value.state === 'idle')
++  ) {
++    return {
++      type: 'translation.refresh.status',
++      requestId: value.requestId,
++      conversationId: value.conversationId,
++      messageId: value.messageId,
++      state: value.state,
++    };
++  }
+   if (
+     value.type === 'smartReply.result' &&
+     hasOnlyKeys(value, [
+@@ -623,6 +646,10 @@ export function createMaoyiRendererMessageBridge(
+       clearSmartReplyState();
+       return;
+     }
++    if (command.type === 'translation.refresh.status') {
++      applyMaoyiTranslationRefreshStatus(command);
++      return;
++    }
+     if (
+       command.type === 'smartReply.result' ||
+       command.type === 'smartReply.error'
+diff --git a/ts/maoyi/messageBridgeChannels.std.ts b/ts/maoyi/messageBridgeChannels.std.ts
+index b993327..6a8401a 100644
+--- a/ts/maoyi/messageBridgeChannels.std.ts
++++ b/ts/maoyi/messageBridgeChannels.std.ts
+@@ -20,6 +20,13 @@ export type MaoyiRendererCommand =
+       conversationId: string;
+       results: ReadonlyArray<MaoyiTranslationResult>;
+     }>
++  | Readonly<{
++      type: 'translation.refresh.status';
++      requestId: string;
++      conversationId: string;
++      messageId: string;
++      state: 'processing' | 'idle';
++    }>
+   | Readonly<{
+       type: 'smartReply.result';
+       requestId: string;
+diff --git a/ts/maoyi/translationRuntime.preload.ts b/ts/maoyi/translationRuntime.preload.ts
+index 18e3c58..6bddaa7 100644
+--- a/ts/maoyi/translationRuntime.preload.ts
++++ b/ts/maoyi/translationRuntime.preload.ts
+@@ -30,6 +30,7 @@ type TranslationRuntimeStats = Readonly<{
+ }>;
+ 
+ const translations = new Map<string, StoredMaoyiTranslation>();
++const refreshRequests = new Map<string, string>();
+ const subscribers = new Set<() => void>();
+ let estimatedBytes = 0;
+ 
+@@ -37,6 +38,28 @@ function translationKey(conversationId: string, messageId: string): string {
+   return JSON.stringify([conversationId, messageId]);
+ }
+ 
++export type MaoyiTranslationRefreshStatus = Readonly<{
++  requestId: string;
++  conversationId: string;
++  messageId: string;
++  state: 'processing' | 'idle';
++}>;
++
++export function applyMaoyiTranslationRefreshStatus(
++  status: MaoyiTranslationRefreshStatus
++): void {
++  const key = translationKey(status.conversationId, status.messageId);
++  if (status.state === 'processing') {
++    if (refreshRequests.get(key) === status.requestId) return;
++    refreshRequests.set(key, status.requestId);
++    notifySubscribers();
++    return;
++  }
++  if (refreshRequests.get(key) !== status.requestId) return;
++  refreshRequests.delete(key);
++  notifySubscribers();
++}
++
+ function estimateTranslationBytes(result: MaoyiTranslationResult): number {
+   return (
+     128 +
+@@ -222,11 +245,37 @@ export function useMaoyiTranslation(
+   return translatedText;
+ }
+ 
++export function useMaoyiTranslationRefreshPending(
++  projection: MaoyiMessageProjection | undefined
++): boolean {
++  const getSnapshot = useCallback(
++    () => getMaoyiTranslationRefreshPending(projection),
++    [projection]
++  );
++  return useSyncExternalStore(
++    subscribeToMaoyiTranslations,
++    getSnapshot,
++    getSnapshot
++  );
++}
++
++export function getMaoyiTranslationRefreshPending(
++  projection: MaoyiMessageProjection | undefined
++): boolean {
++  return Boolean(
++    projection &&
++    refreshRequests.has(
++      translationKey(projection.conversationId, projection.messageId)
++    )
++  );
++}
++
+ export function clearMaoyiTranslationRuntime(): void {
+-  if (translations.size === 0) {
++  if (translations.size === 0 && refreshRequests.size === 0) {
+     return;
+   }
+   translations.clear();
++  refreshRequests.clear();
+   estimatedBytes = 0;
+   notifySubscribers();
+ }
+diff --git a/ts/state/smart/TimelineItem.preload.tsx b/ts/state/smart/TimelineItem.preload.tsx
+index e1faea8..1563d9d 100644
+--- a/ts/state/smart/TimelineItem.preload.tsx
++++ b/ts/state/smart/TimelineItem.preload.tsx
+@@ -53,7 +53,10 @@ import {
+   requestMaoyiSmartReply,
+   requestMaoyiTranslationRefresh,
+ } from '../../maoyi/messageBridge.preload.ts';
+-import { useMaoyiTranslation } from '../../maoyi/translationRuntime.preload.ts';
++import {
++  useMaoyiTranslation,
++  useMaoyiTranslationRefreshPending,
++} from '../../maoyi/translationRuntime.preload.ts';
+ import {
+   useMaoyiSmartReplies,
+   useMaoyiSmartReplyPending,
+@@ -125,6 +128,8 @@ export const SmartTimelineItem = memo(function SmartTimelineItem(
+   const maoyiTranslationText = useMaoyiTranslation(
+     maoyiMessageProjection
+   );
++  const maoyiTranslationRefreshPending =
++    useMaoyiTranslationRefreshPending(maoyiMessageProjection);
+   const onMaoyiTranslationRefresh = useCallback(() => {
+     if (maoyiMessageProjection) {
+       void requestMaoyiTranslationRefresh(maoyiMessageProjection);
+@@ -297,6 +302,7 @@ export const SmartTimelineItem = memo(function SmartTimelineItem(
+       item={processedTimelineItem}
+       id={messageId}
+       maoyiTranslationText={maoyiTranslationText}
++      maoyiTranslationRefreshPending={maoyiTranslationRefreshPending}
+       onMaoyiTranslationRefresh={
+         maoyiMessageProjection ? onMaoyiTranslationRefresh : undefined
+       }
+diff --git b/ts/test-node/maoyi/refreshState_test.node.ts b/ts/test-node/maoyi/refreshState_test.node.ts
+new file mode 100644
+index 0000000..c3fda38
+--- /dev/null
++++ b/ts/test-node/maoyi/refreshState_test.node.ts
+@@ -0,0 +1,120 @@
++// Copyright 2026 Signal Messenger, LLC
++// SPDX-License-Identifier: AGPL-3.0-only
++
++import assert from 'node:assert/strict';
++
++import { parseMaoyiControlCommand } from '../../../app/maoyi/controlProtocol.node.ts';
++import { MaoyiTranslationRefreshLedger } from '../../../app/maoyi/messageBridge.main.ts';
++import {
++  applyMaoyiTranslationRefreshStatus,
++  clearMaoyiTranslationRuntime,
++  getMaoyiTranslationRefreshPending,
++} from '../../maoyi/translationRuntime.preload.ts';
++import { legacyMaoyiSourceHash } from '../../maoyi/messageProjection.std.ts';
++
++describe('Maoyi real translation refresh state', () => {
++  const requestId = '11111111-1111-4111-8111-111111111111';
++  const nextRequestId = '55555555-5555-4555-8555-555555555555';
++  const conversationId = '22222222-2222-4222-8222-222222222222';
++  const messageId = '33333333-3333-4333-8333-333333333333';
++  const projection = {
++    conversationId,
++    messageId,
++    sourceHash: legacyMaoyiSourceHash('hello'),
++    sourceText: 'hello',
++    direction: 'incoming' as const,
++    timestamp: 1_800_000_000_000,
++  };
++
++  afterEach(() => {
++    clearMaoyiTranslationRuntime();
++  });
++
++  it('parses only the strict authenticated status shape', () => {
++    const status = {
++      type: 'translation.refresh.status',
++      requestId,
++      conversationId,
++      messageId,
++      state: 'processing',
++    } as const;
++    assert.deepEqual(parseMaoyiControlCommand(status), status);
++    assert.equal(
++      parseMaoyiControlCommand({ ...status, sourceText: 'must not cross' }),
++      undefined
++    );
++    assert.equal(
++      parseMaoyiControlCommand({ ...status, state: 'queued' }),
++      undefined
++    );
++  });
++
++  it('correlates status with the exact renderer refresh request', () => {
++    const ledger = new MaoyiTranslationRefreshLedger();
++    const request = {
++      type: 'translation.refresh.request',
++      requestId,
++      ...projection,
++    } as const;
++    assert.equal(ledger.begin(request), true);
++    assert.equal(
++      ledger.acceptStatus({
++        type: 'translation.refresh.status',
++        requestId,
++        conversationId,
++        messageId,
++        state: 'processing',
++      }),
++      true
++    );
++    assert.equal(
++      ledger.acceptStatus({
++        type: 'translation.refresh.status',
++        requestId,
++        conversationId,
++        messageId: nextRequestId,
++        state: 'idle',
++      }),
++      false
++    );
++    assert.equal(
++      ledger.acceptStatus({
++        type: 'translation.refresh.status',
++        requestId,
++        conversationId,
++        messageId,
++        state: 'idle',
++      }),
++      true
++    );
++  });
++
++  it('does not let an older completion clear a newer request', () => {
++    applyMaoyiTranslationRefreshStatus({
++      requestId,
++      conversationId,
++      messageId,
++      state: 'processing',
++    });
++    applyMaoyiTranslationRefreshStatus({
++      requestId: nextRequestId,
++      conversationId,
++      messageId,
++      state: 'processing',
++    });
++    applyMaoyiTranslationRefreshStatus({
++      requestId,
++      conversationId,
++      messageId,
++      state: 'idle',
++    });
++    assert.equal(getMaoyiTranslationRefreshPending(projection), true);
++    applyMaoyiTranslationRefreshStatus({
++      requestId: nextRequestId,
++      conversationId,
++      messageId,
++      state: 'idle',
++    });
++    assert.equal(getMaoyiTranslationRefreshPending(projection), false);
++  });
++});
