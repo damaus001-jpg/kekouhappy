@@ -3,7 +3,7 @@
 Copy the complete block below to Codex or another coding AI on the new computer:
 
 ```text
-You are working in a fresh clone of the public repository baishihappy-ux/baishihappy-2. Your objective is to verify or generate a completely new maoyi suite. Do not recover or reuse any existing suite.
+You are working in a fresh ZIP recovery folder from the public repository damaus001-jpg/kekouhappy. Your objective is to verify or generate a completely new maoyi suite. Do not recover or reuse any existing suite.
 
 Fixed boundaries:
 - Keep application ID com.maoyi.translator and keep the product and data-directory identity as maoyi.
@@ -14,7 +14,7 @@ Fixed boundaries:
 - Do not read or commit customer data, machine codes, login state, cookies, chat data, Signal instances, translation caches, logs, installers, or delivery directories.
 - Keep .package-secrets, .package-staging, .runtime, release, and adjacent taozhuang output untracked.
 - Use .toolchains, .pnpm-store-complete, and .tmp only as local recovery inputs and keep them untracked.
-- The sole official recovery source is opening https://github.com/baishihappy-ux/baishihappy-2 and choosing Code → Download ZIP; do not offer users any other project-acquisition route.
+- The sole official recovery source is opening https://github.com/damaus001-jpg/kekouhappy and choosing Code → Download ZIP; do not offer users any other project-acquisition route.
 - Do not rewrite Git history and do not force-push.
 
 For verification only:

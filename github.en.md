@@ -233,7 +233,7 @@ These are different operations. Status reports must state separately which ones 
 ## Current Target Repository
 
 ```text
-https://github.com/baishihappy-ux/baishihappy-2.git
+https://github.com/damaus001-jpg/kekouhappy.git
 ```
 
 ## Fixed Operating Rule

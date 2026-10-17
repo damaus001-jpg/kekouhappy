@@ -3,7 +3,7 @@
 把下面代码块完整复制给在新电脑上工作的 Codex 或其他编程 AI：
 
 ```text
-你正在公开仓库 baishihappy-ux/baishihappy-2 的全新克隆中工作。目标是验证或生成一个全新的 maoyi 套装，不恢复、不复用任何既有套装。
+你正在公开仓库 damaus001-jpg/kekouhappy 的全新 ZIP 恢复目录中工作。目标是验证或生成一个全新的 maoyi 套装，不恢复、不复用任何既有套装。
 
 固定边界：
 - 应用身份必须保持 com.maoyi.translator，产品名和数据目录必须保持 maoyi。
@@ -14,7 +14,7 @@
 - 不读取或提交客户数据、机器码、登录状态、Cookie、聊天数据、Signal 实例、翻译缓存、日志、安装包或交付目录。
 - .package-secrets、.package-staging、.runtime、release 和相邻 taozhuang 输出必须保持未跟踪。
 - .toolchains、.pnpm-store-complete 和 .tmp 只允许作为本机恢复输入，必须保持未跟踪。
-- 唯一官方恢复来源是打开 https://github.com/baishihappy-ux/baishihappy-2 后选择 Code → Download ZIP；不得向用户提供其他项目获取方式。
+- 唯一官方恢复来源是打开 https://github.com/damaus001-jpg/kekouhappy 后选择 Code → Download ZIP；不得向用户提供其他项目获取方式。
 - 不改写 Git 历史，不强推。
 
 只做验证时：

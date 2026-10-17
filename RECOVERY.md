@@ -36,9 +36,9 @@ The GitHub repository is public. Generated customer delivery archives must not b
 
 ## Fresh-clone checks / 全新克隆检查
 
-On 64-bit Windows, open <https://github.com/baishihappy-ux/baishihappy-2>, choose `Code` → `Download ZIP`, extract into a new empty folder, and double-click `恢复生产环境.cmd`. This is the sole official recovery route. It verifies or installs system prerequisites, downloads a hash-pinned portable Node.js toolchain, hydrates ignored dependency caches, rebuilds and synchronizes the modified Signal runtime, and runs the required automated and real-window checks.
+On a fresh 64-bit Windows computer, open <https://github.com/damaus001-jpg/kekouhappy>, choose `Code` → `Download ZIP`, extract it, and double-click `恢复生产环境.cmd`. This is the sole official recovery route. It installs missing system prerequisites, downloads the hash-pinned portable Node.js toolchain, installs project dependencies, rebuilds and synchronizes the modified Signal runtime, runs automated and real-window checks, and then launches the development app and its visible command window.
 
-在 64 位 Windows 上，打开 <https://github.com/baishihappy-ux/baishihappy-2>，点击 `Code` → `Download ZIP`，解压到新的空文件夹，再双击 `恢复生产环境.cmd`。这是唯一官方恢复方式。它会检查或安装系统工具，下载经过哈希固定的便携 Node.js 工具链，联网建立被 Git 忽略的依赖缓存，重新构建并同步改造版 Signal，然后执行规定的自动检查和真实窗口验收。
+在全新的 64 位 Windows 电脑上，打开 <https://github.com/damaus001-jpg/kekouhappy>，点击 `Code` → `Download ZIP`，解压后双击 `恢复生产环境.cmd`。这是唯一官方恢复方式。它会安装缺少的系统工具，下载经过哈希固定的便携 Node.js，安装项目依赖，重新构建并同步改造版 Signal，执行自动检查和真实窗口验收，最后自动启动开发程序并打开命令窗口。
 
 Equivalent command / 等效命令：
 

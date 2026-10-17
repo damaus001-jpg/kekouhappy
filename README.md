@@ -4,7 +4,7 @@
 
 ## 恢复项目
 
-新电脑使用 GitHub 仓库页面的 `Code` → `Download ZIP` 下载源码，解压后运行根目录中的 `恢复生产环境.cmd`。详细步骤见 [RECOVERY.md](RECOVERY.md)。
+新电脑使用 GitHub 仓库页面的 `Code` → `Download ZIP` 下载源码，解压后双击根目录中的 `恢复生产环境.cmd`。它会自动准备开发工具和依赖、构建项目并启动开发环境。详细步骤见 [RECOVERY.md](RECOVERY.md)。
 
 ## 本地运行
 

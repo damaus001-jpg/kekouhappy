@@ -39,6 +39,11 @@ function includes(source, marker, label) {
 
 includes(launcher, 'tools\\restore-production-environment.ps1', 'double-click PowerShell entry');
 includes(launcher, '-InstallMissingSystemTools', 'explicit system-tool installation permission');
+includes(launcher, '-StartDevelopment', 'automatic development launch after recovery');
+includes(script, '[switch]$StartDevelopment', 'optional automatic development launch');
+includes(script, 'function Start-DevelopmentEnvironment', 'development environment launcher');
+includes(script, 'http://127.0.0.1:5173/', 'development server readiness check');
+includes(script, 'RegisterByFamilyName -MainPackage Microsoft.DesktopAppInstaller_8wekyb3d8bbwe', 'first-login winget registration');
 includes(script, "$NodeVersion = '24.15.0'", 'fixed Node version');
 includes(
   script,
@@ -76,10 +81,11 @@ includes(script, "installerGenerated = $false", 'no installer generation report'
 includes(script, "'github-download-zip'", 'GitHub ZIP source report mode');
 includes(
   script,
-  "sourceRepository = 'https://github.com/baishihappy-ux/baishihappy-2'",
+  "sourceRepository = 'https://github.com/damaus001-jpg/kekouhappy'",
   'fixed public source repository'
 );
-includes(script, '生产环境恢复完成，现在可以生成新套装。', 'plain-language success message');
+includes(script, 'developmentStarted = $false', 'development start report field');
+includes(script, '项目开发环境恢复并启动完成。', 'plain-language success message');
 includes(ignore, '.toolchains/', 'local downloaded toolchain exclusion');
 includes(publicReproduction, 'collectPublicSourceFiles(projectRoot)', 'Git-independent public source scan');
 includes(publicReproduction, "'.git'", 'explicit Git metadata exclusion');

@@ -18,7 +18,7 @@
 
 只使用这一种官方恢复方式：
 
-1. 打开 <https://github.com/baishihappy-ux/baishihappy-2>。
+1. 打开 <https://github.com/damaus001-jpg/kekouhappy>。
 2. 点击 `Code`，再点击 `Download ZIP`。
 3. 把下载的 ZIP 解压到一个新的空文件夹；不得覆盖或混入以前下载的项目文件。
 4. 双击解压目录根部的：

@@ -233,7 +233,7 @@ git log -1 --oneline
 ## 当前目标仓库
 
 ```text
-https://github.com/baishihappy-ux/baishihappy-2.git
+https://github.com/damaus001-jpg/kekouhappy.git
 ```
 
 ## 固定执行口径

