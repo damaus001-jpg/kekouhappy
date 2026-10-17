@@ -2,6 +2,7 @@
   "name": "maoyi",
   "productName": "皮卡丘翻译器",
   "version": "1.6.10",
+  "shortVersionWindows": "1.6.10.8",
   "private": true,
   "description": "皮卡丘翻译器多账号聊天翻译工作台。",
   "main": "dist-electron/main.js",
@@ -9,7 +10,13 @@
   "scripts": {
     "dev:assistant": "npm run build && node tools/start-assistant-development.cjs",
     "test:assistant-library": "node tools/test-assistant-library.mjs",
+    "test:gpt-handoff": "node tools/test-gpt-handoff.mjs",
+    "test:gpt-handoff-runtime": "node tools/test-gpt-handoff-runtime.cjs",
+    "test:custom-assistant-runtime": "node tools/test-custom-assistant-runtime.cjs",
+    "test:custom-assistant-copy": "node tools/test-custom-assistant-copy.mjs",
     "test:assistant-material": "node tools/run-assistant-material-runtime.cjs",
+    "test:opensms": "node tools/test-opensms-runtime.cjs",
+    "test:opensms-login": "node tools/test-opensms-login.cjs",
     "test:conversation-export": "node tools/test-conversation-export.mjs",
     "dev:diagnostics": "npm run build && node tools/start-translation-diagnostics.cjs",
     "predev": "npm run test:signal-source-artifact:v8.18 && node tools/sync-signal-source-runtime.cjs",
@@ -29,6 +36,10 @@
     "test:web-bubble-refresh-layout": "node tools/test-web-bubble-refresh-layout.mjs",
     "test:profile-tab-order": "node tools/test-profile-tab-order.mjs",
     "test:taskbar-unread": "node tools/test-taskbar-unread.mjs",
+    "test:telegram-unread": "node tools/test-telegram-unread-runtime.cjs",
+    "test:unread-refresh": "node tools/test-unread-refresh.cjs",
+    "test:signal-emoji-picker": "node tools/test-signal-emoji-picker-runtime.cjs",
+    "test:signal-send-target": "node tools/test-signal-send-target-runtime.cjs",
     "test:windows-app-identity": "node tools/test-windows-app-identity.mjs",
     "test:signal-notification-routing": "npm run build && node tools/test-signal-notification-routing.mjs",
     "test:whatsapp-long-message": "node tools/test-whatsapp-long-message.mjs",
@@ -107,7 +118,7 @@
     "suite:package": "node tools/package-license-suite.cjs",
     "prepare:client-suite": "node tools/prepare-client-license-suite.cjs",
     "security:check": "node tools/security-gate.cjs",
-    "package:win": "npm run prepare:package-output && node tools/prepare-client-license-suite.cjs && npm run prepare:signal-runtime && npm run build:prompt-bundles && npm run prepare:package-signal-runtime && npm run security:check && electron-builder --win nsis && node tools/verify-packaged-output.cjs --client=release"
+    "package:win": "npm run prepare:package-output && node tools/prepare-client-license-suite.cjs && npm run prepare:signal-runtime && npm run build && node tools/build-client-prompt-bundles.cjs && npm run prepare:package-signal-runtime && npm run security:check && electron-builder --win nsis && node tools/verify-packaged-output.cjs --client=release"
   },
   "devDependencies": {
     "@electron/asar": "^4.2.0",
@@ -124,6 +135,7 @@
     "wait-on": "^8.0.3"
   },
   "build": {
+    "buildVersion": "1.6.10.8",
     "appId": "com.maoyi.translator",
     "productName": "皮卡丘翻译器",
     "executableName": "maoyi",
@@ -151,6 +163,8 @@
       "dist-electron/translation-prompt-bundle.js",
       "dist-electron/prompt-bundle-signing.js",
       "dist-electron/smart-reply-core.js",
+      "dist-electron/gpt-handoff.js",
+      "dist-electron/opensms-login.js",
       "dist-electron/smart-reply-prompt-bundle.js",
       "dist-electron/translation-english-style.js",
       "dist-electron/signal-notification-routing.js",
@@ -201,7 +215,7 @@
     "win": {
       "target": "nsis",
       "icon": "src/assets/pikachu-translator.ico",
-      "artifactName": "pikaqiufanyiqi-${version}-Setup.${ext}"
+      "artifactName": "pikaqiufanyiqi-${buildVersion}-Setup.${ext}"
     },
     "nsis": {
       "oneClick": false,

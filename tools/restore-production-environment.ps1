@@ -359,7 +359,7 @@ function Ensure-PnpmShim {
   $shimPath = Join-Path $shimDirectory 'pnpm.cmd'
   Assert-ProjectChildPath -Path $shimPath -Label 'pnpm 命令转发文件' | Out-Null
   New-Item -ItemType Directory -Path $shimDirectory -Force | Out-Null
-  $content = "@echo off`r`n`"%~dp0..\node-v$NodeVersion-win-x64\corepack.cmd`" pnpm %*`r`n"
+  $content = "@echo off`r`nsetlocal`r`nset `"COREPACK_HOME=%~dp0..\corepack`"`r`nset `"COREPACK_DEFAULT_TO_LATEST=0`"`r`n`"%~dp0..\node-v$NodeVersion-win-x64\corepack.cmd`" pnpm@$PnpmVersion %*`r`n"
   [IO.File]::WriteAllText($shimPath, $content, [Text.Encoding]::ASCII)
   $env:Path = "$shimDirectory;$env:Path"
   Add-CompletedStep -Name '准备固定 pnpm 命令入口' -Detail "$shimPath -> pnpm $PnpmVersion"

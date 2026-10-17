@@ -26,14 +26,15 @@ assert.match(runtime, /data-testid="message-in"/);
 assert.match(runtime, /data-testid="message-out"/);
 assert.doesNotMatch(runtime, /innerWidth\s*\/\s*2/);
 assert.match(runtime, /isNearConversationEnd\(latest\.bubble\)/);
-assert.match(runtime, /filter\(\(row\) => row\.direction === 'incoming'\)\.slice\(-3\)/);
+assert.match(runtime, /eligibleRows = rows\.filter\(\(row\) => row\.direction === 'incoming'\)\.slice\(-3\)/);
 assert.match(runtime, /eligibleMessageKeys/);
 assert.match(runtime, /rows\.slice\(0, anchorIndex \+ 1\)/);
 assert.match(runtime, /liveRows\.slice\(0, liveAnchorIndex \+ 1\)/);
 assert.match(runtime, /state: 'eligible'/);
 assert.match(runtime, /state: 'unavailable'/);
 assert.match(runtime, /smartConversationSignature.*split\('::'\)\[0\]/);
-assert.match(runtime, /\.slice\(-8\)/);
+assert.match(runtime, /\.slice\(-18\)/);
+assert.match(runtime, /dayKey === currentDayKey/);
 assert.match(runtime, /liveContext\.at\(-1\)\?\.speaker !== 'other'/);
 assert.match(runtime, /action: 'smart-reply-request'/);
 assert.match(runtime, /action: 'smart-reply-select'/);
@@ -49,7 +50,8 @@ assert.doesNotMatch(loadingBranch, /removePanel\(\)/);
 const successBranch = runtime.slice(runtime.indexOf("if (payload.state === 'error')"), runtime.indexOf("const panel = document.createElement('div')"));
 assert.match(successBranch, /removePanel\(\)/);
 
-assert.match(app, /window\.chatTranslator\.generateSmartReplies/);
+assert.match(app, /window\.chatTranslator\.copyChatToGpt/);
+assert.doesNotMatch(app, /window\.chatTranslator\.generateSmartReplies/);
 assert.match(app, /messages\.at\(-1\)\?\.speaker !== 'other'/);
 assert.match(app, /result\.replies\.find\(\(item\) => item\.id === id && item\.english === english\)/);
 assert.match(app, /writeNativeComposer\(profileId, approved\.english, \{ instant: true \}\)/);
@@ -58,7 +60,7 @@ assert.doesNotMatch(selectionBranch, /sendNativeComposer|queueSend|dispatchEvent
 assert.doesNotMatch(selectionBranch, /10\s*\*\s*60_000/);
 const requestBranch = app.slice(app.indexOf("if (action === 'smart-reply-request')"), app.indexOf("if (action === 'smart-reply-select')"));
 assert.match(requestBranch, /smartReplyInFlightProfiles\.set\(stateKey/);
-assert.match(requestBranch, /eligibleMessageKeys\.includes\(latestMessageKey\)/);
+assert.match(requestBranch, /copied\.messageCount/);
 assert.doesNotMatch(requestBranch.slice(0, requestBranch.indexOf('try {')), /smartReplyResults\.delete\(profileId\)/);
 assert.doesNotMatch(requestBranch, /if \(!applied\) smartReplyResults\.delete/);
 assert.doesNotMatch(requestBranch, /activeProfileId\.value !== profileId \|\| \(effectiveSignature/);
@@ -81,4 +83,4 @@ const transientUnavailableBranch = runtime.slice(
 );
 assert.doesNotMatch(transientUnavailableBranch, /removeAll\(\)/);
 
-console.log('smart-reply-ui: WhatsApp/Telegram latest-three-incoming anchors, per-anchor 8-message context, persistent replay, repeat generation, and fill-only selection contracts passed');
+console.log('smart-reply-ui: last-three incoming anchors, clicked-bubble up-to-18-today context, GPT handoff and legacy selection safety contracts passed');

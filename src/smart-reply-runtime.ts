@@ -32,6 +32,47 @@ export function buildSmartReplyUiInstallScript(app: WorkspaceApp) {
   const smartConversationSignature = () => normalize(window.__dfConversationSignature || '').split('::')[0].slice(0, 360);
   const hasEnglish = (value) => /[A-Za-z]{2,}/.test(value || '');
   const hasChinese = (value) => /[\\u4e00-\\u9fff]/.test(value || '');
+  const currentDayKey = (() => {
+    const now = new Date();
+    return [now.getFullYear(), String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0')].join('-');
+  })();
+  const dateKey = (value) => {
+    const text = normalize(value);
+    if (!text) return '';
+    const iso = text.match(/(?:^|\\D)(\\d{4})[-/.年](\\d{1,2})[-/.月](\\d{1,2})(?:日|\\b|(?=T|\\s|$))/);
+    if (iso) {
+      const year = Number(iso[1]), month = Number(iso[2]), day = Number(iso[3]);
+      const date = new Date(year, month - 1, day);
+      if (date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day) {
+        return [year, String(month).padStart(2, '0'), String(day).padStart(2, '0')].join('-');
+      }
+    }
+    const us = text.match(/(?:^|\\D)(\\d{1,2})[/.](\\d{1,2})[/.](\\d{2,4})(?:\\D|$)/);
+    if (us) {
+      const year = Number(us[3]) < 100 ? 2000 + Number(us[3]) : Number(us[3]);
+      const month = Number(us[1]), day = Number(us[2]);
+      const date = new Date(year, month - 1, day);
+      if (date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day) {
+        return [year, String(month).padStart(2, '0'), String(day).padStart(2, '0')].join('-');
+      }
+    }
+    const parsed = new Date(text);
+    if (Number.isNaN(parsed.getTime())) return '';
+    return [parsed.getFullYear(), String(parsed.getMonth() + 1).padStart(2, '0'), String(parsed.getDate()).padStart(2, '0')].join('-');
+  };
+  const bubbleDayKey = (bubble) => {
+    const prePlain = bubble.querySelector?.('[data-pre-plain-text]')?.getAttribute?.('data-pre-plain-text') || '';
+    const bracketDate = prePlain.match(/\\[([^\\]]+)\\]/)?.[1] || '';
+    const candidates = [bracketDate];
+    for (const node of Array.from(bubble.querySelectorAll?.('time[datetime], [data-timestamp], [datetime], .time[title], [class*="time"][title]') || [])) {
+      candidates.push(node.getAttribute?.('datetime') || node.getAttribute?.('data-timestamp') || node.getAttribute?.('title') || '');
+    }
+    for (const candidate of candidates) {
+      const day = dateKey(candidate);
+      if (day) return day;
+    }
+    return '';
+  };
   const isRendered = (element) => {
     const style = window.getComputedStyle(element);
     const rect = element.getBoundingClientRect();
@@ -214,9 +255,10 @@ export function buildSmartReplyUiInstallScript(app: WorkspaceApp) {
       bubble,
       text,
       direction: exactDirection(bubble),
-      key: bubbleKey(bubble, text)
+      key: bubbleKey(bubble, text),
+      dayKey: bubbleDayKey(bubble)
     };
-  });
+  }).filter((row) => row.dayKey === currentDayKey);
   const removeAll = () => {
     for (const node of Array.from(document.querySelectorAll(uiSelector))) node.remove();
   };
@@ -228,7 +270,7 @@ export function buildSmartReplyUiInstallScript(app: WorkspaceApp) {
   const eligibleRows = rows.filter((row) => row.direction === 'incoming').slice(-3);
   const eligibleMessageKeys = eligibleRows.map((row) => row.key);
   const eligibleKeySet = new Set(eligibleMessageKeys);
-  if (!eligibleRows.length) {
+  if (!latest || !isNearConversationEnd(latest.bubble) || !eligibleRows.length) {
     return { state: 'unavailable', eligibleMessageKeys: [], conversationSignature };
   }
   for (const host of Array.from(document.querySelectorAll('.df-smart-reply-host'))) {
@@ -242,21 +284,21 @@ export function buildSmartReplyUiInstallScript(app: WorkspaceApp) {
     const contextRows = rows.slice(0, anchorIndex + 1).filter((row) =>
       (row.direction === 'incoming' || row.direction === 'outgoing') &&
       row.text && row.text.length <= 4000 && hasEnglish(row.text) && !hasChinese(row.text)
-    ).slice(-8);
+    ).slice(-18);
     const context = contextRows.map((row, index) => ({
       seq: index + 1,
       speaker: row.direction === 'incoming' ? 'other' : 'self',
       text: row.text
     }));
     let totalLength = context.reduce((sum, item) => sum + item.text.length, 0);
-    while (context.length > 1 && totalLength > 8000) {
+    while (context.length > 1 && totalLength > 72_000) {
       const removed = context.shift();
       totalLength -= removed?.text.length || 0;
     }
     context.forEach((item, index) => { item.seq = index + 1; });
     const contextReady = Boolean(
       anchor.text && anchor.text.length <= 4000 && hasEnglish(anchor.text) && !hasChinese(anchor.text) &&
-      context.length && context.at(-1)?.speaker === 'other' && context.at(-1)?.text === anchor.text && totalLength <= 8000
+      context.length && context.at(-1)?.speaker === 'other' && context.at(-1)?.text === anchor.text && totalLength <= 72_000
     );
     let host = anchor.bubble.querySelector('.df-smart-reply-host');
     if (!host) {
@@ -274,7 +316,7 @@ export function buildSmartReplyUiInstallScript(app: WorkspaceApp) {
       button = document.createElement('button');
       button.type = 'button';
       button.className = 'df-smart-reply-button';
-      button.textContent = '智能回复';
+      button.textContent = '去GPT';
       const compactTelegramButton = platform === 'telegram';
       button.style.cssText = [
         'appearance:none', 'border:1px solid currentColor', 'border-radius:999px', 'background:transparent',
@@ -287,11 +329,11 @@ export function buildSmartReplyUiInstallScript(app: WorkspaceApp) {
       host.appendChild(button);
     }
     if (!button.disabled) {
-      button.textContent = '智能回复';
+      button.textContent = '去GPT';
       button.style.opacity = '.82';
     }
     button.title = contextReady
-      ? '以这条对方气泡为终点，读取向上最多 8 条英文气泡'
+      ? '以此气泡为终点，向上读取当天最多 18 条英文气泡'
       : '这条对方消息没有可用的英文上下文';
     if (button.dataset.dfSmartReplyBound !== anchor.key) {
       button.dataset.dfSmartReplyBound = anchor.key;
@@ -302,30 +344,30 @@ export function buildSmartReplyUiInstallScript(app: WorkspaceApp) {
         if (button.disabled) return;
         const liveRows = uniqueBubbles.map((bubble) => {
           const liveText = extractText(bubble);
-          return { bubble, text: liveText, direction: exactDirection(bubble), key: bubbleKey(bubble, liveText) };
-        });
-        const liveEligible = liveRows.filter((row) => row.direction === 'incoming').slice(-3);
+          return { bubble, text: liveText, direction: exactDirection(bubble), key: bubbleKey(bubble, liveText), dayKey: bubbleDayKey(bubble) };
+        }).filter((row) => row.dayKey === currentDayKey);
         const liveAnchorIndex = liveRows.findIndex((row) => row.key === anchor.key);
         const liveAnchor = liveRows[liveAnchorIndex];
-        if (!liveAnchor || !liveEligible.some((row) => row.key === anchor.key)) return;
+        const liveEligible = liveRows.filter((row) => row.direction === 'incoming').slice(-3);
+        if (!liveAnchor || !liveEligible.some((row) => row.key === anchor.key) || liveAnchor.direction !== 'incoming') return;
         const liveContext = liveRows.slice(0, liveAnchorIndex + 1).filter((row) =>
           (row.direction === 'incoming' || row.direction === 'outgoing') &&
           row.text && row.text.length <= 4000 && hasEnglish(row.text) && !hasChinese(row.text)
-        ).slice(-8).map((row, index) => ({
+        ).slice(-18).map((row, index) => ({
           seq: index + 1,
           speaker: row.direction === 'incoming' ? 'other' : 'self',
           text: row.text
         }));
         let liveTotal = liveContext.reduce((sum, item) => sum + item.text.length, 0);
-        while (liveContext.length > 1 && liveTotal > 8000) {
+        while (liveContext.length > 1 && liveTotal > 72_000) {
           const removed = liveContext.shift();
           liveTotal -= removed?.text.length || 0;
         }
         liveContext.forEach((item, index) => { item.seq = index + 1; });
-        if (!liveContext.length || liveContext.at(-1)?.speaker !== 'other' || liveContext.at(-1)?.text !== liveAnchor.text || liveTotal > 8000) {
+        if (!liveContext.length || liveContext.at(-1)?.speaker !== 'other' || liveContext.at(-1)?.text !== liveAnchor.text || liveTotal > 72_000) {
           button.textContent = '暂无可用英文';
           window.setTimeout(() => {
-            if (button.isConnected && !button.disabled) button.textContent = '智能回复';
+            if (button.isConnected && !button.disabled) button.textContent = '去GPT';
           }, 1200);
           return;
         }
@@ -340,7 +382,7 @@ export function buildSmartReplyUiInstallScript(app: WorkspaceApp) {
           at: Date.now()
         });
         button.disabled = true;
-        button.textContent = '生成中…';
+        button.textContent = '复制中…';
         button.style.opacity = '.58';
       };
       if (platform === 'telegram') button.addEventListener('pointerdown', trigger, true);
@@ -380,28 +422,28 @@ export function buildSmartReplyUiStateScript(payload: SmartReplyUiStatePayload) 
     removePanel();
     window.__dfSmartReplyDismissed.add(dismissalKey(payload.latestMessageKey));
     button.disabled = false;
-    button.textContent = '智能回复';
+    button.textContent = '去GPT';
     button.style.opacity = '.82';
     return true;
   }
   if (payload.state === 'idle') {
     button.disabled = false;
-    button.textContent = '智能回复';
+    button.textContent = '去GPT';
     button.style.opacity = '.82';
     return true;
   }
   if (payload.state === 'loading') {
     button.disabled = true;
-    button.textContent = '生成中…';
+    button.textContent = '复制中…';
     button.style.opacity = '.58';
     return true;
   }
   button.disabled = false;
-  button.textContent = '智能回复';
+  button.textContent = '去GPT';
   button.style.opacity = '.82';
   if (payload.state === 'error') {
-    button.textContent = '重新生成';
-    button.title = payload.message || '智能回复暂时不可用';
+    button.textContent = '重新复制';
+    button.title = payload.message || '去GPT暂时不可用';
     return true;
   }
   const replies = Array.isArray(payload.replies) ? payload.replies : [];

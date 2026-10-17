@@ -6,7 +6,7 @@ const ts = require('typescript');
 const { createHash, randomBytes, randomUUID } = require('node:crypto');
 const mainSource = fs.readFileSync(path.join(__dirname, '../electron/main.ts'), 'utf8');
 const start = mainSource.indexOf('function deepSeekTransportDiagnostic(');
-const end = mainSource.indexOf('type SmartReplyGenerationOptions', start);
+const end = mainSource.indexOf('let gptHandoffBusy = false;', start);
 assert.ok(start >= 0 && end > start);
 const production = ts.transpileModule(mainSource.slice(start, end), {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None }
@@ -40,6 +40,22 @@ const request = { text: 'Hello there', to: 'Chinese', reason: 'visible-message',
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 async function main() {
+  let transportAttempts = 0;
+  const recovered = harness(async () => {
+    if (++transportAttempts < 3) {
+      throw new TypeError('fetch failed', { cause: { code: 'ECONNRESET' } });
+    }
+    return { ok: true, json: async () => ({ choices: [{ message: { content: '\u4f60\u597d' } }] }) };
+  });
+  assert.equal(await recovered.translate(request), '\u4f60\u597d');
+  assert.equal(recovered.calls, 3);
+  assert.equal(recovered.logs.filter(log => log.status === 'retry-transport').length, 2);
+  const unavailable = harness(async () => {
+    throw new TypeError('fetch failed', { cause: { code: 'ECONNRESET' } });
+  });
+  await assert.rejects(unavailable.translate(request), /fetch failed/);
+  assert.equal(unavailable.calls, 3, 'transport retries must stop after two retries');
+  console.log('VERIFIED: transient connection failures recover with at most two bounded retries.');
   for (const platform of ['signal', 'whatsapp']) {
     for (const status of [429, 500, 503]) {
       const h = harness(async () => ({ ok: false, status }));

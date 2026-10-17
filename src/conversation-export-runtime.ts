@@ -1,16 +1,28 @@
 import { readTelegramConversationIdFromDom } from '../electron/shared';
 import type { ConversationExportRow } from '../electron/conversation-export-types';
 export type ExportSnapshot = {contactId:string;contactTitle:string;rows:ConversationExportRow[];top:boolean;loading:boolean;earliestMarked:boolean;expandPending:boolean};
-type ExportCommand={action:'begin'|'snapshot'|'older'|'restore';platform:'whatsapp'|'telegram'|'signal';expectedId?:string};
+type ExportCommand={action:'begin'|'snapshot'|'older'|'restore';platform:'whatsapp'|'telegram'|'signal'|'opensms';expectedId?:string};
 function conversationExportRuntime(command:ExportCommand,readTelegram:()=>string){
   const w=window as any;
   const platform=command.platform;
   function fail(code:string,message:string):never {throw Object.assign(new Error(message),{exportCode:code});}
   const visible=(n:Element)=>!!n.getClientRects().length&&getComputedStyle(n).display!=='none'&&getComputedStyle(n).visibility!=='hidden';
-  const scope=platform==='whatsapp'?document.querySelector('#main'):platform==='telegram'?document.querySelector('#MiddleColumn,.chat.active,.middle-column'):document.querySelector('.module-conversation,.ConversationView')||document.querySelector('.CompositionArea')?.parentElement;
+  const scope=platform==='opensms'?document.querySelector('.im-chat'):platform==='whatsapp'?document.querySelector('#main'):platform==='telegram'?document.querySelector('#MiddleColumn,.chat.active,.middle-column'):document.querySelector('.module-conversation,.ConversationView')||document.querySelector('.CompositionArea')?.parentElement;
   if(!scope)fail('conversation-not-open','请先打开需要导出的联系人会话');
+  const heading=scope.querySelector('.im-chat-top .info-other .info-value,.chat-info .peer-title,.chat-info .title,.ChatInfo .title,.module-ConversationHeader__header__info__title,.module-conversation-header__title,header [title],header [dir="auto"]');
+  const contactTitle=(heading?.getAttribute('title')||heading?.textContent||'当前联系人').replace(/\s+/g,' ').trim().slice(0,200);
   let contactId='';
-  if(platform==='telegram')contactId=readTelegram();
+  if(platform==='opensms'){
+    const container=scope.querySelector('#message-box');
+    if(!container)fail('history-unavailable','未找到当前会话的 message-box 容器');
+    // Export the open dialog directly; selected contact-list rows are not required.
+    let state=w.__dfOpenSmsExportContainer;
+    if(state?.container!==container)state=w.__dfOpenSmsExportContainer={container,token:crypto.randomUUID()};
+    const identity=JSON.stringify([document.querySelector('.left-bar .avatar-name')?.textContent?.trim()||'',contactTitle]);
+    let hash=2166136261;for(let i=0;i<identity.length;i++)hash=Math.imul(hash^identity.charCodeAt(i),16777619);
+    contactId='sms-export:'+state.token+':'+(hash>>>0).toString(16);
+  }
+  else if(platform==='telegram')contactId=readTelegram();
   else if(platform==='signal'){
     const id=document.querySelector('.CompositionArea[data-df-signal-conversation-id]')?.getAttribute('data-df-signal-conversation-id')||'';
     if(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))contactId='signal:'+id.toLowerCase();
@@ -22,12 +34,12 @@ function conversationExportRuntime(command:ExportCommand,readTelegram:()=>string
   }
   if(!contactId)fail('contact-id-unavailable','无法可靠识别当前联系人，未开始导出');
   if(command.expectedId&&command.expectedId!==contactId)fail('contact-changed','联系人已切换，导出已停止');
-  const heading=scope.querySelector('.chat-info .peer-title,.chat-info .title,.ChatInfo .title,.module-ConversationHeader__header__info__title,.module-conversation-header__title,header [title],header [dir="auto"]');
-  const contactTitle=(heading?.getAttribute('title')||heading?.textContent||'当前联系人').replace(/\s+/g,' ').trim().slice(0,200);
-  const selector=platform==='whatsapp'?'[data-id^="true_"],[data-id^="false_"]':platform==='telegram'?'.bubble[data-mid],.Message[data-message-id],.Message[data-id],.Message[id]':'.module-message';
-  const candidates=Array.from(scope.querySelectorAll<HTMLElement>(selector)).filter(visible);
+  const selector=platform==='opensms'?'#message-box > ul > li.im-chat-mine,#message-box > ul > li.im-chat-other':platform==='whatsapp'?'[data-id^="true_"],[data-id^="false_"]':platform==='telegram'?'.bubble[data-mid],.Message[data-message-id],.Message[data-id],.Message[id]':'.module-message';
+  if(platform==='opensms'&&!scope.querySelector('#message-box'))fail('history-unavailable','未找到当前会话的 message-box 容器');
+  const candidates=Array.from(scope.querySelectorAll<HTMLElement>(selector)).filter(n=>platform==='opensms'||visible(n));
   const bubbles=candidates.filter(n=>!candidates.some(other=>other!==n&&other.contains(n)));
   const findScroller=()=>{
+    if(platform==='opensms')return scope.querySelector<HTMLElement>('#message-box');
     let node:HTMLElement|null=bubbles[0]?.parentElement||null;
     while(node&&node!==document.body){const style=getComputedStyle(node);if(/auto|scroll/.test(style.overflowY)&&node.clientHeight>50&&node.scrollHeight>node.clientHeight+10)return node;node=node.parentElement;}
     return Array.from(scope.querySelectorAll<HTMLElement>('.scrollable,.scrollable-y,.bubbles,.module-timeline__messages__container,.module-timeline,[class*="scroll"]')).find(n=>visible(n)&&n.clientHeight>50&&/auto|scroll/.test(getComputedStyle(n).overflowY))||null;
@@ -35,12 +47,12 @@ function conversationExportRuntime(command:ExportCommand,readTelegram:()=>string
   const scroller=findScroller();
   if(command.action==='begin'){
     if(!scroller&&bubbles.length)w.__dfConversationExport={contactId,scroller:null,originalTop:0,originalHeight:0,distanceBottom:0};
-    else if(scroller){w.__dfConversationExport={contactId,scroller,originalTop:scroller.scrollTop,originalHeight:scroller.scrollHeight,distanceBottom:scroller.scrollHeight-scroller.clientHeight-scroller.scrollTop};scroller.scrollTop=scroller.scrollHeight;scroller.dispatchEvent(new Event('scroll',{bubbles:true}));}
+    else if(scroller){w.__dfConversationExport={contactId,scroller,originalTop:scroller.scrollTop,originalHeight:scroller.scrollHeight,distanceBottom:scroller.scrollHeight-scroller.clientHeight-scroller.scrollTop};if(platform!=='opensms'){scroller.scrollTop=scroller.scrollHeight;scroller.dispatchEvent(new Event('scroll',{bubbles:true}));}}
     else fail('history-unavailable','没有可读取的聊天记录或历史滚动区域');
   }else if(command.action==='restore'){
-    const state=w.__dfConversationExport;if(state?.contactId===contactId&&state.scroller?.isConnected){state.scroller.scrollTop=Math.max(0,state.scroller.scrollHeight-state.scroller.clientHeight-state.distanceBottom);state.scroller.dispatchEvent(new Event('scroll',{bubbles:true}));}delete w.__dfConversationExport;return true;
+    const state=w.__dfConversationExport;if(platform!=='opensms'&&state?.contactId===contactId&&state.scroller?.isConnected){state.scroller.scrollTop=Math.max(0,state.scroller.scrollHeight-state.scroller.clientHeight-state.distanceBottom);state.scroller.dispatchEvent(new Event('scroll',{bubbles:true}));}delete w.__dfConversationExport;return true;
   }else if(command.action==='older'){
-    if(!scroller)return false;
+    if(platform==='opensms'||!scroller)return false;
     scroller.scrollTop=Math.max(0,scroller.scrollTop-Math.max(200,scroller.clientHeight*.65));scroller.dispatchEvent(new Event('scroll',{bubbles:true}));return true;
   }
   const clean=(node:Element|null)=>{if(!node)return '';const clone=node.cloneNode(true) as HTMLElement;
@@ -57,16 +69,17 @@ function conversationExportRuntime(command:ExportCommand,readTelegram:()=>string
     const accessibility=wrapper?.getAttribute('aria-labelledby')||bubble.getAttribute('aria-labelledby')||bubble.querySelector('[aria-labelledby^="message-accessibility-contents:"]')?.getAttribute('aria-labelledby')||'';
     const id=bubble.getAttribute('data-mid')||bubble.getAttribute('data-message-id')||bubble.getAttribute('data-id')||bubble.id||accessibility.match(/message-accessibility-(?:contents|label):([^\s]+)/)?.[1]||'';
     if(!id)fail('message-id-unavailable','发现没有稳定编号的消息，无法保证记录不重复，请保留会话反馈');
-    const textSelectors=platform==='whatsapp'?'[data-pre-plain-text] .selectable-text,[data-testid="selectable-text"],.selectable-text':platform==='telegram'?'.bubble-content > .message > .translatable-message,.bubble-content > .message,.Message .text-content,.text-content':'.module-message__text,.module-message__text-container';
+    const textSelectors=platform==='opensms'?'.im-chat-text > .message-content':platform==='whatsapp'?'[data-pre-plain-text] .selectable-text,[data-testid="selectable-text"],.selectable-text':platform==='telegram'?'.bubble-content > .message > .translatable-message,.bubble-content > .message,.Message .text-content,.text-content':'.module-message__text,.module-message__text-container';
     const parts=Array.from(bubble.querySelectorAll(textSelectors)).filter(n=>!n.closest('[data-testid="quoted-message"],.reply,.quoted-message,.MessageReply,.module-quoted-message'));
     const topParts=parts.filter(n=>!parts.some(other=>other!==n&&other.contains(n)));
     const originalText=topParts.map(clean).filter(Boolean).join('\n');
     const chineseText=Array.from(bubble.querySelectorAll<HTMLElement>('.df-chat-translation,[data-df-signal-translation],.module-message__maoyi-translation:not(.module-message__maoyi-translation--missing)')).filter(n=>!n.closest('[data-testid="quoted-message"],.reply,.quoted-message,.MessageReply,.module-quoted-message')).map(n=>{const clone=n.cloneNode(true) as HTMLElement;clone.querySelectorAll('button,.df-smart-reply-host,.df-smart-reply-panel,.module-message__maoyi-smart-reply').forEach(b=>b.remove());return (clone.innerText||clone.textContent||'').trim();}).filter(Boolean).join('\n');
     const classes=bubble.className+' '+(bubble.parentElement?.className||'');const dataId=bubble.getAttribute('data-id')||'';
-    const direction=/\b(?:is-out|own|outgoing|message-out|module-message--outgoing)\b/.test(classes)||dataId.startsWith('true_')?'outgoing':/\b(?:is-in|incoming|message-in|module-message--incoming)\b/.test(classes)||dataId.startsWith('false_')?'incoming':'unknown';
+    const direction=/\b(?:im-chat-mine|is-out|own|outgoing|message-out|module-message--outgoing)\b/.test(classes)||dataId.startsWith('true_')?'outgoing':/\b(?:im-chat-other|is-in|incoming|message-in|module-message--incoming)\b/.test(classes)||dataId.startsWith('false_')?'incoming':'unknown';
     const time=bubble.querySelector('time');
-    const timestamp=time?.getAttribute('datetime')||time?.getAttribute('title')||bubble.querySelector('[data-pre-plain-text]')?.getAttribute('data-pre-plain-text')?.match(/^\[([^\]]+)\]/)?.[1]||bubble.querySelector('.time,.time-inner,.module-message__metadata__date,.module-message__metadata')?.getAttribute('title')||bubble.querySelector('.time,.time-inner,.module-message__metadata__date')?.textContent?.trim()||'';
-    const mediaLabel=bubble.querySelector('video')?'[视频]':bubble.querySelector('audio')?'[语音/音频]':bubble.querySelector('img:not(.emoji):not(.emoticon):not(.emoji-image):not(.avatar)')?'[图片/贴纸]':!originalText?'[非文字消息]':'';
+    const timestamp=time?.getAttribute('datetime')||time?.getAttribute('title')||bubble.querySelector('[data-pre-plain-text]')?.getAttribute('data-pre-plain-text')?.match(/^\[([^\]]+)\]/)?.[1]||bubble.querySelector('.time,.time-inner,.module-message__metadata__date,.module-message__metadata')?.getAttribute('title')||bubble.querySelector('.time,.time-inner,.module-message__metadata__date')?.textContent?.trim()||(platform==='opensms'?bubble.querySelector('.im-chat-user .msg-time,.contact-time-only')?.textContent?.trim():'')||'';
+    const hasImage=Array.from(bubble.querySelectorAll('img:not(.emoji):not(.emoticon):not(.emoji-image):not(.avatar)')).some(n=>platform!=='opensms'||!n.closest('.im-chat-user'));
+    const mediaLabel=bubble.querySelector('video')?'[视频]':bubble.querySelector('audio')?'[语音/音频]':hasImage?'[图片/贴纸]':!originalText?'[非文字消息]':'';
     if(originalText.length>32000||chineseText.length>32000)fail('message-too-large','存在超过32000字的消息，已停止导出以避免截断');
     rows.push({id,direction,timestamp:timestamp.slice(0,200),originalText,chineseText,mediaLabel});
   }

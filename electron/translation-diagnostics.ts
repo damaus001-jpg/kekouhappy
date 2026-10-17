@@ -4,9 +4,9 @@ import { createHash } from 'node:crypto';
 
 export type DiagnosticEvent = { at: string; stage: string; [key: string]: string | number | boolean };
 // An allowlist prevents chat text, prompts, credentials and contact names entering this log.
-const textFields = new Set(['platform', 'reason', 'model', 'status', 'errorName', 'causeCode', 'causeName', 'errorType', 'errorCode', 'finishReason', 'version', 'decision', 'method', 'composerKind']);
+const textFields = new Set(['platform', 'reason', 'model', 'status', 'errorName', 'causeCode', 'causeName', 'errorType', 'errorCode', 'finishReason', 'version', 'decision', 'method', 'composerKind', 'guard', 'locationHash', 'editorTag', 'editorClass', 'editorRole', 'editorContenteditable', 'editorParentTag', 'editorParentClass', 'activeTag', 'activeClass', 'activeRole', 'activeContenteditable', 'sendButtonTag', 'sendButtonClass']);
 const identityFields = new Set(['profileId', 'contactId', 'conversationId', 'messageKey', 'messageId']);
-const numericFields = new Set(['elapsedMs', 'textLength', 'translatedLength', 'httpStatus', 'retryAttempt', 'retryDelayMs', 'count', 'running', 'queued', 'oldestMs', 'cacheBlocked', 'candidates', 'pending', 'attempts', 'sequence']);
+const numericFields = new Set(['elapsedMs', 'textLength', 'translatedLength', 'httpStatus', 'retryAttempt', 'retryDelayMs', 'count', 'running', 'queued', 'oldestMs', 'cacheBlocked', 'candidates', 'pending', 'attempts', 'sequence', 'editableCount', 'sendButtonCount', 'iframeCount', 'cacheHits', 'cacheInjectionFailed', 'alreadyTranslated']);
 
 export class TranslationDiagnostics {
   readonly sessionId = `${new Date().toISOString().replace(/[:.]/g, '-')}-${process.pid}`;
@@ -22,8 +22,8 @@ export class TranslationDiagnostics {
       if (numericFields.has(key) && typeof value === 'number' && Number.isFinite(value)) event[key] = value;
       else if (key === 'requestId' && typeof value === 'string') event[key] = createHash('sha256').update(value).digest('hex').slice(0, 16);
       else if (identityFields.has(key) && typeof value === 'string') event[key] = createHash('sha256').update(value).digest('hex').slice(0, 16);
-      else if (textFields.has(key) && typeof value === 'string') event[key] = value.replace(/[^a-zA-Z0-9._:-]/g, '').slice(0, 96);
-      else if (['injected', 'cacheReady', 'aborted', 'keyConfigured', 'ok', 'hasChinese', 'hasReady', 'hasPending', 'conversationSignaturePresent'].includes(key) && typeof value === 'boolean') event[key] = value;
+      else if (textFields.has(key) && typeof value === 'string') event[key] = value.replace(/[^a-zA-Z0-9._:\-\s#\[\]="']/g, '').slice(0, 120);
+      else if (['injected', 'cacheReady', 'aborted', 'keyConfigured', 'ok', 'hasChinese', 'hasReady', 'hasPending', 'conversationSignaturePresent', 'hasComposer'].includes(key) && typeof value === 'boolean') event[key] = value;
     }
     this.counts[event.stage] = (this.counts[event.stage] || 0) + 1;
     this.events.push(event);

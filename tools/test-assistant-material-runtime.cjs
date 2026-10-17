@@ -28,20 +28,22 @@ app.whenReady().then(async()=>{
   const results=[];
   for(const platform of ['whatsapp','telegram','signal']){
     const win=new BrowserWindow({show:false,width:1100,height:800,webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false}});
-    const execute=expression=>win.webContents.executeJavaScript(expression,true);
+    win.webContents.on('console-message',event=>{if(event.level==='error')console.error(`${platform} renderer: ${event.message}`);});
+    const execute=expression=>win.webContents.executeJavaScript(expression,true).catch(error=>{console.error(platform,expression.slice(0,400));throw error;});
     await win.loadURL(`http://127.0.0.1:${server.address().port}`);
     const a=platform==='whatsapp'?'wa:15550000001@c.us':platform==='telegram'?'tg:101':'signal:11111111-1111-4111-8111-111111111111';
     const b=platform==='whatsapp'?'wa:15550000002@c.us':platform==='telegram'?'tg:202':'signal:22222222-2222-4222-8222-222222222222';
     const html=platform==='whatsapp'?'<div id="main" data-jid="15550000001@c.us"><header><span title="Contact A">Contact A</span></header><footer><div id="input" role="textbox" contenteditable="true" style="width:600px;min-height:80px"></div></footer></div>':platform==='telegram'?'<div id="MiddleColumn" data-peer-id="101"><header><span title="Contact A">Contact A</span></header><div class="chat-input-main"><div id="input" class="input-message-input" contenteditable="true" style="width:600px;min-height:80px"></div></div></div>':'<div class="module-conversation"><header><span title="Contact A">Contact A</span></header><div class="CompositionArea" data-df-signal-conversation-id="11111111-1111-4111-8111-111111111111"><div id="input" class="ql-editor" contenteditable="true" style="width:600px;min-height:80px"></div></div></div>';
     await execute(`document.body.innerHTML=${JSON.stringify(html)}`);
+    await execute(`window.finalSendCount=0;const send=document.createElement('button');send.id='final-send';send.textContent='Send';send.onclick=()=>window.finalSendCount++;document.body.appendChild(send);document.addEventListener('keydown',e=>{if(e.key==='Enter')window.finalSendCount++;});`);
     const staged=await store.stageAssistantMaterial({id:'fixture-text',type:'text',text:'Original material'});
-    const catalog={persona:[{id:'fixture-card',title:'Fixture',date:'2026',materials:[{id:staged.id,type:'text',text:staged.text}]}],schedule:[],quotes:[]};
+    const catalog={persona:[],schedule:[{id:'fixture-card',title:'Fixture',date:'2026',materials:[{id:staged.id,type:'text',text:staged.text}]}],quotes:[]};
     await execute(buildAssistantRuntimeScript({command:'install',config:{platform,catalog,colors,icon:'',usages:[],enabled:true}}));
     await execute(buildAssistantRuntimeScript({command:'stage',pending:staged}));
     const shadow="document.getElementById('df-material-root').shadowRoot";
     const select=selector=>`${shadow}.querySelector(${JSON.stringify(selector)})`;
-    await execute(`${select('.float')}.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter'}));${select('article footer button')}.click()`);
-    assert.equal(await execute(`${select('.material button')}.textContent`),'复制');
+    await execute(`${select('.float')}.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter'}));${shadow}.querySelectorAll('nav button')[1].click();${select('article footer button')}.click()`);
+    assert.equal(await execute(`${select('.material button')}.textContent`),'发送');
     await execute("document.getElementById('input').focus()");win.webContents.paste();await pause(200);
     assert.ok(await execute(`!!${select('.dialog')}`),`${platform}: trusted paste opens confirmation`);
     assert.equal(await execute("document.getElementById('input').textContent"),'');
@@ -50,17 +52,20 @@ app.whenReady().then(async()=>{
       await pause(250);
     };
     await switchTo(b);
+    assert.equal(await execute(`!!${select('.dialog')}`),false,`${platform}: switching contacts cancels the frozen confirmation`);
+    assert.equal((await execute(buildAssistantRuntimeScript({command:'poll'}))).events.filter(e=>e.action==='used').length,0);
+    await execute(buildAssistantRuntimeScript({command:'confirm',pending:staged,contactId:b}));
     await execute(`${select('.dialog textarea')}.value='Edited material';${select('.dialog .primary')}.click()`);await pause(100);
-    const snapshot=await execute(buildAssistantRuntimeScript({command:'poll'}));
-    const event=snapshot.events.find(e=>e.action==='used');assert.ok(event,`${platform}: insertion succeeds`);assert.equal(event.contactId,b);assert.equal(event.actualText,'Edited material');
+    const event=await execute(buildAssistantRuntimeScript({command:'confirmation-status',token:staged.token}));
+    assert.equal(event.status,'inserted',`${platform}: insertion succeeds`);assert.equal(event.contactId,b);assert.equal(event.actualText,'Edited material');
     assert.equal(await execute("document.getElementById('input').textContent"),'Edited material');
     const usage=await store.recordAssistantUse({profileId:`fixture-${platform}`,platform,token:event.token,contactId:event.contactId,contactTitle:'Contact B',actualText:event.actualText});
     assert.equal(store.currentAssistantMaterial(),null,'Completed confirmation clears the pending copy across profiles');
     await execute(buildAssistantRuntimeScript({command:'result',token:event.token,usage}));
-    assert.equal(await execute(`${select('.material button')}.textContent`),'已使用');
+    assert.equal(await execute(`${select('.material button')}.textContent`),'已使用 · 发送');
     await execute("document.querySelector('header span').textContent='Renamed B';document.querySelector('header span').setAttribute('title','Renamed B')");await pause(250);
-    assert.equal(await execute(`${select('.material button')}.textContent`),'已使用');
-    await switchTo(a);assert.equal(await execute(`${select('.material button')}.textContent`),'复制');
+    assert.equal(await execute(`${select('.material button')}.textContent`),'已使用 · 发送');
+    await switchTo(a);assert.equal(await execute(`${select('.material button')}.textContent`),'发送');
     assert.equal((await store.readAssistantUsage(`fixture-${platform}`)).length,1);
     assert.equal((await store.readAssistantUsage('other-account')).length,0);
     const again=await store.stageAssistantMaterial({id:'fixture-cancel',type:'text',text:'Cancelled material'});
@@ -88,13 +93,35 @@ app.whenReady().then(async()=>{
     for(let i=0;i<50;i++){await pause(100);if(await execute(`${select('.dialog .error')}.textContent`))break;}
     assert.equal((await execute(buildAssistantRuntimeScript({command:'poll'}))).events.filter(e=>e.action==='used').length,0);
     assert.ok((await execute(`${select('.dialog .error')}.textContent`)).includes('未记录使用'));
-    const previewClass=platform==='signal'?'module-draft-attachment':platform==='telegram'?'popup-send-photo':'';
-    await execute(`document.getElementById('input').addEventListener('paste',event=>{if(event.clipboardData?.files.length){event.preventDefault();const preview=document.createElement('div');preview.className=${JSON.stringify(previewClass)};if(${JSON.stringify(platform)}==='whatsapp')preview.setAttribute('data-testid','media-editor');preview.textContent='Accepted image draft';document.body.appendChild(preview);}})`);
+    const previewClass=platform==='signal'?'module-staged-attachment':platform==='telegram'?'popup-send-photo':'';
+    await execute(`document.getElementById('input').addEventListener('paste',event=>{if(event.clipboardData?.files.length){event.preventDefault();const preview=document.createElement('div');preview.className=${JSON.stringify(previewClass)};if(${JSON.stringify(platform)}==='whatsapp')preview.setAttribute('data-testid','media-editor');preview.textContent='Accepted image draft';if(${JSON.stringify(platform)}==='signal'){let list=document.querySelector('.CompositionArea__attachment-list');if(!list){list=document.createElement('div');list.className='CompositionArea__attachment-list';document.querySelector('.CompositionArea').appendChild(list);}list.appendChild(preview);}else document.body.appendChild(preview);}})`);
     await execute(`${select('.dialog .primary')}.click()`);await pause(250);
     const imageEvent=(await execute(buildAssistantRuntimeScript({command:'poll'}))).events.find(e=>e.action==='used');
     assert.ok(imageEvent,`${platform}: accepted image draft records usage`);assert.equal(imageEvent.contactId,a);
     const imageUsage=await store.recordAssistantUse({profileId:`fixture-${platform}`,platform,token:imageEvent.token,contactId:a,contactTitle:'A'});
     await execute(buildAssistantRuntimeScript({command:'result',token:imageEvent.token,usage:imageUsage}));
+    await execute(buildAssistantRuntimeScript({command:'confirm',pending:imageStage,contactId:a}));
+    assert.equal(await execute(`${select('.dialog h2')}.textContent`),'此素材在当前联系人聊天里已使用');
+    assert.equal(await execute(`${select('.dialog .primary')}.textContent`),'仍然使用');
+    await execute(`${select('.dialog .actions button')}.click()`);
+    assert.equal((await execute(buildAssistantRuntimeScript({command:'confirmation-status',token:imageStage.token}))).status,'cancelled');
+    // The same stored photo has one identity even when staged from another card.
+    const repeat=await store.stageAssistantMaterial({id:'another-card:image',type:'image',mediaId:media.id,name:'Renamed.png'});
+    assert.equal(repeat.id,imageStage.id);
+    for(const [theme,accent,panel] of [['blackGold','#dca749','#222222'],['pink','#ef7ba9','#fff1f7'],['murongPurple','#aa88dd','#30243d'],['clearWaterBlue','#54adce','#edf9fd']]){
+      await execute(buildAssistantRuntimeScript({command:'install',config:{platform,catalog,colors:{...colors,'--accent':accent,'--panel-strong':panel},icon:'',usages:[usage,imageUsage],enabled:true}}));
+      await execute(buildAssistantRuntimeScript({command:'confirm',pending:repeat,contactId:a}));
+      const actual=await execute(`getComputedStyle(${select('.dialog')}).backgroundColor`);
+      assert.equal(actual,await execute(`(()=>{const n=document.createElement('div');n.style.color=${JSON.stringify(panel)};document.body.appendChild(n);const c=getComputedStyle(n).color;n.remove();return c;})()`),`${theme}: dialog inherits theme`);
+      assert.equal(await execute(`${select('.dialog h2')}.textContent`),'此素材在当前联系人聊天里已使用');
+      await execute(`${select('.dialog .actions button')}.click()`);
+    }
+    await execute(buildAssistantRuntimeScript({command:'confirm',pending:repeat,contactId:a}));
+    await execute(`${select('.dialog .primary')}.click()`);await pause(250);
+    const repeated=await execute(buildAssistantRuntimeScript({command:'confirmation-status',token:repeat.token}));
+    assert.equal(repeated.status,'inserted','explicit repeat confirmation is allowed');
+    await store.recordAssistantUse({profileId:`fixture-${platform}`,platform,token:repeat.token,contactId:a,contactTitle:'A'});
+    assert.equal(await execute('window.finalSendCount'),0,'material confirmation never clicks send or replays Enter');
     results.push({platform,switchTarget:true,editedText:true,rename:true,cancel:true,ordinaryPaste:true,imagePreview:true,imageFailure:true,imageAccepted:true});win.destroy();
   }
   const stored=await fs.readFile(path.join(directory,'assistant-library','usage.enc'));

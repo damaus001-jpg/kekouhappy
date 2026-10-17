@@ -27,8 +27,10 @@ import { createServer as createNetServer, type Server as NetServer, type Socket 
 import { cpus, freemem, networkInterfaces, totalmem } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { readAssistantLibrary, saveAssistantModule, importAssistantModule, attachAssistantMedia, revealAssistantMedia, exportAssistantTemplate, exportAssistantModule, assistantContext, assistantMediaPath } from './assistant-library.js';
+import { readAssistantLibrary, saveAssistantModule, importAssistantModule, attachAssistantMedia, revealAssistantMedia, exportAssistantTemplate, exportAssistantModule, assistantMediaPath } from './assistant-library.js';
 import type { AssistantKind, AssistantModule } from './assistant-library-types.js';
+import { handoffChatToGpt } from './gpt-handoff.js';
+import { installOpenSmsLoginPersistence, removeOpenSmsLogin } from './opensms-login.js';
 import { stageAssistantMaterial, currentAssistantMaterial, readAssistantUsage, recordAssistantUse, readAssistantImage } from './assistant-material-store.js';
 import type { AssistantMaterial, AssistantUseRequest } from './assistant-material-types.js';
 import { exportConversationFile } from './conversation-export.js';
@@ -48,7 +50,6 @@ import type {
   SignalWindowPresentationResult,
   SignalWorkspaceBounds,
   SmartReplyRequest,
-  SmartReplyResult,
   TranslateRequest,
   TranslationCacheEntry,
   TranslationCacheLoadRequest,
@@ -153,8 +154,6 @@ import {
 } from './smart-reply-prompt-bundle.js';
 import type { PromptSigningPublicIdentity } from './prompt-bundle-signing.js';
 import {
-  buildProtectedSmartReplyTranscript,
-  parseSmartReplyResponse,
   validateSmartReplyRequest
 } from './smart-reply-core.js';
 import {
@@ -285,7 +284,8 @@ const platformDefaults: Record<Platform, { label: string; url: string }> = {
   whatsapp: { label: 'WhatsApp', url: 'https://web.whatsapp.com/' },
   'telegram-a': { label: 'Telegram A', url: 'https://web.telegram.org/a' },
   'telegram-k': { label: 'Telegram K', url: 'https://web.telegram.org/k/' },
-  signal: { label: 'Signal', url: '' }
+  signal: { label: 'Signal', url: '' },
+  opensms: { label: '打新增', url: 'https://www.opensms.cc/#/index/chat' }
 };
 
 const whatsappUserAgent = buildWindowsChromiumUserAgent(process.versions.chrome);
@@ -1569,7 +1569,7 @@ const gracefulQuitTimeoutMs = 8000;
 const rendererReadyTimeoutMs = 5000;
 let fatalStartupDialogShown = false;
 const profileIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const supportedPlatforms = new Set<Platform>(['whatsapp', 'telegram-a', 'telegram-k', 'signal']);
+const supportedPlatforms = new Set<Platform>(['whatsapp', 'telegram-a', 'telegram-k', 'signal', 'opensms']);
 
 // SIGNAL_CACHE_PROTOCOL_PURE_START
 const signalCacheProtocolMaxBatchSize = 100;
@@ -1610,8 +1610,8 @@ type SignalTranslationRefreshRequest = SignalVisibleMessage & {
 };
 
 const signalSmartReplyContextVersion = 'df.signal.smart-reply-context.v1' as const;
-const signalSmartReplyMaxMessages = 8;
-const signalSmartReplyMaxTranscriptBytes = 8 * 1024;
+const signalSmartReplyMaxMessages = 18;
+const signalSmartReplyMaxTranscriptBytes = 72 * 1024;
 
 type SignalSmartReplyRequest = {
   type: 'smartReply.request';
@@ -2145,6 +2145,7 @@ function isAllowedPlatformUrl(platform: Platform, value: string) {
   try {
     const url = new URL(value);
     if (url.protocol !== 'https:') return false;
+    if (platform === 'opensms') return url.hostname === 'www.opensms.cc' || url.hostname === 'opensms.cc';
     if (platform === 'whatsapp') return url.hostname === 'web.whatsapp.com';
     if (platform === 'telegram-k') return url.hostname === 'web.telegram.org' && (url.pathname === '/k' || url.pathname.startsWith('/k/'));
     if (platform === 'telegram-a') return url.hostname === 'web.telegram.org' && (url.pathname === '/a' || url.pathname.startsWith('/a/'));
@@ -2158,6 +2159,7 @@ function isAllowedPlatformPermissionOrigin(platform: Platform, value: string) {
   try {
     const url = new URL(value);
     if (url.protocol !== 'https:') return false;
+    if (platform === 'opensms') return url.hostname === 'www.opensms.cc' || url.hostname === 'opensms.cc';
     if (platform === 'whatsapp') return url.hostname === 'web.whatsapp.com';
     if (platform === 'telegram-k' || platform === 'telegram-a') return url.hostname === 'web.telegram.org';
     return false;
@@ -3370,7 +3372,8 @@ function defaultConfig(): AppConfig {
     lastActiveProfileIds: {
       whatsapp: null,
       telegram: null,
-      signal: null
+      signal: null,
+      opensms: null
     },
     activeTheme: 'blackGold',
     eyeCareTranslationEnabled: false,
@@ -3824,7 +3827,7 @@ function sanitizeConfig(config: AppConfig): AppConfig {
 }
 
 function userAgentForPlatform(platform: Platform) {
-  if (platform === 'signal') return whatsappUserAgent;
+  if (platform === 'signal' || platform === 'opensms') return whatsappUserAgent;
   return platform === 'whatsapp' ? whatsappUserAgent : telegramUserAgent;
 }
 
@@ -3919,8 +3922,19 @@ function buildFingerprint(index: number): FingerprintProfile {
   };
 }
 
+let creatingOpenSms: Promise<ChatProfile> | null = null;
 async function createProfile(platform: Platform, name: string, group: string): Promise<ChatProfile> {
+  if(platform!=='opensms')return createProfileRecord(platform,name,group);
+  if(creatingOpenSms)return creatingOpenSms;
+  creatingOpenSms=createProfileRecord(platform,name,group);
+  try{return await creatingOpenSms;}finally{creatingOpenSms=null;}
+}
+async function createProfileRecord(platform: Platform, name: string, group: string): Promise<ChatProfile> {
   const config = await readConfig();
+  if (platform === 'opensms') {
+    const existing = config.profiles.find(profile => profile.platform === 'opensms');
+    if (existing) return existing;
+  }
   const nextName = name.trim();
   const nextGroup = group.trim();
   if (!nextName) throw new Error('Profile name is required.');
@@ -5684,16 +5698,10 @@ async function respondToSignalSmartReplyRequest(
   pending: PendingSignalSmartReplyRequest,
   request: SignalSmartReplyRequest
 ) {
-  void appendSignalTranslationDebugLog({
-    event: 'smart-reply-request',
-    stage: 'deepseek-start',
-    appId,
-    requestId: request.requestId
-  });
   try {
-    const result = await generateSmartRepliesWithDeepSeek({
+    if (!signalSmartReplyPendingIsCurrent(appId, pending)) return;
+    await copyChatToGpt({
       requestId: request.requestId,
-      userId: `df-${profileId}`,
       profileId,
       platform: 'signal',
       messages: request.messages.map(message => ({
@@ -5704,57 +5712,27 @@ async function respondToSignalSmartReplyRequest(
       replyCount: 3,
       outputLanguage: 'en-US',
       allowSensitiveEcho: false
-    }, { replaceInFlightForProfile: true });
-    if (!signalSmartReplyPendingIsCurrent(appId, pending)) {
-      void appendSignalTranslationDebugLog({
-        event: 'smart-reply-request',
-        stage: 'stale-result-discarded',
-        appId,
-        requestId: request.requestId
-      });
-      return;
-    }
-    sendSignalControlMessage(appId, {
-      type: 'smartReply.result',
-      requestId: request.requestId,
-      contextVersion: signalSmartReplyContextVersion,
-      conversationId: request.conversationId,
-      trigger: pending.trigger,
-      replies: result.replies
     });
     void appendSignalTranslationDebugLog({
-      event: 'smart-reply-request',
-      stage: 'result-sent',
-      appId,
-      requestId: request.requestId
+      event: 'smart-reply-request', stage: 'copied-to-gpt', appId,
+      requestId: request.requestId, messageCount: request.messages.length
     });
   } catch (error) {
-    if (!signalSmartReplyPendingIsCurrent(appId, pending)) {
-      void appendSignalTranslationDebugLog({
-        event: 'smart-reply-request',
-        stage: 'stale-error-discarded',
-        appId,
-        requestId: request.requestId
-      });
-      return;
-    }
-    const code = signalSmartReplyErrorCode(error);
-    sendSignalControlMessage(appId, {
-      type: 'smartReply.error',
-      requestId: request.requestId,
-      contextVersion: signalSmartReplyContextVersion,
-      conversationId: request.conversationId,
-      trigger: pending.trigger,
-      code
-    });
     void appendSignalTranslationDebugLog({
-      event: 'smart-reply-request',
-      stage: 'error-sent',
-      appId,
-      requestId: request.requestId,
-      code
+      event: 'smart-reply-request', stage: 'copy-to-gpt-failed', appId,
+      requestId: request.requestId, code: signalSmartReplyErrorCode(error)
     });
   } finally {
+    // The existing native protocol clears its pending button on this command;
+    // it does not display an error or need a generated reply payload.
+    if (signalSmartReplyPendingIsCurrent(appId, pending)) {
+      sendSignalControlMessage(appId, {
+        type: 'smartReply.error', requestId: request.requestId,
+        contextVersion: signalSmartReplyContextVersion,
+        conversationId: request.conversationId, trigger: pending.trigger,
+        code: 'unavailable'
+      });
+    }
     removePendingSignalSmartReplyRequest(appId, pending);
   }
 }
@@ -6287,7 +6265,7 @@ async function launchSignalProfile(id: string) {
 
 type SignalCredentialPipe = {
   address: string;
-  deliver: (credential: ReturnType<typeof createSignalLaunchCredential>) => Promise<void>;
+  deliver: (credential: ReturnType<typeof createSignalLaunchCredential>, child: ChildProcess) => Promise<void>;
   close: () => Promise<void>;
 };
 
@@ -6330,19 +6308,35 @@ async function createSignalCredentialPipe(): Promise<SignalCredentialPipe> {
   });
   return {
     address,
-    async deliver(credential) {
+    async deliver(credential, child) {
       credentialResolve?.(`${JSON.stringify(credential)}\n`);
       credentialResolve = null;
       let timer: NodeJS.Timeout | null = null;
+      let onChildExit: ((code: number | null, signal: NodeJS.Signals | null) => void) | null = null;
+      const childExited = new Promise<never>((_resolve, reject) => {
+        const rejectForExit = (code: number | null, signal: NodeJS.Signals | null) => {
+          reject(new Error(`Signal exited before accepting launch credentials (code=${code ?? 'null'}, signal=${signal ?? 'none'}).`));
+        };
+        if (child.exitCode !== null || child.signalCode !== null) {
+          rejectForExit(child.exitCode, child.signalCode);
+          return;
+        }
+        onChildExit = rejectForExit;
+        child.once('exit', rejectForExit);
+      });
       try {
         await Promise.race([
           delivered,
+          childExited,
           new Promise<never>((_resolve, reject) => {
-            timer = setTimeout(() => reject(new Error('Signal launch credential pipe timed out.')), 10_000);
+            timer = setTimeout(() => reject(new Error(
+              `Signal launch credential pipe timed out after 30 seconds (clientConnected=${claimed}, pid=${child.pid ?? 'unknown'}, exitCode=${child.exitCode ?? 'running'}, signal=${child.signalCode ?? 'none'}).`
+            )), 30_000);
           })
         ]);
       } finally {
         if (timer) clearTimeout(timer);
+        if (onChildExit) child.off('exit', onChildExit);
       }
     },
     close: () => closeNetServer(server)
@@ -6467,7 +6461,7 @@ async function launchSignalProfileNow(id: string) {
     createdAt: Date.now()
   });
   try {
-    await credentialPipe.deliver(credential);
+    await credentialPipe.deliver(credential, child);
   } catch (error) {
     signalControlSessions.delete(signalAppId(profile.id));
     child.kill();
@@ -6623,6 +6617,7 @@ async function removeProfile(id: string): Promise<AppConfig> {
       await stopSignalProfile(profile.id, profile.signalDataDir);
     }
     await destroyProfilePartition(profile.partition);
+    if (profile.platform === 'opensms') removeOpenSmsLogin(profile.id);
     await removeProfileTranslationCache(profile.id);
     if (profile.signalDataDir) {
       await removePathWithRetry(profile.signalDataDir);
@@ -7139,7 +7134,7 @@ function registerApprovedComposerTranslation(request: TranslateRequest, requestI
   const isWebComposerEnter = request.reason === 'composer-enter' && (
     request.platform === 'whatsapp' ||
     request.platform === 'telegram-a' ||
-    request.platform === 'telegram-k'
+    request.platform === 'telegram-k' || request.platform === 'opensms'
   );
   const isSignalChineseToEnglish = request.platform === 'signal' &&
     (request.reason === 'composer-enter' || request.reason === 'composer-pretranslate') &&
@@ -7631,136 +7626,48 @@ async function translateWithDeepSeekCore(
   }
 }
 
-type SmartReplyGenerationOptions = Readonly<{
-  replaceInFlightForProfile?: boolean;
-}>;
-type SmartReplyInFlightProfile = Readonly<{
-  token: symbol;
-  controller: AbortController;
-}>;
-const smartReplyInFlightProfiles = new Map<string, SmartReplyInFlightProfile>();
-let smartReplyInFlightCount = 0;
-const smartReplyRequestTimeoutMs = 25_000;
-const smartReplyTransientStatuses = new Set([429, 502, 503, 504]);
-
-async function generateSmartRepliesWithDeepSeek(
-  request: SmartReplyRequest,
-  options: SmartReplyGenerationOptions = {}
-): Promise<SmartReplyResult> {
-  const validated = validateSmartReplyRequest(request);
-  const profileGate = validated.profileId || '__default__';
-  const previous = smartReplyInFlightProfiles.get(profileGate);
-  if (previous && !options.replaceInFlightForProfile) {
-    throw new Error('A smart reply request is already running for this profile.');
-  }
-  if (!previous && smartReplyInFlightCount >= 2) {
-    throw new Error('Smart reply is busy. Please try again shortly.');
-  }
-
-  previous?.controller.abort();
-  const token = Symbol(profileGate);
-  const requestController = new AbortController();
-  smartReplyInFlightProfiles.set(profileGate, {
-    token,
-    controller: requestController
-  });
-  if (!previous) smartReplyInFlightCount += 1;
+let gptHandoffBusy = false;
+async function showGptHandoffDialog(options: Parameters<typeof showSensitiveSendDialog>[0]) {
+  const signalProfileToRestore = visibleSignalProfileId;
+  if (signalProfileToRestore) hideAllSignalWindows();
   try {
-    const config = await readConfig();
-    const deepseekApiKey = clientLicenseManager?.getServiceSecret() || await readDevelopmentServiceSecret();
-    if (!deepseekApiKey) throw new Error('DeepSeek API key is not configured.');
-    const { prompt } = await loadSmartReplyPrompt();
-    const localReference = await assistantContext(validated.messages);
-    const protectedTranscript = buildProtectedSmartReplyTranscript(validated);
-    const userId = (validated.userId || (validated.profileId ? `df-${validated.profileId}` : 'df-smart-reply'))
-      .replace(/[^a-zA-Z0-9\-_]/g, '_')
-      .slice(0, 256);
-    const input = JSON.stringify(protectedTranscript.payload);
-    const deadline = Date.now() + smartReplyRequestTimeoutMs;
-    let lastError: unknown;
-
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      if (requestController.signal.aborted) {
-        throw new DOMException('Smart reply request was replaced.', 'AbortError');
-      }
-      const remainingMs = deadline - Date.now();
-      if (remainingMs <= 0) break;
-      const controller = new AbortController();
-      const forwardReplacementAbort = () => controller.abort();
-      requestController.signal.addEventListener(
-        'abort',
-        forwardReplacementAbort,
-        { once: true }
-      );
-      const timeout = setTimeout(() => controller.abort(), remainingMs);
-      try {
-        const response = await fetch('https://api.deepseek.com/chat/completions', {
-          method: 'POST',
-          signal: controller.signal,
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${deepseekApiKey}`
-          },
-          body: JSON.stringify({
-            model: config.deepseekModel || defaultModel,
-            user_id: userId,
-            messages: [
-              { role: 'system', content: prompt + localReference },
-              { role: 'user', content: input }
-            ],
-            response_format: { type: 'json_object' },
-            thinking: { type: 'disabled' },
-            temperature: attempt === 0 ? 0.65 : 0.2,
-            max_tokens: 1_000,
-            stream: false
-          })
-        });
-        const declaredResponseBytes = Number(response.headers.get('content-length') || '0');
-        if (Number.isFinite(declaredResponseBytes) && declaredResponseBytes > 512 * 1024) {
-          await response.body?.cancel();
-          throw new Error('DeepSeek smart reply response is too large.');
-        }
-        const rawBody = await response.text();
-        if (Buffer.byteLength(rawBody, 'utf8') > 512 * 1024) {
-          throw new Error('DeepSeek smart reply response is too large.');
-        }
-        if (!response.ok) {
-          const error = new Error(`DeepSeek smart reply request failed: ${response.status}`);
-          error.name = smartReplyTransientStatuses.has(response.status) ? 'TransientSmartReplyError' : 'PermanentSmartReplyError';
-          throw error;
-        }
-        let data: unknown;
-        try {
-          data = JSON.parse(rawBody);
-        } catch {
-          throw new Error('DeepSeek smart reply envelope is not valid JSON.');
-        }
-        const content = (data as { choices?: Array<{ message?: { content?: unknown } }> })
-          ?.choices?.[0]?.message?.content;
-        if (typeof content !== 'string') throw new Error('DeepSeek smart reply content is missing.');
-        return parseSmartReplyResponse(content);
-      } catch (error) {
-        lastError = error;
-        if (requestController.signal.aborted) throw error;
-        if (error instanceof Error && error.name === 'PermanentSmartReplyError') throw error;
-        if (attempt === 1 || Date.now() >= deadline) break;
-      } finally {
-        clearTimeout(timeout);
-        requestController.signal.removeEventListener(
-          'abort',
-          forwardReplacementAbort
-        );
-      }
-    }
-    if (lastError instanceof Error && lastError.name === 'AbortError') {
-      throw new Error('Smart reply request timed out.');
-    }
-    throw lastError instanceof Error ? lastError : new Error('Smart reply request failed.');
+    return await showSensitiveSendDialog(options);
   } finally {
-    if (smartReplyInFlightProfiles.get(profileGate)?.token === token) {
-      smartReplyInFlightProfiles.delete(profileGate);
-      smartReplyInFlightCount = Math.max(0, smartReplyInFlightCount - 1);
-    }
+    if (signalProfileToRestore) requestSignalProfilePresentation(signalProfileToRestore);
+  }
+}
+async function copyChatToGpt(request: SmartReplyRequest) {
+  if (workspaceVisibilityGate.locked) throw new Error('请先解锁工作区');
+  if (gptHandoffBusy) throw new Error('请先关闭当前去GPT提示后再复制');
+  gptHandoffBusy = true;
+  try {
+    return await handoffChatToGpt(request, {
+      writeClipboard: text => clipboard.writeText(text),
+      showPrompt: async messageCount => {
+        const options = {
+          title: '去GPT',
+          message: '已复制 ' + messageCount + ' 条聊天记录',
+          detail: '点击“打开GPT”，在 ChatGPT 中粘贴并发送，即可让 GPT 为我方生成三组英文回复及中文释义。',
+          buttons: ['打开GPT', '稍后粘贴'],
+          cancelId: 1
+        };
+        const result = await showGptHandoffDialog(options);
+        return result.response === 0;
+      },
+      openExternal: async url => {
+        if (workspaceVisibilityGate.locked) return;
+        try {
+          await shell.openExternal(url);
+        } catch {
+          await showGptHandoffDialog({
+            title: '打开GPT', message: '聊天记录已复制，但浏览器打开失败',
+            detail: '请手动打开 https://chatgpt.com/，然后粘贴并发送。', buttons: ['知道了'], cancelId: 0
+          });
+        }
+      }
+    });
+  } finally {
+    gptHandoffBusy = false;
   }
 }
 
@@ -7899,7 +7806,15 @@ async function hydrateConversationExportChineseCache(request: ConversationExport
   }
 }
 
+function openSmsLoginScope(event: IpcMainEvent) {
+  if (event.sender.isDestroyed() || event.sender.getType() !== 'webview' || event.senderFrame !== event.sender.mainFrame) return null;
+  if (sessionPolicies.get(event.sender.session) !== 'opensms' || !isAllowedPlatformUrl('opensms', event.senderFrame.url)) return null;
+  const entry = Array.from(partitionPolicies).find(([partition, platform]) => platform === 'opensms' && session.fromPartition(partition) === event.sender.session);
+  const profileId = entry?.[0].match(/^persist:chat-([0-9a-f-]{36})$/i)?.[1];
+  return profileId ? { profileId, origin: new URL(event.senderFrame.url).origin } : null;
+}
 function registerIpc() {
+  installOpenSmsLoginPersistence(openSmsLoginScope);
   const assertAssistantUnlocked = () => {
     if (workspaceVisibilityGate.locked) throw new Error('请先解锁工作区');
   };
@@ -8139,8 +8054,8 @@ function registerIpc() {
     saveTranslationCustomization(editableChineseToEnglish)
   );
   trustedHandle('translation-customization:reset', true, () => resetTranslationCustomization());
-  trustedHandle('smart-reply:generate', true, (_event, request: SmartReplyRequest) =>
-    generateSmartRepliesWithDeepSeek(validateSmartReplyRequest(request))
+  trustedHandle('smart-reply:copy-to-gpt', true, (_event, request: SmartReplyRequest) =>
+    copyChatToGpt(validateSmartReplyRequest(request))
   );
   trustedHandle('send-integrity:authorize', true, (_event, request: SendAuthorizationRequest) => {
     if (!request || typeof request !== 'object') throw new Error('Send authorization request is invalid.');

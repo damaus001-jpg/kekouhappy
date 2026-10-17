@@ -9,8 +9,8 @@ import { protectTranslationSensitiveTokens } from './translation-sensitive-token
 
 export const smartReplyInputSchemaVersion = 'df.smart_reply.input.v1' as const;
 export const smartReplyOutputSchemaVersion = 'df.smart_reply.output.v1' as const;
-export const smartReplyMaxMessages = 8;
-export const smartReplyMaxTextBytes = 8_000;
+export const smartReplyMaxMessages = 18;
+export const smartReplyMaxTextBytes = 72_000;
 
 const exactInputKeys = new Set([
   'requestId',
@@ -26,7 +26,7 @@ const exactInputKeys = new Set([
 const exactMessageKeys = new Set(['speaker', 'text']);
 const exactResponseKeys = new Set(['schema_version', 'replies']);
 const exactReplyKeys = new Set(['id', 'english', 'chinese']);
-const allowedPlatforms = new Set(['whatsapp', 'telegram-a', 'telegram-k', 'signal']);
+const allowedPlatforms = new Set(['whatsapp', 'telegram-a', 'telegram-k', 'signal', 'opensms']);
 
 function hasExactKeys(value: Record<string, unknown>, allowed: Set<string>) {
   return Object.keys(value).every((key) => allowed.has(key));
@@ -52,7 +52,7 @@ export function validateSmartReplyRequest(value: unknown): SmartReplyRequest {
     throw new Error('Smart reply platform is invalid.');
   }
   if (!Array.isArray(request.messages) || request.messages.length < 1 || request.messages.length > smartReplyMaxMessages) {
-    throw new Error('Smart reply messages must contain 1 to 8 items.');
+    throw new Error('Smart reply messages must contain 1 to 18 items.');
   }
   let textBytes = 0;
   for (const item of request.messages) {
@@ -78,7 +78,7 @@ export function validateSmartReplyRequest(value: unknown): SmartReplyRequest {
   if (request.replyCount !== 3 || request.outputLanguage !== 'en-US' || request.allowSensitiveEcho !== false) {
     throw new Error('Smart reply request policy is invalid.');
   }
-  if (Buffer.byteLength(JSON.stringify(request), 'utf8') > 16 * 1024) {
+  if (Buffer.byteLength(JSON.stringify(request), 'utf8') > 96 * 1024) {
     throw new Error('Smart reply request is too large.');
   }
   return request as unknown as SmartReplyRequest;

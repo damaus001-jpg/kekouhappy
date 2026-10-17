@@ -234,6 +234,13 @@ async function verifyClient(clientRoot) {
   const preloadEntry = signalEntries.find(entry => entry.replace(/\\/g, '/').replace(/^\//, '') === 'bundles/preload/main.js');
   if (!preloadEntry) throw new Error('Bundled Signal is missing its translation preload.');
   const signalPreload = Buffer.from(await asar.extractFile(signalAsar, preloadEntry.replace(/^[/\\]/, ''))).toString('utf8');
+  const signalProjectionEntry = signalEntries.find((entry) => /(?:^|[\\/])bundles[\\/]chunks[\\/]messageBridgeChannels\.std-[^\\/]+\.js$/.test(entry));
+  const signalProjection = signalProjectionEntry
+    ? Buffer.from(await asar.extractFile(signalAsar, signalProjectionEntry.replace(/^[/\\]/, ''))).toString('utf8')
+    : '';
+  if (!signalProjection.includes('isCurrentLocalCalendarDay') || !signalProjection.includes('.slice(-18)')) {
+    throw new Error('Bundled Signal GPT context is missing the current-day 18-message selector.');
+  }
   for (const marker of ['resyncConversation', 'resetRefreshState']) {
     if (!signalBridge.includes(marker) || !signalPreload.includes(marker)) {
       throw new Error(`Bundled Signal is missing translation recovery: ${marker}`);

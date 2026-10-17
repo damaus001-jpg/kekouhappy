@@ -1,6 +1,6 @@
 import type { AssistantCatalog, AssistantMaterial, AssistantStagedMaterial, AssistantUsage } from '../electron/assistant-material-types';
 export type AssistantRuntimeConfig = {
-  platform: 'whatsapp'|'telegram'|'signal'; catalog: AssistantCatalog;
+  platform: 'whatsapp'|'telegram'|'signal'|'opensms'; catalog: AssistantCatalog;
   colors: Record<string,string>; icon: string; usages: AssistantUsage[]; enabled: boolean; showButton?:boolean;
 };
 export type AssistantRuntimeEvent = {
@@ -10,6 +10,10 @@ export type AssistantRuntimeEvent = {
 export type AssistantRuntimeSnapshot = { events: AssistantRuntimeEvent[]; contact: {id:string;title:string} };
 type Command = {command:'install';config:AssistantRuntimeConfig} | {command:'stage';pending:AssistantStagedMaterial|null}
   | {command:'result';token:string;error?:string;usage?:AssistantUsage} | {command:'poll'}
+  | {command:'contact'}
+  | {command:'confirm';pending:AssistantStagedMaterial;contactId:string}
+  | {command:'confirmation-status';token:string}
+  | {command:'cancel-confirmation'}
   | {command:'image-chunk';id:string;chunk:string;start:boolean;end:boolean};
 
 // This function is serialized and executed inside the platform window. Keep all
@@ -23,9 +27,11 @@ function assistantRuntime(command: Command) {
       : state.config?.platform==='telegram' ? document.querySelector('#MiddleColumn,.chat.active,.chat:not(.hidden),.middle-column') : document.querySelector('.module-conversation,.ConversationView,.CompositionArea')?.parentElement;
     const readContact = () => {
       const platform = state.config?.platform;
+      if(platform==='opensms')return w.__dfOpenSms?.apply({action:'contact'}) || {id:'',title:''};
       let id=''; const root = scope();
       if (platform==='signal') {
-        const value = document.querySelector('.CompositionArea[data-df-signal-conversation-id]')?.getAttribute('data-df-signal-conversation-id')||'';
+        const roots=Array.from(document.querySelectorAll('.CompositionArea[data-df-signal-conversation-id]')).filter(visible);
+        const value = roots.length===1?roots[0].getAttribute('data-df-signal-conversation-id')||'':'';
         if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) id=`signal:${value.toLowerCase()}`;
       } else if (platform==='telegram') {
         const header = root?.querySelector('.chat-info,.ChatInfo,.chat-header,.middle-header,header');
@@ -51,9 +57,12 @@ function assistantRuntime(command: Command) {
       return {id,title};
     };
     const composer = () => {
+      if(state.config?.platform==='opensms')return w.__dfOpenSms?.editor() || null;
       const candidates = Array.from(document.querySelectorAll<HTMLElement>(
         '#main footer [contenteditable="true"],#main footer [contenteditable="plaintext-only"],.CompositionArea .ql-editor[contenteditable],.CompositionArea [contenteditable="true"],#MiddleColumn [contenteditable="true"],.chat-input-main [contenteditable="true"],.new-message-wrapper [contenteditable="true"],.composer_rich_textarea[contenteditable],.input-message-input[contenteditable],.editable-message-text[contenteditable],#editable-message-text[contenteditable]'));
-      return candidates.filter(n=>visible(n)&&!n.closest('#df-material-root')&&!n.classList.contains('input-message-input-fake')).sort((a,b)=>b.getBoundingClientRect().bottom-a.getBoundingClientRect().bottom)[0]||null;
+      const inputs=candidates.filter(n=>visible(n)&&!n.closest('#df-material-root,[role="dialog"],.FunPopover')&&!n.classList.contains('input-message-input-fake'));
+      if(state.config?.platform==='signal')return inputs.length===1&&readContact().id?inputs[0]:null;
+      return inputs.sort((a,b)=>b.getBoundingClientRect().bottom-a.getBoundingClientRect().bottom)[0]||null;
     };
     const root = document.createElement('div'); root.id='df-material-root';
     // A shadow root prevents platform selectors and theme styles from interfering with the assistant.
@@ -71,7 +80,7 @@ function assistantRuntime(command: Command) {
     const node = (tag:string,className='',text='') => {const el=document.createElement(tag);el.className=className;if(text)el.textContent=text;return el;};
     const button = (label:string,click:()=>void) => {const el=node('button','',label) as HTMLButtonElement;el.type='button';el.onclick=click;return el;};
     const toast = (message:string) => {shadow.querySelector('.toast')?.remove();const el=node('div','toast',message);el.setAttribute('role','status');shadow.appendChild(el);setTimeout(()=>el.remove(),4000);};
-    const used = (id:string) => state.config.usages.some((u:AssistantUsage)=>u.contactId===readContact().id&&u.materialId===id);
+    const used = (id:string) => state.config.usages.some((u:AssistantUsage)=>u.confirmation==='inserted'&&u.contactId===readContact().id&&u.materialId===id);
     const renderPanel = () => {
       const old=shadow.querySelector('.panel');const scrollTop=old?.querySelector('.scroll')?.scrollTop||0;old?.remove();
       if(!state.open || !state.config.enabled)return;
@@ -82,8 +91,12 @@ function assistantRuntime(command: Command) {
       for(const [key,label]of Object.entries({persona:'人物资料',schedule:'一周行程',quotes:'案例金句'})){
         const tab=button(label,()=>{state.tab=key;renderPanel();});if(state.tab===key)tab.className='active';nav.appendChild(tab);
       }
-      panel.appendChild(nav);const scroll=node('div','scroll');if(state.tab==='persona')scroll.appendChild(node('p','name','Lucy · 黄诗婷'));
-      const list=node('ol');const cards=state.config.catalog[state.tab]||[];
+      panel.appendChild(nav);const scroll=node('div','scroll');
+      if(state.tab==='persona') {
+        const text=node('p','',state.config.catalog.personaText||'请在资料助手中粘贴人物资料');
+        text.style.whiteSpace='pre-wrap';text.style.userSelect='text';scroll.appendChild(text);
+      }
+      const list=node('ol');const cards=state.tab==='persona'?[]:(state.config.catalog[state.tab]||[]);
       if(!cards.length)scroll.appendChild(node('p','empty','暂无素材'));
       for(const card of cards){
         const item=node('li'),article=node('article');if(card.date)article.appendChild(node('p','date',card.date));article.appendChild(node('h3','',card.title));
@@ -96,7 +109,7 @@ function assistantRuntime(command: Command) {
               if(!image.src || !state.images?.[material.mediaId]){image.removeAttribute('src');entry.appendChild(node('p','empty',material.name||'图片素材'));state.requestedImages ||= new Set();if(!state.requestedImages.has(material.mediaId)){state.requestedImages.add(material.mediaId);state.queue.push({action:'preview',mediaId:material.mediaId});}}
               else entry.appendChild(image);
             }
-            const copy=button(used(material.id)?'已使用':'复制',()=>{state.queue.push({action:'copy',material});toast('正在复制素材…');});
+            const copy=button(used(material.id)?'已使用 · 发送':'发送',()=>{state.queue.push({action:'copy',material});});
             if(used(material.id))copy.className='used';entry.appendChild(copy);materials.appendChild(entry);
           }
           article.appendChild(materials);
@@ -113,20 +126,30 @@ function assistantRuntime(command: Command) {
     floating.onpointercancel=()=>{drag=null;};floating.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();state.open=!state.open;renderPanel();}};
     const savedY=localStorage.getItem('df-material-button-y');if(savedY&&/^\d+px$/.test(savedY))floating.style.top=savedY;
     shadow.appendChild(floating);
-    const closeModal = () => {state.modal?.mask.remove();state.modal=null;};
+    const closeModal = () => {const modal=state.modal;state.modal=null;modal?.mask.remove();modal?.complete?.(null);};
     const updateTarget = () => {
-      const contact=readContact();if(state.modal&&!state.modal.busy){state.modal.target.textContent=`用于：${contact.title}${contact.id?'':'（尚未识别联系人）'}${state.modal.materialId&&used(state.modal.materialId)?' · 此素材已使用':''}`;state.modal.confirm.disabled=!contact.id;}
+      const contact=readContact();
+      if(state.modal&&contact.id!==state.modal.contact.id){closeModal();toast('会话已切换，本次操作已取消；请检查聊天草稿');}
       if(contact.id!==state.lastContact){state.lastContact=contact.id;renderPanel();}
       floating.hidden=state.config?.showButton===false || !state.config?.enabled || !visible(composer());
     };
     const insertText = (text:string,contactId:string) => {
       const input=composer();if(!input || readContact().id!==contactId)return false;
-      input.focus();const selection=getSelection();const range=document.createRange();range.selectNodeContents(input);range.collapse(false);selection?.removeAllRanges();selection?.addRange(range);
+      input.focus();if(!input.isConnected||readContact().id!==contactId||composer()!==input)return false;
+      if(input instanceof HTMLInputElement){
+        const before=input.value;
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!.call(input,before+text);
+        input.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertFromPaste',data:text}));
+        return readContact().id===contactId&&input.isConnected&&input.value===before+text;
+      }
+      const selection=getSelection();const range=document.createRange();range.selectNodeContents(input);range.collapse(false);selection?.removeAllRanges();selection?.addRange(range);
       const before=input.innerText||input.textContent||'';
       if(!document.execCommand('insertText',false,text))return false;
       input.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertFromPaste',data:text}));
       const after=input.innerText||input.textContent||'';
-      const normalizeLines=(value:string)=>value.replace(/\r\n?/g,'\n');
+      // innerText adds layout-derived blank lines around contenteditable block
+      // elements. Compare line content without treating that layout as failure.
+      const normalizeLines=(value:string)=>value.replace(/\r\n?/g,'\n').replace(/\n+/g,'\n');
       return readContact().id===contactId && after!==before && normalizeLines(after).includes(normalizeLines(text));
     };
     const insertImage = async (pending:AssistantStagedMaterial,contactId:string) => {
@@ -134,28 +157,33 @@ function assistantRuntime(command: Command) {
       const bytes=Uint8Array.from(atob(pending.imageData.split(',')[1]),c=>c.charCodeAt(0));
       const transfer=new DataTransfer();transfer.items.add(new File([bytes],pending.name||'素材.png',{type:'image/png'}));
       input.focus();
-      const previewSelector=state.config.platform==='signal'?'.module-attachment-list,.module-attachment,.module-draft-attachment,.CompositionArea img[src^="blob:"]':state.config.platform==='telegram'?'.popup-send-photo,.popup-send-file,.media-container,.MediaPreview,.AttachmentModal':'[data-testid="media-editor"],[data-testid="media-caption-input-container"],div[role="dialog"] img[src^="blob:"]';
-      const before=new Set(Array.from(document.querySelectorAll(previewSelector)));
+      if(!input.isConnected||readContact().id!==contactId||composer()!==input)return false;
+      const previewSelector=state.config.platform==='opensms'?'.im-chat .mms-preview-bar img':state.config.platform==='signal'?'.CompositionArea .CompositionArea__attachment-list .module-staged-attachment':state.config.platform==='telegram'?'.popup-send-photo,.popup-send-file,.MediaPreview,.AttachmentModal':'[data-testid="media-editor"],[data-testid="media-caption-input-container"],div[role="dialog"] img[src^="blob:"]';
+      const fingerprint=(n:Element)=>JSON.stringify([n.getAttribute('src'),...Array.from(n.querySelectorAll('img')).map(img=>img.getAttribute('src'))]);
+      const before=new Map(Array.from(document.querySelectorAll(previewSelector),n=>[n,fingerprint(n)]));
       input.dispatchEvent(new ClipboardEvent('paste',{clipboardData:transfer,bubbles:true,cancelable:true}));
       for(let i=0;i<30;i++){
         await new Promise(r=>setTimeout(r,100));
         if(readContact().id!==contactId)throw new Error('图片填入期间聊天已切换，请在目标会话检查草稿；未记录使用');
-        if(Array.from(document.querySelectorAll(previewSelector)).some(n=>visible(n)&&!before.has(n)))return true;
+        if(Array.from(document.querySelectorAll(previewSelector)).some(n=>visible(n)&&(!before.has(n)||before.get(n)!==fingerprint(n))))return true;
       }
       return false;
     };
-    const showModal = (pending:AssistantStagedMaterial) => {
-      if(state.modal)return;const mask=node('div','mask'),dialog=node('section','dialog');dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','false');dialog.setAttribute('aria-label','确认使用素材');
-      dialog.appendChild(node('h2','','确认使用素材'));const target=node('p','target');dialog.appendChild(target);
+    const showModal = (pending:AssistantStagedMaterial,expectedContactId?:string,complete?: (result:any)=>void) => {
+      const contact=readContact();
+      if(state.modal||!state.config?.enabled||!contact.id||(expectedContactId&&contact.id!==expectedContactId)){complete?.(null);return;}
+      const duplicate=pending.type==='image'&&used(pending.id);
+      const mask=node('div','mask'),dialog=node('section','dialog');dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','false');dialog.setAttribute('aria-label','确认使用素材');
+      dialog.appendChild(node('h2','',duplicate?'此素材在当前联系人聊天里已使用':'确认使用素材'));const target=node('p','target',`用于：${contact.title}`);dialog.appendChild(target);
       let editor:HTMLTextAreaElement|null=null;
       if(pending.type==='text'){editor=node('textarea') as HTMLTextAreaElement;editor.value=pending.text||'';editor.maxLength=16000;editor.setAttribute('aria-label','修改素材文字');dialog.appendChild(editor);}
       else {const img=node('img') as HTMLImageElement;img.src=pending.imageData||'';img.alt=pending.name||'图片素材';dialog.appendChild(img);}
-      dialog.appendChild(node('p','hint','确认后填入当前会话，标记为已使用，由你自行发送。切换聊天后，使用对象随当前会话更新。'));
+      dialog.appendChild(node('p','hint',`${duplicate?'再次确认将重复使用这张照片。':''}确认后粘贴至聊天输入框或图片预览区，并记录使用；由你自行发送。切换会话将取消本次操作。`));
       const error=node('p','error');error.setAttribute('role','alert');dialog.appendChild(error);
       const actions=node('div','actions');const cancel=button('取消',()=>{if(!state.modal.busy)closeModal();});
-      const confirm=button('确认使用',()=>{void (async()=>{
+      const confirm=button(duplicate?'仍然使用':'确认粘贴',()=>{void (async()=>{
         const modal=state.modal;if(!modal||modal.busy)return;
-        const contact=readContact();if(!contact.id){error.textContent='无法可靠识别当前联系人';return;}
+        if(!state.config?.enabled||readContact().id!==contact.id){closeModal();return;}
         const text=editor?.value||'';if(pending.type==='text'&&!text.trim()){error.textContent='请填写文字';return;}
         modal.busy=true;confirm.disabled=true;cancel.disabled=true;error.textContent='';
         try {
@@ -163,12 +191,15 @@ function assistantRuntime(command: Command) {
           const inserted=pending.type==='text'?insertText(text,contact.id):await insertImage(pending,contact.id);
           if(!inserted)throw new Error('未确认素材已进入输入框，请检查聊天草稿后重试；未记录使用');
           // Keep the target captured at successful insertion, even if the UI changes while persistence finishes.
+          if(state.modal!==modal||!state.config?.enabled||readContact().id!==contact.id)throw new Error('会话已变化；请检查草稿，未记录使用');
           modal.inserted=true;modal.token=pending.token;
-          state.queue.push({action:'used',token:pending.token,contactId:contact.id,contactTitle:contact.title,...(pending.type==='text'?{actualText:text}:{})});
+          const result={action:'used',token:pending.token,contactId:contact.id,contactTitle:contact.title,...(pending.type==='text'?{actualText:text}:{})};
+          if(complete){modal.complete=null;complete(result);closeModal();return;}
+          state.queue.push(result);
           confirm.textContent='保存使用记录…';
         } catch(e){error.textContent=e instanceof Error?e.message:String(e);modal.busy=false;confirm.disabled=false;cancel.disabled=false;}
       })();});confirm.className='primary';actions.append(cancel,confirm);dialog.appendChild(actions);mask.appendChild(dialog);shadow.appendChild(mask);
-      state.modal={mask,target,confirm,cancel,error,editor,materialId:pending.id,busy:false};updateTarget();editor?.focus();
+      state.modal={mask,target,confirm,cancel,error,editor,materialId:pending.id,contact,complete,busy:false};updateTarget();editor?.focus();
     };
     const onPaste = (event:ClipboardEvent) => {
       const pending=state.pending;if(!pending||state.consumed.has(pending.token)||pending.expiresAt<Date.now()||!state.config?.enabled||!event.isTrusted)return;
@@ -199,6 +230,16 @@ function assistantRuntime(command: Command) {
     document.addEventListener('paste',onPaste,true);
     const timer=setInterval(updateTarget,200);
     state.apply = (cmd:Command) => {
+      if(cmd.command==='contact')return readContact();
+      if(cmd.command==='cancel-confirmation'){closeModal();return true;}
+      if(cmd.command==='confirmation-status')return state.confirmation?.token===cmd.token?state.confirmation.result:{status:'cancelled'};
+      if(cmd.command==='confirm'){
+        if(state.modal)return false;
+        state.confirmation={token:cmd.pending.token,result:{status:'pending'}};
+        showModal({...cmd.pending,imageData:cmd.pending.imageData||state.images?.[cmd.pending.mediaId!]},cmd.contactId,result=>{
+          if(state.confirmation?.token===cmd.pending.token)state.confirmation.result=result?{status:'inserted',...result}:{status:'cancelled'};
+        });return true;
+      }
       if(cmd.command==='install'){
         const previous=JSON.stringify(state.config?.catalog);state.config=cmd.config;
         for(const [key,value]of Object.entries(cmd.config.colors))root.style.setProperty(key,value);
@@ -219,7 +260,7 @@ function assistantRuntime(command: Command) {
         return true;
       }
       if(cmd.command==='result'){
-        if(cmd.usage){state.config.usages=state.config.usages.filter((u:AssistantUsage)=>!(u.contactId===cmd.usage!.contactId&&u.materialId===cmd.usage!.materialId));state.config.usages.push(cmd.usage);state.consumed.add(cmd.token);if(state.pending?.token===cmd.token)state.pending=null;closeModal();renderPanel();toast('已填入当前会话并标记为已使用');}
+        if(cmd.usage){state.config.usages=state.config.usages.filter((u:AssistantUsage)=>!(u.contactId===cmd.usage!.contactId&&u.materialId===cmd.usage!.materialId));state.config.usages.push(cmd.usage);state.consumed.add(cmd.token);if(state.pending?.token===cmd.token)state.pending=null;closeModal();renderPanel();toast('已粘贴，并标记当前会话已使用；请自行发送');}
         else if(cmd.error){
           if(state.modal?.token===cmd.token){state.modal.error.textContent=`素材已填入，使用记录保存失败：${cmd.error}`;state.modal.busy=false;state.modal.cancel.disabled=false;
             // Retrying persistence must never insert the material a second time.
@@ -232,7 +273,7 @@ function assistantRuntime(command: Command) {
       const events=state.queue.splice(0,20);const lastUse=[...events].reverse().find((e:AssistantRuntimeEvent)=>e.action==='used');if(lastUse)state.lastUse=lastUse;
       return {events,contact:readContact()};
     };
-    state.dispose=()=>{clearInterval(timer);document.removeEventListener('paste',onPaste,true);root.remove();};
+    state.dispose=()=>{closeModal();clearInterval(timer);document.removeEventListener('paste',onPaste,true);root.remove();};
     w.__dfMaterialRuntime=state;
   }
   return w.__dfMaterialRuntime.apply(command);

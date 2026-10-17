@@ -2,6 +2,7 @@
 .recovery/
 .tmp/
 .package-secrets/
+/AAAbeifen/
 .package-staging/
 dist/
 dist-electron/

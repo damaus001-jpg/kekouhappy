@@ -90,7 +90,7 @@ const api: ElectronApi = {
     ipcRenderer.invoke('translation-customization:save', editableChineseToEnglish),
   resetTranslationCustomization: (): Promise<TranslationCustomizationStatus> =>
     ipcRenderer.invoke('translation-customization:reset'),
-  generateSmartReplies: (request: SmartReplyRequest) => ipcRenderer.invoke('smart-reply:generate', request),
+  copyChatToGpt: (request: SmartReplyRequest) => ipcRenderer.invoke('smart-reply:copy-to-gpt', request),
   authorizeTranslatedSend: (request: SendAuthorizationRequest) => ipcRenderer.invoke('send-integrity:authorize', request),
   verifySignalSentMessage: (request: SignalSentIntegrityRequest) => ipcRenderer.invoke('signal:verify-sent-integrity', request),
   onSensitiveSendDialog: (handler) => {

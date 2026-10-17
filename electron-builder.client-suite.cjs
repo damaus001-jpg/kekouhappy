@@ -6,6 +6,7 @@ if (!output) throw new Error('MAOYI_CLIENT_BUILD_OUTPUT is required.');
 module.exports = {
   appId: 'com.maoyi.translator',
   productName: '皮卡丘翻译器',
+  buildVersion: '1.6.10.8',
   executableName: 'maoyi',
   asar: true,
   electronDist: 'node_modules/electron/dist',
@@ -28,6 +29,7 @@ module.exports = {
     'dist-electron/translation-prompt-bundle.js',
     'dist-electron/prompt-bundle-signing.js',
     'dist-electron/smart-reply-core.js',
+    'dist-electron/opensms-login.js',
     'dist-electron/smart-reply-prompt-bundle.js',
     'dist-electron/translation-english-style.js',
     'dist-electron/signal-notification-routing.js',
@@ -60,7 +62,7 @@ module.exports = {
   win: {
     target: 'nsis',
     icon: 'src/assets/pikachu-translator.ico',
-    artifactName: 'pikaqiufanyiqi-${version}-Setup.${ext}'
+    artifactName: 'pikaqiufanyiqi-${buildVersion}-Setup.${ext}'
   },
   nsis: {
     oneClick: false,

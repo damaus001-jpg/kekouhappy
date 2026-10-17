@@ -114,12 +114,16 @@ export async function importAssistantModule(kind:AssistantKind,merge:boolean) {
 }
 export async function attachAssistantMedia(kind:AssistantKind,entryId:string) {
   assertAssistantKind(kind);
-  const selected=await dialog.showOpenDialog({title:'添加照片或视频',properties:['openFile','multiSelections'],filters:[{name:'照片和视频',extensions:['jpg','jpeg','png','webp','gif','mp4','webm','mov']}]});
+  const selected=await dialog.showOpenDialog({title:'上传卡片图片',properties:['openFile','multiSelections'],filters:[{name:'图片',extensions:['jpg','jpeg','png','webp','gif']}]});
   if(selected.canceled)return null;
   return serialize(async()=>{const library=await readAssistantLibrary(),entry=library.modules[kind].entries.find(e=>e.id===entryId);
     if(!entry || entry.media.length+selected.filePaths.length>100)throw new Error('请先保存条目，或减少素材数量');
     const {createReadStream}=await import('node:fs');
-    for(const file of selected.filePaths)entry.media.push(await storeMedia(createReadStream(file),basename(file)));
+    for(const file of selected.filePaths) {
+      const media = await storeMedia(createReadStream(file),basename(file));
+      if (!media.mime.startsWith('image/')) throw new Error('卡片只支持上传图片');
+      if (!entry.media.some(existing => existing.id === media.id)) entry.media.push(media);
+    }
     validateAssistantModule(library.modules[kind]);return persist(library);});
 }
 export async function assistantMediaPath(id:string) {

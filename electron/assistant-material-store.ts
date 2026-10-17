@@ -40,7 +40,7 @@ export async function stageAssistantMaterial(material: AssistantMaterial): Promi
     const png = image.toPNG();
     if (png.length > 25 * 1024 * 1024) throw new Error('图片复制大小超过25MB');
     value.mediaId = material.mediaId; value.name = (material.name || '素材.png').slice(0, 255);
-    value.id = `image:${material.mediaId}`; value.imageHash = hash(png);
+    value.id = `image:${material.mediaId!.split('.')[0]}`; value.imageHash = hash(png);
     value.imageData = `data:image/png;base64,${png.toString('base64')}`;
     clipboard.writeImage(image);
   } else throw new Error('只支持文字和图片素材');
@@ -64,21 +64,21 @@ export function recordAssistantUse(request: AssistantUseRequest): Promise<Assist
   const operation = async () => {
     bounded(request.token, 80, '复制凭据'); bounded(request.profileId, 128, '账号');
     bounded(request.contactTitle || '未命名联系人', 200, '联系人');
-    if (!['whatsapp', 'telegram', 'signal'].includes(request.platform)) throw new Error('平台无效');
-    const valid = request.platform === 'whatsapp' ? /^wa:[\w.+-]+@(c\.us|s\.whatsapp\.net|lid|g\.us)$/
+    if (!['whatsapp', 'telegram', 'signal', 'opensms'].includes(request.platform)) throw new Error('平台无效');
+    const valid = request.platform === 'opensms' ? /^sms:[^:\s]{1,720}:[^:\s]{1,384}$/ : request.platform === 'whatsapp' ? /^wa:[\w.+-]+@(c\.us|s\.whatsapp\.net|lid|g\.us)$/
       : request.platform === 'telegram' ? /^tg:-?\d+$/ : /^signal:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (!valid.test(request.contactId)) throw new Error('缺少稳定联系人编号，未记录');
     if (request.actualText !== undefined && (typeof request.actualText !== 'string' || request.actualText.length > 16000)) throw new Error('确认文字过长');
     const receipt = receipts.get(request.token);
     if (receipt) {
-      if (receipt.profileId !== request.profileId || receipt.contactId !== request.contactId) throw new Error('素材已在其他会话确认');
+      if (receipt.profileId !== request.profileId || receipt.platform !== request.platform || receipt.contactId !== request.contactId) throw new Error('素材已在其他会话确认');
       return receipt;
     }
     if (!staged || staged.token !== request.token || staged.expiresAt < Date.now()) throw new Error('素材复制已失效，请重新复制');
     if (!safeStorage.isEncryptionAvailable()) throw new Error('素材使用记录保护不可用');
     const records = await readAssistantUsage('*');
     const record: AssistantUsage = { profileId: request.profileId, platform: request.platform, contactId: request.contactId,
-      contactTitle: request.contactTitle || '未命名联系人', materialId: staged.id, usedAt: new Date().toISOString(),
+      contactTitle: request.contactTitle || '未命名联系人', materialId: staged.id, usedAt: new Date().toISOString(), confirmation: 'inserted',
       ...(staged.type === 'text' ? { actualText: request.actualText || staged.text } : {}) };
     const index = records.findIndex(r => r.profileId === record.profileId && r.platform === record.platform && r.contactId === record.contactId && r.materialId === record.materialId);
     if (index >= 0) records[index] = record; else records.push(record);

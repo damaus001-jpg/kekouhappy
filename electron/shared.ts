@@ -1,5 +1,5 @@
-export type Platform = 'whatsapp' | 'telegram-a' | 'telegram-k' | 'signal';
-export type WorkspaceApp = 'whatsapp' | 'telegram' | 'signal';
+export type Platform = 'whatsapp' | 'telegram-a' | 'telegram-k' | 'signal' | 'opensms';
+export type WorkspaceApp = 'whatsapp' | 'telegram' | 'signal' | 'opensms';
 export type AppTheme = 'pink' | 'blackGold' | 'murongPurple' | 'clearWaterBlue';
 export type LastActiveProfileIds = Record<WorkspaceApp, string | null>;
 
@@ -131,6 +131,7 @@ export type TranslationCustomizationStatus = {
 };
 
 export function workspaceAppForPlatform(platform: Platform): WorkspaceApp {
+  if (platform === 'opensms') return 'opensms';
   if (platform === 'whatsapp') return 'whatsapp';
   if (platform === 'signal') return 'signal';
   return 'telegram';
@@ -138,7 +139,7 @@ export function workspaceAppForPlatform(platform: Platform): WorkspaceApp {
 
 export function defaultProfileTabOrder(profiles: ChatProfile[]) {
   const result: string[] = [];
-  for (const app of ['whatsapp', 'telegram', 'signal'] as const) {
+  for (const app of ['whatsapp', 'telegram', 'signal', 'opensms'] as const) {
     const appProfiles = profiles.filter((profile) => workspaceAppForPlatform(profile.platform) === app);
     const groupOrder = new Map<string, number>();
     for (const profile of appProfiles) {
@@ -187,7 +188,7 @@ export function sanitizeLastActiveProfileIds(
   const byId = new Map(profiles.map((profile) => [profile.id, profile]));
   const activeProfile = activeProfileId ? byId.get(activeProfileId) : undefined;
   const result = {} as LastActiveProfileIds;
-  for (const app of ['whatsapp', 'telegram', 'signal'] as const) {
+  for (const app of ['whatsapp', 'telegram', 'signal', 'opensms'] as const) {
     const candidate = typeof source[app] === 'string' ? source[app] : null;
     const candidateProfile = candidate ? byId.get(candidate) : undefined;
     if (candidateProfile && workspaceAppForPlatform(candidateProfile.platform) === app) {
@@ -817,7 +818,7 @@ export type ElectronApi = {
   getTranslationCustomization: () => Promise<TranslationCustomizationStatus>;
   saveTranslationCustomization: (editableChineseToEnglish: string) => Promise<TranslationCustomizationStatus>;
   resetTranslationCustomization: () => Promise<TranslationCustomizationStatus>;
-  generateSmartReplies: (request: SmartReplyRequest) => Promise<SmartReplyResult>;
+  copyChatToGpt: (request: SmartReplyRequest) => Promise<{ messageCount: number }>;
   authorizeTranslatedSend: (request: SendAuthorizationRequest) => Promise<SendAuthorizationResult>;
   verifySignalSentMessage: (request: SignalSentIntegrityRequest) => Promise<SignalSentIntegrityResult>;
   onSensitiveSendDialog: (handler: (dialog: { id: string; title: string; message: string; detail: string; buttons: string[]; cancelId: number }) => void) => () => void;

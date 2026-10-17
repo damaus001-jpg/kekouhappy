@@ -12,7 +12,7 @@ import {
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const mainSource = fs.readFileSync(path.join(projectRoot, 'electron', 'main.ts'), 'utf8');
 const translationStart = mainSource.indexOf('async function translateWithDeepSeek(');
-const translationEnd = mainSource.indexOf('\ntype SmartReplyGenerationOptions', translationStart);
+const translationEnd = mainSource.indexOf('\nlet gptHandoffBusy = false;', translationStart);
 assert.ok(translationStart >= 0 && translationEnd > translationStart);
 const translationSource = mainSource.slice(translationStart, translationEnd);
 

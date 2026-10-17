@@ -1,6 +1,50 @@
 'use strict';
 
-const { ipcRenderer } = require('electron');
+const { ipcRenderer, contextBridge } = require('electron');
+
+// The one fixed OpenSMS browser uses sessionStorage for its login, which is
+// otherwise lost with its WebContents. Restore before the site's router runs.
+if (location.protocol === 'https:' && ['www.opensms.cc', 'opensms.cc'].includes(location.hostname) && typeof process !== 'undefined' && process.isMainFrame) {
+  try {
+    const keys = ['sa-token', 'refresh_token', 'user'];
+    const saved = ipcRenderer.sendSync('opensms-login:read');
+    if (saved) {
+      for (const key of keys) {
+        if (typeof saved[key] === 'string' && saved[key]) sessionStorage.setItem(key, saved[key]);
+        else sessionStorage.removeItem(key);
+      }
+    }
+    const snapshot = () => Object.fromEntries(keys.map(key => [key, sessionStorage.getItem(key) || '']));
+    let last = '';
+    const persist = () => {
+      try {
+        const state = snapshot(), serialized = JSON.stringify(state);
+        if (serialized === last) return;
+        if (ipcRenderer.sendSync('opensms-login:write', state)) last = serialized;
+      } catch { /* Never put credentials into console or diagnostics. */ }
+    };
+    window.addEventListener('df-opensms-login-changed', persist);
+    // The site's actual login/logout calls use these methods. Notify our
+    // isolated preload synchronously so a login followed immediately by close
+    // is durable, without exposing Electron or an IPC function to the page.
+    contextBridge.executeInMainWorld({ func: () => {
+      for (const name of ['setItem', 'removeItem', 'clear']) {
+        const descriptor = Object.getOwnPropertyDescriptor(Storage.prototype, name);
+        const original = descriptor.value;
+        Object.defineProperty(Storage.prototype, name, { ...descriptor, value: function(...args) {
+          const result = Reflect.apply(original, this, args);
+          if (this === sessionStorage) window.dispatchEvent(new Event('df-opensms-login-changed'));
+          return result;
+        }});
+      }
+    }});
+    persist();
+    setInterval(persist, 250);
+    window.addEventListener('pagehide', persist);
+    window.addEventListener('beforeunload', persist);
+    document.addEventListener('visibilitychange', persist);
+  } catch { /* Keep login usable when local encryption or storage is unavailable. */ }
+}
 
 const guardVersion = '2026-10-01-webview-preload-phone-and-chinese-send-v3';
 const chinesePattern = /[\u3400-\u9fff]/;
@@ -9,6 +53,17 @@ const compositionTargets = new WeakSet();
 const blockedEnterTargets = new WeakSet();
 const shiftEnterUntil = new WeakMap();
 const blockedPhonePrompts = new WeakMap();
+// Fail closed during document startup, before the page-world SMS guard exists.
+// The established WA/TG handlers below remain scoped to their original hosts.
+function guardOpenSmsStartup(event) {
+  if (!['opensms.cc', 'www.opensms.cc'].includes(location.hostname)) return;
+  if (document.documentElement?.dataset.dfOpenSmsGuard === '2026-10-16-opensms-v1') return;
+  const element = event.target?.nodeType === Node.ELEMENT_NODE ? event.target : event.target?.parentElement;
+  const enter = event.key === 'Enter' && element?.closest?.('.im-chat #messageTextArea,.im-chat .mms-title-input input');
+  const send = element?.closest?.('.im-chat .im-chat-send button');
+  if (enter || send) { event.preventDefault(); event.stopImmediatePropagation(); }
+}
+for (const eventName of ['keydown', 'keypress', 'keyup', 'click']) window.addEventListener(eventName, guardOpenSmsStartup, true);
 function blockPhoneNumberSend(event, composer) {
   const text = readComposerPlainText(composer).trim();
   if (!/^[0-9]{1,11}$/.test(text)) return false;

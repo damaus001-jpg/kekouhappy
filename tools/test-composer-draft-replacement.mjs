@@ -13,7 +13,7 @@ const section = (start, end) => {
 };
 
 assert.match(appSource, /2026-10-11-telegram-stable-conversation-v60/);
-assert.match(appSource, /2026-10-01-signal-sensitive-state-v21/);
+assert.match(appSource, /2026-10-15-signal-emoji-scope-v22/);
 
 const sharedQueue = section('function enqueueComposerTranslation(', 'function enqueueMessageTranslationTask(');
 assert.doesNotMatch(appSource, /function enqueueTelegramComposerTranslation/);

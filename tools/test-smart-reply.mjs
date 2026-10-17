@@ -12,13 +12,14 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const mainSource = fs.readFileSync(path.join(root, 'electron', 'main.ts'), 'utf8');
 const preloadSource = fs.readFileSync(path.join(root, 'electron', 'preload.ts'), 'utf8');
 const smartReplyMainSource = mainSource.slice(
-  mainSource.indexOf('async function generateSmartRepliesWithDeepSeek'),
+  mainSource.indexOf('async function copyChatToGpt'),
   mainSource.indexOf('function toggleMainWindowSize')
 );
-assert.match(mainSource, /trustedHandle\('smart-reply:generate', true,/);
-assert.match(preloadSource, /generateSmartReplies:[\s\S]{0,160}smart-reply:generate/);
-assert.match(smartReplyMainSource, /response_format:\s*\{\s*type:\s*'json_object'\s*\}/);
-assert.match(smartReplyMainSource, /smartReplyRequestTimeoutMs/);
+assert.match(mainSource, /trustedHandle\('smart-reply:copy-to-gpt', true,/);
+assert.match(preloadSource, /copyChatToGpt:[\s\S]{0,160}smart-reply:copy-to-gpt/);
+assert.match(smartReplyMainSource, /handoffChatToGpt/);
+assert.doesNotMatch(smartReplyMainSource, /fetch\(|deepseek|loadSmartReplyPrompt|assistantContext/i);
+assert.doesNotMatch(mainSource, /generateSmartRepliesWithDeepSeek/);
 assert.doesNotMatch(smartReplyMainSource, /appendTranslateRequestLog|appendFile|console\./);
 const replacementSource = mainSource.slice(
   mainSource.indexOf("trustedHandle('client-license:replace'"),
@@ -31,12 +32,9 @@ assert.match(mainSource, /message\.type === 'smartReply\.request'/);
 assert.match(mainSource, /activeConversation\.conversationId === request\.conversationId/);
 assert.doesNotMatch(mainSource, /signalSmartReplyRequestTtlMs|pending\.acceptedAt/);
 assert.match(mainSource, /requests\.clear\(\);[\s\S]{0,120}requests\.set\(pending\.requestId, pending\)/);
-assert.match(mainSource, /replaceInFlightForProfile: true/);
-assert.match(mainSource, /previous\?\.controller\.abort\(\)/);
-assert.match(mainSource, /smartReplyInFlightProfiles\.get\(profileGate\)\?\.token === token/);
 assert.match(mainSource, /event: 'smart-reply-request'[\s\S]{0,120}stage: 'accepted'/);
-assert.match(mainSource, /type: 'smartReply\.result'[\s\S]{0,240}trigger: pending\.trigger[\s\S]{0,120}replies: result\.replies/);
-assert.match(mainSource, /const code = signalSmartReplyErrorCode\(error\)[\s\S]{0,320}type: 'smartReply\.error'[\s\S]{0,240}code/);
+assert.match(mainSource, /stage: 'copied-to-gpt'/);
+assert.match(mainSource, /type: 'smartReply\.error'[\s\S]{0,240}trigger: pending\.trigger/);
 assert.match(mainSource, /pendingSignalSmartReplyRequests\.delete\(appId\)/);
 const signalSmartReplyResponder = mainSource.slice(
   mainSource.indexOf('async function respondToSignalSmartReplyRequest'),

@@ -64,7 +64,7 @@ assert.deepEqual(
     'sg-1',
     manualOrder
   ),
-  { whatsapp: 'wa-1', telegram: 'tg-1', signal: 'sg-1' },
+  { whatsapp: 'wa-1', telegram: 'tg-1', signal: 'sg-1', opensms: null },
   'last-active ids must stay inside their own application'
 );
 

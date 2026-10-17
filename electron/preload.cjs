@@ -63,7 +63,7 @@ const api = {
   saveTranslationCustomization: (editableChineseToEnglish) =>
     ipcRenderer.invoke('translation-customization:save', editableChineseToEnglish),
   resetTranslationCustomization: () => ipcRenderer.invoke('translation-customization:reset'),
-  generateSmartReplies: (request) => ipcRenderer.invoke('smart-reply:generate', request),
+  copyChatToGpt: (request) => ipcRenderer.invoke('smart-reply:copy-to-gpt', request),
   authorizeTranslatedSend: (request) => ipcRenderer.invoke('send-integrity:authorize', request),
   verifySignalSentMessage: (request) => ipcRenderer.invoke('signal:verify-sent-integrity', request),
   onSensitiveSendDialog: (handler) => {

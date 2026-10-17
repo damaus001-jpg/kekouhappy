@@ -238,9 +238,9 @@ for (const [request, label] of [
     ],
     triggerMessageId: `00000000-0000-4000-8000-${String(5).padStart(12, '0')}`
   }), 'noncanonical message order'],
-  [smartReplyRequest({ messages: Array.from({ length: 9 }, (_, index) =>
-    canonicalSmartReplyMessage(10 + index, `Message ${index}`, index === 8 ? 'incoming' : 'outgoing', index)
-  ) }), 'more than eight messages'],
+  [smartReplyRequest({ messages: Array.from({ length: 19 }, (_, index) =>
+    canonicalSmartReplyMessage(10 + index, `Message ${index}`, index === 18 ? 'incoming' : 'outgoing', index)
+  ) }), 'more than eighteen messages'],
   [smartReplyRequest({ unexpected: true }), 'undeclared field']
 ]) {
   rejects(

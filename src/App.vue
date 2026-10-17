@@ -1,19 +1,23 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import DevelopmentDiagnostics from './DevelopmentDiagnostics.vue';
-import AssistantLibraryPanel from './components/AssistantLibraryPanel.vue';
+import AssistantLibraryPanel from './components/CustomAssistantPanel.vue';
 import { buildAssistantCatalog } from './assistant-material-catalog';
 import { buildAssistantRuntimeScript } from './assistant-material-runtime';
 import type { AssistantRuntimeSnapshot } from './assistant-material-runtime';
 import type { AssistantCatalog, AssistantMaterial, AssistantUsage, AssistantStagedMaterial } from '../electron/assistant-material-types';
 import assistantFloatIcon from './assets/xiaozhi-assistant-transparent.png';
 import { buildConversationExportScript,mergeConversationExportRows,unwrapConversationExportResult } from './conversation-export-runtime';
+import { buildSignalGptButtonScript } from './gpt-handoff-runtime';
+import { buildSignalEmojiPickerScript } from './signal-emoji-picker-runtime';
+import { buildOpenSmsScript } from './opensms-runtime';
+import opensmsIcon from './assets/opensms-bubble.svg';
 import { installTranslationLayoutWatchersFromDom } from './translation-layout-runtime';
 import type { ExportSnapshot } from './conversation-export-runtime';
 import type { ConversationExportMode,ConversationExportRow } from '../electron/conversation-export-types';
 const assistantOpen = ref(false);
 import { withTranslationDeadline } from './translation-recovery';
-import { version as clientVersion } from '../package.json';
+import { clientVersion } from './client-version';
 let diagnosticMonitoringEnabled = false;
 let diagnosticQueueTimer: ReturnType<typeof setInterval> | undefined;
 function diagnosticEvent(stage: string, details: Record<string, unknown> = {}) {
@@ -118,6 +122,7 @@ type MessageCandidate = {
 
 type UnreadSnapshot = {
   count: number;
+  ready?: boolean;
   titleCount?: number;
   badgeCount?: number;
 };
@@ -197,7 +202,8 @@ const profileTabOrder = ref<string[]>([]);
 const lastActiveProfileIds = ref<LastActiveProfileIds>({
   whatsapp: null,
   telegram: null,
-  signal: null
+  signal: null,
+  opensms: null
 });
 const configState = ref<AppConfig | null>(null);
 const currentApp = ref<RuntimeApp>('whatsapp');
@@ -205,9 +211,11 @@ const platformCatalog = ref<PlatformInfo[]>([
   { platform: 'whatsapp', label: 'WhatsApp', url: 'https://web.whatsapp.com/' },
   { platform: 'telegram-a', label: 'Telegram A', url: 'https://web.telegram.org/a/' },
   { platform: 'telegram-k', label: 'Telegram K', url: 'https://web.telegram.org/k/' },
-  { platform: 'signal', label: 'Signal', url: '' }
+  { platform: 'signal', label: 'Signal', url: '' },
+  { platform: 'opensms', label: '打新增', url: 'https://www.opensms.cc/#/index/chat' }
 ]);
 const isCreatingProfile = ref(false);
+const openSmsError = ref('');
 const createDialogOpen = ref(false);
 const newProfileName = ref('');
 const newProfileGroup = ref('');
@@ -246,6 +254,7 @@ const unreadPollIntervals = new Map<string, {
   initialTimer: ReturnType<typeof setTimeout>;
   intervalTimer?: ReturnType<typeof setInterval>;
 }>();
+const unreadScansInFlight = new Set<string>();
 const signalComposerInstallLogged = new Set<string>();
 const signalTranslationRuntimeStarted = new Set<string>();
 const signalDiagnosticLogCache = new Map<string, { status: string; at: number }>();
@@ -587,13 +596,15 @@ const lockScreenHint = computed(() => {
 const appTiles: AppTile[] = [
   { app: 'whatsapp', platform: 'whatsapp', label: 'WhatsApp', short: 'WA', color: '#22c55e', icon: multiWhatsappIcon },
   { app: 'telegram', platform: 'telegram-k', label: 'Telegram', short: 'TG', color: '#35a8ff', icon: multiTelegramIcon },
-  { app: 'signal', platform: 'signal', label: 'Signal', short: 'SG', color: '#5361ff', icon: multiSignalIcon }
+  { app: 'signal', platform: 'signal', label: 'Signal', short: 'SG', color: '#5361ff', icon: multiSignalIcon },
+  { app: 'opensms', platform: 'opensms', label: '打新增', short: 'SMS', color: '#25bd68', icon: opensmsIcon }
 ];
 
 const activeProfile = computed(() => profiles.value.find((profile) => profile.id === activeProfileId.value) ?? null);
 const activeSignalProfile = computed(() => (activeProfile.value?.platform === 'signal' ? activeProfile.value : null));
 const hasBlockingModal = computed(() => Boolean(
   lockScreenVisible.value ||
+  activeSensitiveDialog.value ||
   lockSetupDialogStage.value ||
   remoteGuardPanelVisible.value ||
   (signedIn.value && activePanel.value === 'session' && lockGuideVisible.value && !lockScreenStatus.value?.enabled) ||
@@ -639,6 +650,7 @@ const workspaceTabs = computed<RuntimeTab[]>(() => {
     });
 });
 const unreadCountsByApp = computed<Record<RuntimeApp, number>>(() => ({
+  opensms: profiles.value.filter(p=>p.platform==='opensms').reduce((sum,p)=>sum+unreadCountForProfile(p.id),0),
   whatsapp: profiles.value
     .filter((profile) => appForPlatform(profile.platform) === 'whatsapp')
     .reduce((sum, profile) => sum + unreadCountForProfile(profile.id), 0),
@@ -651,7 +663,7 @@ const unreadCountsByApp = computed<Record<RuntimeApp, number>>(() => ({
 }));
 const totalUnreadCount = computed(() => (
   signedIn.value
-    ? unreadCountsByApp.value.whatsapp + unreadCountsByApp.value.telegram + unreadCountsByApp.value.signal
+    ? unreadCountsByApp.value.whatsapp + unreadCountsByApp.value.telegram + unreadCountsByApp.value.signal + unreadCountsByApp.value.opensms
     : 0
 ));
 const hasActiveRenderableProfile = computed(() => Boolean(activeProfile.value && activeWebUrl.value));
@@ -675,7 +687,7 @@ const activeSignalDiagnosticStatus = computed(() => (activeProfileId.value ? sig
 const activeWebComposerDiagnosticStatus = computed(() => (activeProfileId.value ? webComposerDiagnosticStatus.value[activeProfileId.value] ?? '' : ''));
 const canUseTranslatorComposer = computed(() => {
   const platform = activeProfile.value?.platform;
-  return platform === 'whatsapp' || platform === 'telegram-a' || platform === 'telegram-k';
+  return platform === 'whatsapp' || platform === 'telegram-a' || platform === 'telegram-k' || platform === 'opensms';
 });
 const memoryUsedPercent = computed(() => Math.min(100, Math.max(0, memoryStatus.value?.usedPercent ?? 0)));
 const memoryFreeText = computed(() => (memoryStatus.value ? `${formatBytes(memoryStatus.value.freeBytes)} 可用` : '读取中'));
@@ -1313,6 +1325,7 @@ function isTelegramPlatform(platform: Platform): boolean {
 }
 
 function platformForApp(app: RuntimeApp): Platform {
+  if (app === 'opensms') return 'opensms';
   if (app === 'whatsapp') return 'whatsapp';
   if (app === 'signal') return 'signal';
   return 'telegram-k';
@@ -1357,6 +1370,7 @@ function selectRuntimeApp(app: RuntimeApp) {
     if (app === 'signal') void openSignalProfileInWorkspace(nextActiveId);
     void refreshUnreadCount(nextActiveId);
   }
+  if (app === 'opensms' && !nextActiveId) void openOpenSms();
   if (app !== 'signal') void nextTick(() => scheduleSignalWorkspaceSyncBurst());
 }
 
@@ -1488,6 +1502,7 @@ function buildSignalShellPolishScript(theme: ThemeName) {
     }
   \`;
   if (style.textContent !== nextStyle) style.textContent = nextStyle;
+  ${buildSignalGptButtonScript()};
   return true;
 })()
 `;
@@ -2014,18 +2029,31 @@ function handleLockScreenKeydown(event: KeyboardEvent) {
 }
 
 function nextProfileName(app: RuntimeApp) {
+  if(app==='opensms')return '打新增';
   const prefix = app === 'whatsapp' ? 'WS' : app === 'telegram' ? 'TG' : 'SG';
   const next = profiles.value.filter((profile) => appForPlatform(profile.platform) === app).length + 1;
   return `${prefix}${String(next).padStart(2, '0')}`;
 }
 
 function openCreateProfileDialog() {
+  if(currentApp.value==='opensms'){void openOpenSms();return;}
   isCreatingProfile.value = false;
   createProfileError.value = '';
   newProfileName.value = nextProfileName(currentApp.value);
   newProfileGroup.value = '';
   createDialogOpen.value = true;
   void nextTick(() => scheduleSignalWorkspaceSyncBurst());
+}
+
+async function openOpenSms(){
+  if(isCreatingProfile.value)return;
+  isCreatingProfile.value=true;openSmsError.value='';
+  try{
+    const profile=await window.chatTranslator.createProfile('opensms','打新增','打新增');
+    const config=await window.chatTranslator.getConfig();
+    applyConfig({...config,activeProfileId:profile.id});currentApp.value='opensms';activePanel.value='session';
+  }catch(error){openSmsError.value=error instanceof Error?error.message:String(error);}
+  finally{isCreatingProfile.value=false;}
 }
 
 function closeCreateProfileDialog() {
@@ -3135,6 +3163,7 @@ function isLatestSignalMessageCandidate(candidate: MessageCandidate) {
 }
 
 function isLatestVisibleMessageCandidate(app: RuntimeApp, candidate: MessageCandidate) {
+  if (app === 'opensms') return isBaseLatestVisibleCandidate(candidate);
   if (app === 'whatsapp') return isLatestWhatsAppMessageCandidate(candidate);
   if (app === 'telegram') return isLatestTelegramMessageCandidate(candidate);
   return isLatestSignalMessageCandidate(candidate);
@@ -3427,7 +3456,7 @@ async function sendConfirmedSensitiveText(profile: ChatProfile, text: string, co
     ? new Set<string>()
     : await snapshotOutgoingMessageKeys(profile).catch(() => new Set<string>());
   setComposerStatus(profile.id, '发送中');
-  const sendResult = await sendNativeComposer(profile.id, text, true);
+  const sendResult = await sendNativeComposer(profile.id, text, true, normalizedSignature);
   diagnosticEvent('sensitive:send-result', { profileId: profile.id, platform: profile.platform, status: sendResult?.ok ? 'accepted' : 'rejected', reason: sendResult?.reason || '', version: sendResult?.method || '' });
   await clearSensitiveSendPending(profile.id);
   if (!sendResult?.ok) {
@@ -3510,11 +3539,31 @@ async function handleInjectedComposerEvent(
   }
 
   if (action === 'debug') {
+    if (profile.platform === 'opensms') {
+      try {
+        const details = JSON.parse(text || '{}') as Record<string, unknown>;
+        if (details.kind === 'opensms-enter') {
+          void window.chatTranslator?.appendSignalDebugLog?.({
+            type: 'opensms-enter-key', profileId, profileName: profile.name,
+            decision: String(details.decision || '').slice(0, 48),
+            enabled: details.enabled === true, hasConversation: details.hasConversation === true,
+            hasComposer: details.hasComposer === true, textLength: Number(details.textLength) || 0,
+            hasChinese: details.hasChinese === true, hasEnglish: details.hasEnglish === true,
+            hasPending: details.hasPending === true, hasReady: details.hasReady === true,
+            composing: details.composing === true, keyCode: Number(details.keyCode) || 0,
+            repeat: details.repeat === true, targetMatches: details.targetMatches === true,
+            targetTag: String(details.targetTag || '').slice(0, 30), targetClass: String(details.targetClass || '').slice(0, 100),
+            activeTag: String(details.activeTag || '').slice(0, 30), activeClass: String(details.activeClass || '').slice(0, 100),
+            editorTag: String(details.editorTag || '').slice(0, 30), editorClass: String(details.editorClass || '').slice(0, 100)
+          });
+        }
+      } catch { /* Ignore malformed, non-diagnostic debug events. */ }
+    }
     return;
   }
 
   if (action === 'smart-reply-request') {
-    if (profile.platform === 'signal' || activeProfileId.value !== profileId || !text || text.length > 32_000) return;
+    if (profile.platform === 'signal' || activeProfileId.value !== profileId || !text || text.length > 100_000) return;
     let payload: Record<string, unknown>;
     try {
       payload = JSON.parse(text) as Record<string, unknown>;
@@ -3523,7 +3572,7 @@ async function handleInjectedComposerEvent(
     }
     const latestMessageKey = typeof payload.latestMessageKey === 'string' ? payload.latestMessageKey.trim() : '';
     if (!/^smart-[a-z0-9]+-[a-z0-9]+$/i.test(latestMessageKey)) return;
-    if (!Array.isArray(payload.messages) || payload.messages.length < 1 || payload.messages.length > 8) return;
+    if (!Array.isArray(payload.messages) || payload.messages.length < 1 || payload.messages.length > 18) return;
     const messages: SmartReplyMessage[] = [];
     let totalLength = 0;
     for (const item of payload.messages) {
@@ -3533,7 +3582,7 @@ async function handleInjectedComposerEvent(
       const value = typeof record.text === 'string' ? normalizeCacheText(record.text) : '';
       if (!value || value.length > 4000 || !/[A-Za-z]{2,}/.test(value) || hasChineseText(value)) return;
       totalLength += value.length;
-      if (totalLength > 8000) return;
+      if (totalLength > 72_000) return;
       messages.push({ speaker: record.speaker, text: value });
     }
     if (messages.at(-1)?.speaker !== 'other') return;
@@ -3545,9 +3594,9 @@ async function handleInjectedComposerEvent(
     if (smartReplyInFlightProfiles.has(stateKey)) return;
     smartReplyCollapsedKeys.delete(stateKey);
     smartReplyInFlightProfiles.set(stateKey, { latestMessageKey, conversationSignature: effectiveSignature });
-    setComposerStatus(profileId, '正在生成 3 组智能回复');
+    setComposerStatus(profileId, '正在复制聊天记录');
     try {
-      const result = await window.chatTranslator.generateSmartReplies({
+      const copied = await window.chatTranslator.copyChatToGpt({
         requestId: requestId || createTranslationRequestId('smart-reply', profileId),
         userId: deepSeekUserId(profileId),
         profileId,
@@ -3558,45 +3607,20 @@ async function handleInjectedComposerEvent(
         outputLanguage: 'en-US',
         allowSensitiveEcho: false
       });
-      const currentSignature = normalizeSmartReplyConversationSignature(composerConversationSignatures.get(profileId) || '');
-      if (effectiveSignature && currentSignature !== effectiveSignature) return;
-      if (result.schema_version !== 'df.smart_reply.output.v1' || result.replies.length !== 3) {
-        throw new Error('smart reply result invalid');
-      }
-      const currentUi = await executeProfileScript<SmartReplyUiInstallResult | false>(
-        profileId,
-        buildSmartReplyUiInstallScript(appForPlatform(profile.platform))
-      ).catch((): false => false);
-      if (
-        !currentUi || currentUi.state !== 'eligible' || !currentUi.eligibleMessageKeys.includes(latestMessageKey) ||
-        normalizeSmartReplyConversationSignature(currentUi.conversationSignature) !== effectiveSignature
-      ) {
-        setComposerStatus(profileId, '最新气泡已变化，本次智能回复已丢弃');
-        return;
-      }
-      smartReplyResults.set(stateKey, {
-        latestMessageKey,
-        conversationSignature: effectiveSignature,
-        replies: result.replies,
-        at: Date.now()
-      });
-      const applied = await executeProfileScript<boolean>(profileId, buildSmartReplyUiStateScript({
-        latestMessageKey,
-        conversationSignature: effectiveSignature,
-        state: smartReplyCollapsedKeys.has(stateKey) ? 'collapse' : 'success',
-        replies: result.replies
-      }));
-      setComposerStatus(profileId, applied ? '已生成 3 组智能回复' : '已生成，滚动回最新气泡后会自动恢复');
+      await executeProfileScript<boolean>(profileId, buildSmartReplyUiStateScript({
+        latestMessageKey, conversationSignature: effectiveSignature, state: 'idle'
+      })).catch(() => false);
+      setComposerStatus(profileId, '已复制 ' + copied.messageCount + ' 条聊天记录，请在 GPT 粘贴并发送');
     } catch (error) {
       const errorUiApplied = await executeProfileScript<boolean>(profileId, buildSmartReplyUiStateScript({
         latestMessageKey,
         conversationSignature: effectiveSignature,
         state: 'error',
-        message: '智能回复暂时不可用，点击重新生成'
+        message: '复制失败，请重试'
       })).then(Boolean).catch(() => false);
       void window.chatTranslator.appendSignalDebugLog?.({
         profileId,
-        type: 'smart-reply-failed',
+        type: 'copy-to-gpt-failed',
         platform: profile.platform,
         requestIdPresent: Boolean(requestId),
         messageCount: messages.length,
@@ -3604,7 +3628,7 @@ async function handleInjectedComposerEvent(
         errorUiApplied,
         error: (error instanceof Error ? error.message : String(error)).replace(/[\r\n]+/g, ' ').slice(0, 300)
       });
-      setComposerStatus(profileId, '智能回复生成失败，请重试');
+      setComposerStatus(profileId, '聊天记录复制失败，请重试');
     } finally {
       const inFlight = smartReplyInFlightProfiles.get(stateKey);
       if (inFlight?.latestMessageKey === latestMessageKey && inFlight.conversationSignature === effectiveSignature) {
@@ -3672,7 +3696,10 @@ async function handleInjectedComposerEvent(
       ? payload.direction
       : 'unknown';
     const messagePart = payload.messagePart === 'quote' ? 'quote' : 'body';
+    const smsCandidate=profile.platform==='opensms'?(await executeProfileScript<MessageCandidate[]>(profileId,buildMessageScanScript('opensms',{limit:120,includeAlreadyTranslated:true})))?.find(item=>item.key===key&&item.text===sourceText):undefined;
+    if(profile.platform==='opensms'&&!smsCandidate)return;
     const enqueued = enqueueMessageTranslationTask(profile, {
+      ...smsCandidate,
       key,
       text: sourceText,
       direction,
@@ -3795,11 +3822,25 @@ async function handleInjectedComposerEvent(
   if (action === 'send') {
     const currentSignature = composerConversationSignatures.get(profileId) || '';
     const stateKey = composerStateKey(profileId, conversationSignature || currentSignature);
+    const sendConversation = normalizeComposerConversationSignature(conversationSignature || currentSignature);
+    if (profile.platform === 'signal') {
+      const target = await waitForSignalComposerTarget(profileId, text, sendConversation);
+      void window.chatTranslator.appendSignalDebugLog?.({
+        type: 'signal-composer-target-preflight', profileId, profileName: profile.name, platform: profile.platform,
+        requestId, ok: Boolean(target?.ok), reason: target?.reason || '', attempts: target?.attempts || 0,
+        count: target?.count, matchingRoots: target?.matchingRoots, textLength: text.length
+      });
+      if (!target?.ok) {
+        setComposerStatus(profileId, 'Signal 输入框正在恢复，英文草稿已保留');
+        await setInjectedComposerState(profileId, { status: '窗口布局恢复中，英文草稿已保留' });
+        return;
+      }
+    }
     const authorization = await window.chatTranslator.authorizeTranslatedSend({
       requestId,
       profileId,
       platform: profile.platform,
-      conversationSignature: normalizeComposerConversationSignature(conversationSignature || currentSignature),
+      conversationSignature: sendConversation,
       text
     });
     if (profile.platform === 'signal' || isTelegramPlatform(profile.platform)) {
@@ -3830,9 +3871,10 @@ async function handleInjectedComposerEvent(
       : await snapshotOutgoingMessageKeys(profile).catch(() => new Set<string>());
     setComposerStatus(profileId, '发送中');
     if (profile.platform === 'signal') await setInjectedComposerState(profileId, { status: '发送中' });
-    const sendResult = await sendNativeComposer(profileId, text);
+    const expectedSendConversation = normalizeComposerConversationSignature(conversationSignature || currentSignature);
+    const sendResult = await sendNativeComposer(profileId, text, false, expectedSendConversation);
     if (profile.platform === 'signal' || isTelegramPlatform(profile.platform)) {
-      void window.chatTranslator.appendSignalDebugLog?.({
+    void window.chatTranslator.appendSignalDebugLog?.({
         profileId,
         profileName: profile.name,
         platform: profile.platform,
@@ -3841,6 +3883,11 @@ async function handleInjectedComposerEvent(
         ok: Boolean(sendResult?.ok),
         method: sendResult?.method || '',
         reason: sendResult?.reason || '',
+        count: sendResult?.count,
+        candidates: sendResult?.candidates,
+        matchingRoots: sendResult?.matchingRoots,
+        namedCandidates: sendResult?.namedCandidates,
+        editableSummary: sendResult?.editableSummary,
         textLength: text.length
       });
     }
@@ -3861,10 +3908,26 @@ async function handleInjectedComposerEvent(
     } else {
       setComposerFeedbackState(profileId, '');
     }
-    await setInjectedComposerState(profileId, { draft: '', status: '', translated: '', reviewStatus: 'hidden', reviewText: '' });
-    setComposerStatus(profileId, sendResult?.ok ? '' : '未发送成功，内容已保留，请再次按回车重试');
+    await setInjectedComposerState(profileId, { draft: '', status: '', translated: '', reviewStatus: 'hidden', reviewText: '', ...(profile.platform === 'signal' ? { expectedConversationSignature: expectedSendConversation } : {}) });
+    setComposerStatus(profileId, sendResult?.ok ? '' : /signal-conversation|sms-conversation|sms-focus/.test(sendResult?.reason || '')
+      ? '联系人或输入框已变化，发送流程已停止，请核对当前会话'
+      : '未发送成功，内容已保留，请再次按回车重试');
     return;
   }
+}
+
+async function waitForSignalComposerTarget(profileId: string, text: string, conversationSignature: string) {
+  const delays = [0, ...Array.from({ length: 24 }, () => 200)];
+  let last: { ok?: boolean; reason?: string; count?: number; matchingRoots?: number } | undefined;
+  for (let index = 0; index < delays.length; index += 1) {
+    if (delays[index]) await new Promise(resolve => window.setTimeout(resolve, delays[index]));
+    last = await executeProfileScript<{ ok?: boolean; reason?: string; count?: number; matchingRoots?: number }>(
+      profileId,
+      buildComposerScript('probeSignalTarget', text, true, false, 'default', '', { platform: 'signal', conversationSignature })
+    ).catch(() => undefined);
+    if (last?.ok) return { ...last, attempts: index + 1 };
+  }
+  return { ...(last || {}), ok: false, reason: last?.reason || 'signal-composer-target-not-ready', attempts: delays.length };
 }
 
 async function snapshotOutgoingMessageKeys(profile: ChatProfile) {
@@ -3964,7 +4027,7 @@ async function writeNativeComposer(
   const profile = profiles.value.find((item) => item.id === profileId);
   const webview = profile && appForPlatform(profile.platform) !== 'signal' ? getWebviewByProfileId(profileId) : null;
   const isTelegramProfile = profile?.platform === 'telegram-a' || profile?.platform === 'telegram-k';
-  if (webview && options.instant && !isTelegramProfile) {
+  if (webview && options.instant && !isTelegramProfile && profile?.platform !== 'opensms') {
     const pasted = await pasteTextIntoNativeComposer(webview, text);
     if (pasted) {
       void window.chatTranslator?.appendSignalDebugLog?.({
@@ -4051,14 +4114,16 @@ async function pulseNativeTyping(profileId: string) {
   await executeProfileScript(profileId, buildInjectedComposerScript('focusNative'));
 }
 
-async function sendNativeComposer(profileId: string, expectedText = '', allowSensitiveExactText = false) {
+async function sendNativeComposer(profileId: string, expectedText = '', allowSensitiveExactText = false, conversationSignature = '') {
   const profile = profiles.value.find((item) => item.id === profileId);
   const webview = profile && appForPlatform(profile.platform) !== 'signal' ? getWebviewByProfileId(profileId) : null;
-  const result = await executeProfileScript<{ ok?: boolean; method?: string; reason?: string }>(
+  const result = await executeProfileScript<{ ok?: boolean; method?: string; reason?: string; count?: number; candidates?: number; matchingRoots?: number; namedCandidates?: number; editableSummary?: Array<Record<string, unknown>> }>(
     profileId,
-    buildComposerScript(allowSensitiveExactText ? 'sendExact' : 'send', expectedText, true)
+    buildComposerScript(allowSensitiveExactText ? 'sendExact' : 'send', expectedText, true, false, 'default', '', {
+      platform: profile?.platform || 'whatsapp', conversationSignature
+    })
   );
-  if (result?.ok || !webview || typeof webview.sendInputEvent !== 'function') return result;
+  if (result?.ok || profile?.platform==='opensms' || !webview || typeof webview.sendInputEvent !== 'function') return result;
   const currentText = await webview.executeJavaScript(buildNativeComposerTextScript(), true).catch(() => '') as string;
   const canonical = (value: string) => value.replace(/\r\n?/g, '\n').replace(/\u00a0/g, ' ').normalize('NFC').trim();
   if (canonical(currentText) !== canonical(expectedText) || hasChineseText(currentText) || /^[0-9]{1,11}$/.test(currentText.trim())) return result;
@@ -4189,7 +4254,7 @@ function scheduleComposerEventPoll(profileId: string) {
       }
       const nextDelayMs = currentProfile.platform === 'signal'
         ? (activeProfileId.value === profileId ? 80 : 1000)
-        : isTelegramPlatform(currentProfile.platform) && activeProfileId.value === profileId
+        : (isTelegramPlatform(currentProfile.platform)||currentProfile.platform==='opensms') && activeProfileId.value === profileId
           ? 80
           : 300;
       const timer = window.setTimeout(() => void tick(), nextDelayMs);
@@ -4199,7 +4264,7 @@ function scheduleComposerEventPoll(profileId: string) {
 
   const profile = profiles.value.find((item) => item.id === profileId);
   const firstDelayMs = profile && (
-    profile.platform === 'signal' || isTelegramPlatform(profile.platform)
+    profile.platform === 'signal' || isTelegramPlatform(profile.platform) || profile.platform==='opensms'
   ) && activeProfileId.value === profileId
     ? 80
     : 300;
@@ -4213,7 +4278,7 @@ async function probeWebComposer(profileId: string) {
   if (!profile || appForPlatform(profile.platform) === 'signal') return;
   const runtime = getRuntimeScriptExecutor(profile);
   if (!runtime) return;
-  const platformLabel = appForPlatform(profile.platform) === 'telegram' ? 'Telegram' : 'WhatsApp';
+  const platformLabel = profile.platform==='opensms'?'打新增':appForPlatform(profile.platform) === 'telegram' ? 'Telegram' : 'WhatsApp';
   try {
     const result = await runtime.execute<{
       guard?: string;
@@ -4221,6 +4286,12 @@ async function probeWebComposer(profileId: string) {
       click?: string;
       queueLength?: number;
       hasComposer?: boolean;
+      locationHash?: string;
+      editor?: { tag?: string; className?: string; role?: string; contenteditable?: string; parentTag?: string; parentClass?: string } | null;
+      active?: { tag?: string; className?: string; role?: string; contenteditable?: string } | null;
+      editableCandidates?: unknown[];
+      sendButtonCandidates?: Array<{ tag?: string; className?: string; role?: string }>;
+      iframeCount?: number;
       activeTag?: string;
       activeRole?: string;
       activeEditable?: string;
@@ -4281,6 +4352,25 @@ async function probeWebComposer(profileId: string) {
     const last = webComposerDiagnosticLogCache.get(profileId);
     if (last?.status !== status || now - last.at > 1500) {
       webComposerDiagnosticLogCache.set(profileId, { status, at: now });
+      if (profile.platform === 'opensms') {
+        const editor = result?.editor || {};
+        const active = result?.active || {};
+        const send = Array.isArray(result?.sendButtonCandidates) ? result.sendButtonCandidates[0] || {} : {};
+        void window.chatTranslator?.appendSignalDebugLog?.({
+          type: 'opensms-dom-probe', profileId, profileName: profile.name, platform: profile.platform,
+          guard: String(result?.guard || '').slice(0, 80), hasComposer: result?.hasComposer === true,
+          locationHash: String(result?.locationHash || '').slice(0, 80),
+          editorTag: String(editor.tag || '').slice(0, 30), editorClass: String(editor.className || '').slice(0, 120),
+          editorRole: String(editor.role || '').slice(0, 40), editorContenteditable: String(editor.contenteditable || '').slice(0, 20),
+          editorParentTag: String(editor.parentTag || '').slice(0, 30), editorParentClass: String(editor.parentClass || '').slice(0, 100),
+          activeTag: String(active.tag || '').slice(0, 30), activeClass: String(active.className || '').slice(0, 120),
+          activeRole: String(active.role || '').slice(0, 40), activeContenteditable: String(active.contenteditable || '').slice(0, 20),
+          editableCount: Array.isArray(result?.editableCandidates) ? result.editableCandidates.length : 0,
+          sendButtonCount: Array.isArray(result?.sendButtonCandidates) ? result.sendButtonCandidates.length : 0,
+          sendButtonTag: String(send.tag || '').slice(0, 30), sendButtonClass: String(send.className || '').slice(0, 120),
+          iframeCount: Number(result?.iframeCount) || 0
+        });
+      }
       void window.chatTranslator?.appendSignalDebugLog?.({
         type: 'web-composer-probe',
         profileId,
@@ -4377,17 +4467,19 @@ function buildMediaCaptionComposerSource() {
 }
 
 function buildComposerScript(
-  action: 'write' | 'clearProxy' | 'send' | 'sendExact' | 'pulse',
+  action: 'write' | 'clearProxy' | 'send' | 'sendExact' | 'pulse' | 'probeSignalTarget',
   text: string,
   instant: boolean,
   preserveFocus = false,
   composerKind: ComposerKind = 'default',
-  requestId = ''
+  requestId = '',
+  sendTarget?: { platform: Platform; conversationSignature: string }
 ) {
-  const payload = JSON.stringify({ action, text, instant, preserveFocus, composerKind, requestId });
+  const payload = JSON.stringify({ action, text, instant, preserveFocus, composerKind, requestId, sendTarget });
   return `
 (async () => {
   const payload = ${payload};
+  if (location.hostname==='opensms.cc'||location.hostname==='www.opensms.cc') return window.__dfOpenSms?.apply({action:'composer',payload}) || {ok:false,reason:'sms-runtime-unavailable'};
 ${buildComposerPlainTextReaderSource()}
 ${buildMediaCaptionComposerSource()}
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -4421,7 +4513,41 @@ ${buildMediaCaptionComposerSource()}
     if (/input-field-input-fake|input-message-input-fake|df-translator|df-composer-state/.test(className)) return false;
     return true;
   };
+  const isSignalSend = payload.sendTarget?.platform === 'signal' && (payload.action === 'send' || payload.action === 'sendExact' || payload.action === 'probeSignalTarget');
+  const expectedSignalId = /^signal:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(payload.sendTarget?.conversationSignature || '')?.[1]?.toLowerCase() || '';
+  const currentSignalRoot = () => {
+    if (!expectedSignalId) return null;
+    const roots = Array.from(document.querySelectorAll('.CompositionArea[data-df-signal-conversation-id]')).filter(isVisible);
+    return roots.length === 1 && roots[0].getAttribute('data-df-signal-conversation-id')?.toLowerCase() === expectedSignalId ? roots[0] : null;
+  };
+  const signalSendTargetStats = () => {
+    const roots = Array.from(document.querySelectorAll('.CompositionArea[data-df-signal-conversation-id]')).filter(isVisible);
+    const matchingRoots = roots.filter(root => root.getAttribute('data-df-signal-conversation-id')?.toLowerCase() === expectedSignalId);
+    const named = matchingRoots.flatMap(root => Array.from(root.querySelectorAll('.module-composition-input__input')).filter(isCandidateComposer));
+    const candidates = matchingRoots.flatMap(root => Array.from(root.querySelectorAll('.module-composition-input__input[contenteditable], [contenteditable][role="textbox"]')).filter(isCandidateComposer));
+    const editableSummary = matchingRoots.flatMap(root => Array.from(root.querySelectorAll('.module-composition-input__input, [contenteditable], [role="textbox"]')).slice(0, 8).map(el => ({
+      tag: el.tagName.toLowerCase(), className: String(el.className || '').slice(0, 100),
+      contenteditable: el.getAttribute('contenteditable') || '', role: el.getAttribute('role') || '',
+      visible: isVisible(el), editable: isEditableElement(el)
+    })));
+    return { count: roots.length, matchingRoots: matchingRoots.length, namedCandidates: named.length, candidates: candidates.length, editableSummary };
+  };
   const findComposer = () => {
+    if (isSignalSend) {
+      const root = currentSignalRoot();
+      if (!root) return null;
+      const candidates = Array.from(root.querySelectorAll('.module-composition-input__input[contenteditable], [contenteditable][role="textbox"]')).filter(isCandidateComposer);
+      if (candidates.length === 1) return candidates[0];
+      if (candidates.length > 1) return null;
+      // Signal can move contenteditable/role attributes to a wrapper while
+      // rebuilding its composer after a window resize. The named composer
+      // remains scoped to the uniquely verified conversation root.
+      const named = Array.from(root.querySelectorAll('.module-composition-input__input')).filter(isCandidateComposer);
+      if (named.length === 1) return named[0];
+      if (named.length > 1) return null;
+      const fallback = Array.from(root.querySelectorAll('[contenteditable], [role="textbox"]')).filter(isCandidateComposer);
+      return fallback.length === 1 ? fallback[0] : null;
+    }
     const mediaCaptionCandidates = Array.from(document.querySelectorAll(
       '.simple-message-input-container .input-message-container.simple-message-input-inputs .input-message-input.simple-message-input-input[contenteditable]:not(.input-field-input-fake):not(.input-message-input-fake)'
     )).filter((element) => element.isConnected && isMediaCaptionComposer(element));
@@ -4638,6 +4764,18 @@ ${buildMediaCaptionComposerSource()}
     return hasSelectionInside(el);
   };
   let composer = findComposer();
+  if (!composer && isSignalSend && payload.action !== 'probeSignalTarget') {
+    // Maximize/restore can briefly unmount or hide the embedded Signal
+    // conversation while its native bounds are being reapplied. Re-resolve
+    // the exact conversation and composer after each layout-settle interval.
+    // Every attempt still uses currentSignalRoot(), so a changed/ambiguous
+    // conversation remains fail-closed.
+    for (const delay of [150, 300, 600, 1200, 2400]) {
+      await new Promise(resolve => setTimeout(resolve, delay));
+      composer = findComposer();
+      if (composer) break;
+    }
+  }
   if (!composer && payload.action === 'write' && payload.composerKind !== 'telegram-media-caption') {
     const candidates = relaxedComposerCandidates();
     const candidate = candidates.find((item) => isHighConfidenceComposer(item));
@@ -4653,15 +4791,22 @@ ${buildMediaCaptionComposerSource()}
     }
   }
   if (!composer) {
+    const signalStats = isSignalSend ? signalSendTargetStats() : null;
     return {
       ok: false,
-      reason: payload.composerKind === 'telegram-media-caption'
+      reason: isSignalSend ? 'signal-conversation-or-composer-mismatch' : payload.composerKind === 'telegram-media-caption'
         ? 'telegram-media-caption-bound-composer-not-found'
         : 'composer-not-found',
+      ...(signalStats || {}),
       candidates: payload.composerKind === 'telegram-media-caption'
         ? document.querySelectorAll('.simple-message-input-container .simple-message-input-input[data-animation-group="NEW-MEDIA"][contenteditable="true"]').length
-        : relaxedComposerCandidates().length
+        : signalStats?.candidates ?? relaxedComposerCandidates().length
     };
+  }
+  if (payload.action === 'probeSignalTarget') {
+    const roots = Array.from(document.querySelectorAll('.CompositionArea[data-df-signal-conversation-id]')).filter(isVisible);
+    const matchingRoots = roots.filter(root => root.getAttribute('data-df-signal-conversation-id')?.toLowerCase() === expectedSignalId);
+    return { ok: Boolean(composer && matchingRoots.length === 1 && matchingRoots[0].contains(composer)), count: roots.length, matchingRoots: matchingRoots.length };
   }
   if (payload.composerKind === 'telegram-media-caption' && payload.requestId) {
     composer.dataset.dfTranslatorRequestId = payload.requestId;
@@ -4685,6 +4830,11 @@ ${buildMediaCaptionComposerSource()}
   }
 
   if (payload.action === 'send' || payload.action === 'sendExact') {
+    const signalRoot = isSignalSend ? currentSignalRoot() : null;
+    const signalTargetStillMatches = () => !isSignalSend || Boolean(
+      signalRoot && currentSignalRoot() === signalRoot && composer.isConnected && signalRoot.contains(composer)
+    );
+    if (!signalTargetStillMatches()) return { ok: false, reason: 'signal-conversation-changed' };
     const currentText = getText(composer).trim();
     if (!currentText || currentText === 'typing...' || /[\\u4e00-\\u9fff]/.test(currentText) || (payload.action === 'send' && !/[A-Za-z]/.test(currentText))) {
       return { ok: false, reason: 'blocked-non-english' };
@@ -4693,7 +4843,7 @@ ${buildMediaCaptionComposerSource()}
       return { ok: false, reason: 'send-text-mismatch', current: currentText };
     }
     composer.focus();
-    const composerRoot = composer.closest?.('.chat-input-main, .new-message-wrapper, .simple-message-input-container') ||
+    const composerRoot = signalRoot || composer.closest?.('.chat-input-main, .new-message-wrapper, .simple-message-input-container') ||
       composer.closest?.('footer, .chat-input, .input-message-container, [data-testid*="compose"], [data-testid*="composition"]') || document;
     const mediaCaptionSendButton = isMediaCaptionComposer(composer)
       ? composer.closest?.('.simple-message-input-container')?.querySelector?.('.simple-message-input-confirm')
@@ -4701,25 +4851,34 @@ ${buildMediaCaptionComposerSource()}
     const sendButtonSelector = 'button, [role="button"], .btn-send-container .btn-send, .btn-send, .send-button, .button-send';
     const isAvailableSendButton = (button) => isVisible(button) && !button.disabled && button.getAttribute('aria-disabled') !== 'true';
     const isSendButton = (button) => {
+      if (button.closest('[data-fun-overlay], [role="dialog"], .df-composer-review') || button.hasAttribute('aria-haspopup')) return false;
+      if (isSignalSend && button.closest('.CompositionArea') !== signalRoot) return false;
+      if (isSignalSend && !button.closest('.CompositionArea__button-cell') && !button.matches('.CompositionArea__edit-button--accept')) return false;
       const label = ((button.getAttribute('aria-label') || '') + ' ' + (button.getAttribute('data-testid') || '') + ' ' + (button.textContent || '')).toLowerCase();
-      return /send|send message|发送/.test(label) || button.matches('.btn-send, .send-button, .button-send');
+      return /send|send message|发送/.test(label) || button.matches('.btn-send, .send-button, .button-send, .CompositionArea__edit-button--accept');
     };
-    const sendButton = mediaCaptionSendButton || Array.from(composerRoot.querySelectorAll(sendButtonSelector)).find((button) => isAvailableSendButton(button) && isSendButton(button)) || Array.from(document.querySelectorAll(sendButtonSelector)).find((button) => {
+    const sendButton = mediaCaptionSendButton || Array.from(composerRoot.querySelectorAll(sendButtonSelector)).find((button) => isAvailableSendButton(button) && isSendButton(button)) || (!isSignalSend && Array.from(document.querySelectorAll(sendButtonSelector)).find((button) => {
       if (!isAvailableSendButton(button) || !isSendButton(button)) return false;
       const rect = button.getBoundingClientRect();
       const inputRect = composer.getBoundingClientRect();
       return Math.abs(rect.top - inputRect.top) < 160 && Math.abs(rect.left - inputRect.right) < 260;
-    });
+    }));
     const runProgrammaticSend = async (sendAction) => {
+      if (!signalTargetStillMatches()) return { ok: false, reason: 'signal-conversation-changed' };
+      const previousProgrammaticSend = window.__dfTranslatorProgrammaticSend;
       window.__dfTranslatorProgrammaticSend = true;
       try {
         const method = sendAction();
+        if (isSignalSend) window.__dfTranslatorProgrammaticSend = previousProgrammaticSend;
         await sleep(160);
+        if (!signalTargetStillMatches()) return { ok: false, reason: 'signal-conversation-changed', method };
         const afterText = getText(composer).trim();
+        if (isSignalSend && afterText && canonicalSendText(afterText) !== canonicalSendText(currentText)) return { ok: false, reason: 'send-draft-changed', method };
         if (!afterText || canonicalSendText(afterText) !== canonicalSendText(currentText)) return { ok: true, method };
         return { ok: false, reason: 'send-not-accepted', method, current: afterText };
       } finally {
-        window.setTimeout(() => { window.__dfTranslatorProgrammaticSend = false; }, 180);
+        if (isSignalSend) window.__dfTranslatorProgrammaticSend = previousProgrammaticSend;
+        else window.setTimeout(() => { window.__dfTranslatorProgrammaticSend = false; }, 180);
       }
     };
     if (sendButton) {
@@ -4728,7 +4887,9 @@ ${buildMediaCaptionComposerSource()}
         return 'button';
       });
       if (buttonResult.ok) return buttonResult;
+      if (isSignalSend && buttonResult.reason !== 'send-not-accepted') return buttonResult;
     }
+    if (!signalTargetStillMatches() || canonicalSendText(getText(composer)) !== canonicalSendText(currentText)) return { ok: false, reason: 'signal-conversation-or-draft-changed' };
     return runProgrammaticSend(() => {
       composer.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
       composer.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
@@ -4768,6 +4929,7 @@ function buildNativeComposerHelpersScript(
   const serializedRequestId = JSON.stringify(requestId);
   return `
 (() => {
+  if(location.hostname==='opensms.cc'||location.hostname==='www.opensms.cc') return window.__dfOpenSms?.apply({action:${JSON.stringify(returnText?'text':'focus')}});
   const composerKind = ${serializedComposerKind};
   const requestId = ${serializedRequestId};
 ${buildComposerPlainTextReaderSource()}
@@ -4918,6 +5080,7 @@ function buildComposerRequestMatchScript(requestId: string) {
   return `
 (() => {
   const payload = ${payload};
+  if(location.hostname==='opensms.cc'||location.hostname==='www.opensms.cc')return window.__dfOpenSms?.apply({action:'matches',requestId:payload.requestId}) || false;
 ${buildMediaCaptionComposerSource()}
   const findComposer = () => {
     const isVisible = (el) => {
@@ -4950,6 +5113,7 @@ ${buildMediaCaptionComposerSource()}
 function buildWebComposerProbeScript() {
   return `
 (() => {
+  if(location.hostname==='opensms.cc'||location.hostname==='www.opensms.cc')return window.__dfOpenSms?.apply({action:'probe'});
 ${buildComposerPlainTextReaderSource()}
 ${buildMediaCaptionComposerSource()}
   const isVisible = (el) => {
@@ -5128,7 +5292,18 @@ function buildInjectedComposerScript(action: 'install' | 'focus' | 'focusNative'
   return `
 (() => {
   const payload = ${payload};
+  if(location.hostname==='opensms.cc'||location.hostname==='www.opensms.cc')return window.__dfOpenSms?.apply(payload) || false;
   const telegramComposerMode = location.hostname.toLowerCase() === 'web.telegram.org';
+  if (payload.action === 'state' && payload.state.expectedConversationSignature !== undefined) {
+    const expected = payload.state.expectedConversationSignature.toLowerCase();
+    const roots = Array.from(document.querySelectorAll('.CompositionArea[data-df-signal-conversation-id]')).filter((root) => {
+      const rect = root.getBoundingClientRect();
+      const style = getComputedStyle(root);
+      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+    });
+    if (!/^signal:[0-9a-f-]{36}$/.test(expected) || roots.length !== 1 ||
+        'signal:' + roots[0].getAttribute('data-df-signal-conversation-id')?.toLowerCase() !== expected) return false;
+  }
 ${buildComposerPlainTextReaderSource()}
 ${buildDirectSendHttpUrlSource()}
 ${buildMediaCaptionComposerSource()}
@@ -7538,7 +7713,8 @@ function buildEnterTranslateScript() {
 (() => {
 ${buildComposerPlainTextReaderSource()}
 ${buildDirectSendHttpUrlSource()}
-  const installVersion = '2026-10-01-signal-sensitive-state-v21';
+  ${buildSignalEmojiPickerScript()};
+  const installVersion = '2026-10-15-signal-emoji-scope-v22';
   if (window.__dfEnterTranslateInstalled === installVersion) return true;
   window.__dfEnterTranslateInstalled = installVersion;
   const listenerIsCurrent = () => window.__dfEnterTranslateInstalled === installVersion;
@@ -7566,7 +7742,7 @@ ${buildDirectSendHttpUrlSource()}
     }
     return window.__dfComposerReviewEnabled !== false;
   };
-  const isVisible = (el) => {
+  const isVisible = (el, allowPointerDisabled = false) => {
     const className = (el.className || '').toString();
     if (/input-field-input-fake|input-message-input-fake/.test(className)) return false;
     if (el.getAttribute?.('aria-hidden') === 'true') return false;
@@ -7577,7 +7753,7 @@ ${buildDirectSendHttpUrlSource()}
       && style.display !== 'none'
       && style.visibility !== 'hidden'
       && style.opacity !== '0'
-      && style.pointerEvents !== 'none';
+      && (allowPointerDisabled || style.pointerEvents !== 'none');
   };
   const isEditableElement = (el) => {
     if (!el) return false;
@@ -7620,8 +7796,8 @@ ${buildDirectSendHttpUrlSource()}
     el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: value ? 'insertText' : 'deleteContentBackward', data: value || null }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
   };
-  const isComposer = (el) => {
-    if (!el || !isVisible(el)) return false;
+  const isComposer = (el, allowPointerDisabled = false) => {
+    if (!el || !isVisible(el, allowPointerDisabled)) return false;
     if (!isEditableElement(el)) return false;
     if (el.closest('[role="dialog"], .df-translator-host, .df-composer-review')) return false;
     const label = ((el.getAttribute('role') || '') + ' ' + (el.getAttribute('aria-label') || '') + ' ' + (el.getAttribute('placeholder') || '')).toLowerCase();
@@ -7683,6 +7859,15 @@ ${buildDirectSendHttpUrlSource()}
       if (items.length) return items[items.length - 1];
     }
     return null;
+  };
+  const composerForEvent = (event) => {
+    const target = event.target instanceof Element ? event.target : event.target?.parentElement;
+    if (!target || target.closest('[data-fun-overlay], .FunPopover, [role="dialog"], [role="menu"], [role="listbox"], .df-composer-review')) return null;
+    const editable = target.closest('[contenteditable], [role="textbox"], textarea, input');
+    if (editable) return isComposer(editable, true) ? editable : null;
+    // A focused auxiliary control must not fall back to the underlying draft.
+    if (target !== document.body && target !== document.documentElement) return null;
+    return isComposer(document.activeElement, true) ? document.activeElement : null;
   };
   if (window.__dfSignalComposerReviewSettingHandler) {
     window.removeEventListener('df-composer-review-setting', window.__dfSignalComposerReviewSettingHandler);
@@ -7909,7 +8094,7 @@ ${buildDirectSendHttpUrlSource()}
     if (isProgrammaticSend()) return;
     if (event?.target?.closest?.('.df-composer-review')) return;
     if (event.key !== 'Enter') return;
-    const composer = isComposer(event.target) ? event.target : findComposer();
+    const composer = composerForEvent(event);
     if (!composer) return;
     if (rememberShiftEnter(event, composer)) return;
     if (rememberModifiedEnter(event, composer)) {
@@ -7977,7 +8162,7 @@ ${buildDirectSendHttpUrlSource()}
     if (isProgrammaticSend()) return;
     if (event?.target?.closest?.('.df-composer-review')) return;
     if (event.inputType !== 'insertLineBreak' && event.inputType !== 'insertParagraph') return;
-    const composer = isComposer(event.target) ? event.target : findComposer();
+    const composer = composerForEvent(event);
     if (!composer) return;
     if (shouldAllowShiftLineBreak(event, composer)) return;
     if (shouldBlockModifiedLineBreak(event, composer)) {
@@ -7998,6 +8183,9 @@ ${buildDirectSendHttpUrlSource()}
     if (isProgrammaticSend()) return;
     const button = event.target?.closest?.('button, [role="button"]');
     if (!button) return;
+    if (button.closest('[data-fun-overlay], .FunPopover, [role="dialog"], .df-composer-review')) return;
+    if (!button.closest('.CompositionArea, .module-composition-area')) return;
+    if (button.hasAttribute('aria-haspopup')) return;
     const icon = button.querySelector?.('[class*="send"], [data-icon*="send"], [data-testid*="send"], use[href*="send"]');
     const label = (
       (button.getAttribute('aria-label') || '') + ' ' +
@@ -8025,7 +8213,7 @@ ${buildDirectSendHttpUrlSource()}
   const rememberComposerText = (event) => {
     if (!listenerIsCurrent()) return;
     if (event?.target?.closest?.('.df-composer-review')) return;
-    const composer = isComposer(event.target) ? event.target : findComposer();
+    const composer = composerForEvent(event);
     if (!composer) return;
     const sensitiveText = composer.dataset.dfSensitiveSendToken
       ? composer.dataset.dfSensitiveSendText
@@ -8055,7 +8243,7 @@ ${buildDirectSendHttpUrlSource()}
     if (isProgrammaticSend()) return;
     if (event?.target?.closest?.('.df-composer-review')) return;
     if (event.key !== 'Enter') return;
-    const composer = isComposer(event.target) ? event.target : findComposer();
+    const composer = composerForEvent(event);
     if (!composer) return;
     if (rememberShiftEnter(event, composer)) return;
     if (rememberModifiedEnter(event, composer)) {
@@ -8680,6 +8868,7 @@ async function refreshWebSmartReplyUi(
   if (!profile || profile.platform === 'signal') return;
   const runtime = runtimeOverride || getRuntimeScriptExecutor(profile);
   if (!runtime) return;
+  if(profile.platform==='opensms'){await runtime.execute(buildOpenSmsScript({action:'smart'}));return;}
   const installState = await runtime
     .execute<SmartReplyUiInstallResult | false>(buildSmartReplyUiInstallScript(appForPlatform(profile.platform)))
     .catch((): false => false);
@@ -8808,13 +8997,19 @@ async function refreshUnreadCount(profileId: string) {
     return;
   }
   const runtime = getRuntimeScriptExecutor(profile);
-  if (!runtime) return;
+  if (!runtime || unreadScansInFlight.has(profileId)) return;
+  const generation = webRuntimeGenerations.get(profileId) ?? 0;
+  unreadScansInFlight.add(profileId);
 
   try {
     const snapshot = await runtime.execute<UnreadSnapshot>(buildUnreadScanScript(appForPlatform(profile.platform)));
-    setUnreadCount(profileId, snapshot?.count ?? 0);
+    if (!profiles.value.some((item) => item.id === profileId)) return;
+    if (profile.platform !== 'signal' && (webRuntimeGenerations.get(profileId) ?? 0) !== generation) return;
+    if (snapshot && snapshot.ready !== false) setUnreadCount(profileId, snapshot.count);
   } catch {
     // A page can be navigating or a Signal window can be temporarily unavailable; the next poll will retry.
+  } finally {
+    unreadScansInFlight.delete(profileId);
   }
 }
 
@@ -9146,9 +9341,8 @@ async function scanAndTranslateMessagesOnce(profileId: string, signal?: AbortSig
   if (appForPlatform(profile.platform) !== 'signal') await refreshWebSmartReplyUi(profileId, runtime);
   await registerNonEnglishContactMarkers(profile, candidates);
   candidates = candidates.filter((candidate) => !candidate.nonEnglishContactMarker);
-  if (candidates.length) {
-    setComposerStatus(profileId, `${appForPlatform(profile.platform) === 'signal' ? 'Signal ' : ''}发现 ${candidates.length} 条英文消息，正在查缓存`);
-  }
+  const cacheStatusPrefix = `${appForPlatform(profile.platform) === 'signal' ? 'Signal ' : ''}发现 ${candidates.length} 条英文消息，正在查缓存`;
+  if (candidates.length && !composerStatus.value[profileId]) setComposerStatus(profileId, cacheStatusPrefix);
 
   const profileCacheWarmupReady = await preloadTranslationCache(profileId);
   diagnosticEvent('cache:profile', { profileId, platform: profile.platform, cacheReady: profileCacheWarmupReady });
@@ -9169,6 +9363,9 @@ async function scanAndTranslateMessagesOnce(profileId: string, signal?: AbortSig
   let loadedHistoryPageForScan = false;
   let queuedCount = 0;
   let cacheWarmupBlockedCount = 0;
+  let cachedTranslationCount = 0;
+  let cacheInjectionFailedCount = 0;
+  let alreadyTranslatedCount = 0;
   for (const candidate of realtimeCandidates.slice(0, 12)) {
     const cacheKey = `${profileId}:${candidate.key}`;
     const sourceCacheKey = `${profileId}:${hashText(candidate.text)}`;
@@ -9193,24 +9390,28 @@ async function scanAndTranslateMessagesOnce(profileId: string, signal?: AbortSig
         buildMessageTranslationInjectScript(candidate.key, cachedTranslation, appForPlatform(profile.platform), candidate.text)
       );
       if (injected) {
+        cachedTranslationCount += 1;
         if (profile.platform === 'signal') setComposerStatus(profileId, 'Signal 已注入缓存译文');
         translatedMessages.add(cacheKey);
         translatedMessages.add(sourceCacheKey);
+        continue;
       }
-      continue;
+      cacheInjectionFailedCount += 1;
     }
-    if (translatedMessages.has(cacheKey) || translatedMessages.has(sourceCacheKey)) continue;
+    if (translatedMessages.has(cacheKey) || translatedMessages.has(sourceCacheKey)) { alreadyTranslatedCount += 1; continue; }
     if (!isLatestVisibleMessageCandidate(appForPlatform(profile.platform), candidate)) continue;
     if (enqueueMessageTranslationTask(profile, candidate, 'visible-message')) queuedCount += 1;
   }
   const historyBackfillQueuedCount = enqueueHistoryBackfillTranslations(profile, candidates, profileCacheWarmupReady);
-  diagnosticEvent('scan:complete', { profileId, platform: profile.platform, candidates: candidates.length, queued: queuedCount + historyBackfillQueuedCount, cacheBlocked: cacheWarmupBlockedCount, cacheReady: profileCacheWarmupReady, running: runningTranslationCount });
+  diagnosticEvent('scan:complete', { profileId, platform: profile.platform, candidates: candidates.length, queued: queuedCount + historyBackfillQueuedCount, cacheBlocked: cacheWarmupBlockedCount, cacheReady: profileCacheWarmupReady, running: runningTranslationCount, cacheHits: cachedTranslationCount, cacheInjectionFailed: cacheInjectionFailedCount, alreadyTranslated: alreadyTranslatedCount });
   if (queuedCount) {
     setComposerStatus(profileId, `${appForPlatform(profile.platform) === 'signal' ? 'Signal ' : ''}已排队 ${queuedCount} 条待翻译消息`);
   } else if (historyBackfillQueuedCount) {
     setComposerStatus(profileId, `${appForPlatform(profile.platform) === 'signal' ? 'Signal ' : ''}历史补翻已排队 ${historyBackfillQueuedCount} 条`);
   } else if (cacheWarmupBlockedCount) {
     setComposerStatus(profileId, `${appForPlatform(profile.platform) === 'signal' ? 'Signal ' : ''}缓存预加载中，暂不调用翻译接口`);
+  } else if ((composerStatus.value[profileId] || '').includes('正在查缓存')) {
+    setComposerStatus(profileId, '');
   }
 }
 
@@ -9319,7 +9520,8 @@ function getRuntimeScriptExecutor(profile: ChatProfile) {
       if (signal.aborted || (webRuntimeGenerations.get(profile.id) ?? 0) !== generation) {
         return Promise.reject<T>(new Error('Web translation runtime replaced'));
       }
-      const guardedScript = `window.__dfTranslationRuntimeGeneration ??= ${generation};\nif (window.__dfTranslationRuntimeGeneration !== ${generation}) throw new Error('Web translation runtime replaced');\n${script}`;
+      const platformBootstrap=profile.platform==='opensms'?buildOpenSmsScript({action:'bootstrap'})+';\n':'';
+      const guardedScript = `window.__dfTranslationRuntimeGeneration ??= ${generation};\nif (window.__dfTranslationRuntimeGeneration !== ${generation}) throw new Error('Web translation runtime replaced');\n${platformBootstrap}${script}`;
       return withTranslationDeadline(webview.executeJavaScript(guardedScript, true) as Promise<T>, 8_000, signal);
     }
   };
@@ -9345,10 +9547,10 @@ async function exportCurrentConversation(mode:ConversationExportMode){
   try{
     const start=unwrapConversationExportResult<ExportSnapshot>(await executeProfileScript(profile.id,buildConversationExportScript({action:'begin',platform})));
     if(!start)throw new Error('聊天窗口尚未就绪');contactId=start.contactId;
-    await pause(700);
-    let rows:ConversationExportRow[]=[],quietAt=0,oldFirst='',coverage:'history-top'|'partial'='partial';
-    let note='历史未加载完成';const started=Date.now();
-    while(Date.now()-started<15*60*1000){
+    if(platform!=='opensms')await pause(700);
+    let rows:ConversationExportRow[]=platform==='opensms'?start.rows:[],quietAt=0,oldFirst='',coverage:'history-top'|'partial'=platform==='opensms'?'history-top':'partial';
+    let note=platform==='opensms'?'已按页面顺序提取当前会话 message-box 容器内全部消息气泡；范围为该容器中的记录。':'历史未加载完成';const started=Date.now();
+    while(platform!=='opensms'&&Date.now()-started<15*60*1000){
       if(conversationExportCancelled||activeProfileId.value!==profile.id||lockScreenVisible.value||activePanel.value!=='session')throw new Error('导出已取消');
       exportStage='snapshot';
       const snapshot=unwrapConversationExportResult<ExportSnapshot>(await executeProfileScript(profile.id,buildConversationExportScript({action:'snapshot',platform,expectedId:contactId})));
@@ -9369,6 +9571,9 @@ async function exportCurrentConversation(mode:ConversationExportMode){
     exportStage='confirm-contact';
     const current=unwrapConversationExportResult<ExportSnapshot>(await executeProfileScript(profile.id,buildConversationExportScript({action:'snapshot',platform,expectedId:contactId})));
     if(!current)throw new Error('无法确认当前联系人');
+    if(platform==='opensms')rows=current.rows;
+    if(!rows.length)throw new Error('当前会话没有可导出的记录');
+    if(conversationExportCancelled||activeProfileId.value!==profile.id||lockScreenVisible.value||activePanel.value!=='session')throw new Error('导出已取消');
     conversationExportStatus.value=coverage==='partial'?`历史未完全加载，正在保存 ${rows.length} 条…`:`已读取 ${rows.length} 条，请选择保存位置…`;
     exportStage='save';
     const result=await window.chatTranslator.exportConversation({profileId:profile.id,platform:profile.platform,contactId,contactTitle:current.contactTitle,mode,coverage,coverageNote:note,rows});
@@ -9387,16 +9592,17 @@ watch([activeProfileId,lockScreenVisible,activePanel],()=>{if(conversationExport
 
 const assistantContacts=ref<Record<string,{id:string;title:string}>>({});
 const assistantUsages=ref<Record<string,AssistantUsage[]>>({});
+const assistantCopyBusy=ref(false);
+const assistantCopyStatus=ref('');
 const assistantUsedIds=computed(()=>{
   const profile=activeProfileId.value;if(!profile)return [];const contact=assistantContacts.value[profile]?.id;
-  return (assistantUsages.value[profile]||[]).filter(u=>u.contactId===contact).map(u=>u.materialId);
+  return (assistantUsages.value[profile]||[]).filter(u=>u.contactId===contact&&u.confirmation==='inserted').map(u=>u.materialId);
 });
 let assistantCatalogPromise:Promise<AssistantCatalog>|null=null;
 let assistantCatalogAt=0;
 let assistantIconPromise:Promise<string>|null=null;
 const assistantStageTokens=new Map<string,string>();
 const assistantMaterialPolls=new Set<string>();
-let pendingAssistantRead:Promise<AssistantStagedMaterial|null>|null=null;
 function readAssistantCatalog(){
   if(!assistantCatalogPromise||Date.now()-assistantCatalogAt>5000){assistantCatalogAt=Date.now();assistantCatalogPromise=window.chatTranslator.getAssistantLibrary().then(buildAssistantCatalog).catch(e=>{assistantCatalogPromise=null;throw e;});}
   return assistantCatalogPromise;
@@ -9419,6 +9625,7 @@ async function syncAssistantPending(profileId:string,pending:AssistantStagedMate
 }
 async function installAssistantMaterialRuntime(profile:ChatProfile){
   const enabled=signedIn.value&&!lockScreenVisible.value&&!hasBlockingModal.value&&activePanel.value==='session'&&activeProfileId.value===profile.id;
+  if(profile.platform==='opensms')await executeProfileScript(profile.id,buildOpenSmsScript({action:'enabled',enabled}));
   const catalog=await readAssistantCatalog();
   const usages=await window.chatTranslator.getAssistantUsage(profile.id);assistantUsages.value[profile.id]=usages;
   const themeNode=document.querySelector('.workspace-page')||document.querySelector('.app-page')||document.documentElement;
@@ -9428,12 +9635,47 @@ async function installAssistantMaterialRuntime(profile:ChatProfile){
   if(!enabled||installed?.fresh)assistantStageTokens.delete(profile.id);
 }
 async function copyAssistantMaterial(material:AssistantMaterial){
+  if(assistantCopyBusy.value)return;
   const profile=profiles.value.find(p=>p.id===activeProfileId.value);if(!profile)return;
-  const catalog=await readAssistantCatalog();const known=Object.values(catalog).flat().flatMap(c=>c.materials).find(m=>m.id===material.id);
-  if(!known)throw new Error('素材已变更，请重新展开卡片');
-  const pending=await window.chatTranslator.stageAssistantMaterial(known);
-  await syncAssistantPending(profile.id,pending);
+  assistantCopyBusy.value=true;assistantCopyStatus.value='正在准备素材…';
+  let inserted=false;
+  try {
+    const catalog=await readAssistantCatalog();
+    const known=[...catalog.schedule,...catalog.quotes].flatMap(c=>c.materials).find(m=>m.id===material.id);
+    if(!known)throw new Error('素材已变更，请保存并重新展开卡片');
+    await installAssistantMaterialRuntime(profile);
+    const contact=await executeProfileScript<{id:string;title:string}>(profile.id,buildAssistantRuntimeScript({command:'contact'}));
+    if(!contact?.id)throw new Error('无法识别当前联系人，请先打开一个会话');
+    if(!signedIn.value||activeProfileId.value!==profile.id||lockScreenVisible.value||hasBlockingModal.value||activePanel.value!=='session')throw new Error('当前会话已变化，请重新操作');
+    const pending=await window.chatTranslator.stageAssistantMaterial(known);
+    if(pending.type==='image'&&pending.mediaId)await transferAssistantImage(profile.id,pending.mediaId,pending.imageData||'');
+    assistantCopyStatus.value='请在聊天窗口确认素材及目标联系人';
+    await executeProfileScript(profile.id,buildAssistantRuntimeScript({command:'confirm',pending:{...pending,imageData:undefined},contactId:contact.id}));
+    let confirmed:{status:string;contactId?:string;actualText?:string}|undefined;
+    while(true){
+      if(pending.expiresAt<Date.now()||!signedIn.value||lockScreenVisible.value||hasBlockingModal.value||activePanel.value!=='session'||activeProfileId.value!==profile.id)throw new Error('会话或授权状态已变化，请重新操作');
+      confirmed=await executeProfileScript(profile.id,buildAssistantRuntimeScript({command:'confirmation-status',token:pending.token}));
+      if(confirmed?.status!=='pending')break;
+      await new Promise(resolve=>setTimeout(resolve,200));
+    }
+    if(confirmed?.status!=='inserted'){assistantCopyStatus.value='已取消，未记录使用';return;}
+    inserted=true;
+    const current=await executeProfileScript<{id:string;title:string}>(profile.id,buildAssistantRuntimeScript({command:'contact'}));
+    if(!signedIn.value||lockScreenVisible.value||hasBlockingModal.value||activePanel.value!=='session'||activeProfileId.value!==profile.id||current?.id!==contact.id||confirmed.contactId!==contact.id)throw new Error('粘贴期间会话已变化，请检查草稿');
+    const usage=await window.chatTranslator.recordAssistantUse({profileId:profile.id,platform:appForPlatform(profile.platform),token:pending.token,contactId:contact.id,contactTitle:contact.title||'当前联系人',...(confirmed.actualText!==undefined?{actualText:confirmed.actualText}:{})});
+    assistantContacts.value[profile.id]=current;
+    assistantUsages.value[profile.id]=(assistantUsages.value[profile.id]||[]).filter(u=>!(u.platform===usage.platform&&u.contactId===usage.contactId&&u.materialId===usage.materialId)).concat(usage);
+    await executeProfileScript(profile.id,buildAssistantRuntimeScript({command:'result',token:pending.token,usage})).catch(()=>undefined);
+    assistantCopyStatus.value=`已粘贴${known.type==='text'?'文字':'图片'}，已标记“${contact.title||'当前会话'}”使用；请自行发送`;
+  }catch(e){assistantCopyStatus.value=(inserted?'素材已粘贴，但未记录使用：':'操作未完成：')+(e instanceof Error?e.message:String(e));}
+  finally {
+    await executeProfileScript(profile.id,buildAssistantRuntimeScript({command:'cancel-confirmation'})).catch(()=>undefined);
+    await syncAssistantPending(profile.id,null).catch(()=>undefined);
+    assistantCopyBusy.value=false;
+  }
 }
+function assistantLibraryChanged(){assistantCatalogPromise=null;assistantCatalogAt=0;const profile=profiles.value.find(p=>p.id===activeProfileId.value);if(profile)void installAssistantMaterialRuntime(profile).catch(()=>undefined);}
+watch(activeProfileId,()=>{assistantCopyStatus.value='';});
 async function pollAssistantMaterialEvents(profileId:string){
   if(assistantMaterialPolls.has(profileId))return;
   const profile=profiles.value.find(p=>p.id===profileId);if(!profile)return;
@@ -9441,12 +9683,13 @@ async function pollAssistantMaterialEvents(profileId:string){
   try{
     const snapshot=await executeProfileScript<AssistantRuntimeSnapshot>(profileId,buildAssistantRuntimeScript({command:'poll'}));
     if(!snapshot)return;
+    if(assistantContacts.value[profileId]?.id!==snapshot.contact.id&&!assistantCopyBusy.value)assistantCopyStatus.value='';
     assistantContacts.value[profileId]=snapshot.contact;
     for(const event of snapshot.events||[]){
       try{
         if(event.action==='copy'&&event.material&&activeProfileId.value===profileId)await copyAssistantMaterial(event.material);
         else if(event.action==='preview'&&event.mediaId){
-          const catalog=await readAssistantCatalog();if(!Object.values(catalog).flat().some(c=>c.materials.some(m=>m.mediaId===event.mediaId)))throw new Error('未知图片素材');
+          const catalog=await readAssistantCatalog();if(![...catalog.schedule,...catalog.quotes].some(c=>c.materials.some(m=>m.mediaId===event.mediaId)))throw new Error('未知图片素材');
           await transferAssistantImage(profileId,event.mediaId,await window.chatTranslator.getAssistantImage(event.mediaId));
         } else if(event.action==='used'&&event.token&&event.contactId){
           const usage=await window.chatTranslator.recordAssistantUse({profileId,platform:appForPlatform(profile.platform),token:event.token,contactId:event.contactId,contactTitle:event.contactTitle||'当前联系人',...(event.actualText!==undefined?{actualText:event.actualText}:{})});
@@ -9454,10 +9697,6 @@ async function pollAssistantMaterialEvents(profileId:string){
           await executeProfileScript(profileId,buildAssistantRuntimeScript({command:'result',token:event.token,usage}));
         }
       }catch(e){await executeProfileScript(profileId,buildAssistantRuntimeScript({command:'result',token:event.token||'',error:e instanceof Error?e.message:String(e)}));}
-    }
-    if(signedIn.value&&!lockScreenVisible.value&&!hasBlockingModal.value&&activeProfileId.value===profileId){
-      pendingAssistantRead ||= window.chatTranslator.getPendingAssistantMaterial().finally(()=>{pendingAssistantRead=null;});
-      await syncAssistantPending(profileId,await pendingAssistantRead);
     }
   }finally{assistantMaterialPolls.delete(profileId);}
 }
@@ -9492,6 +9731,7 @@ async function processManualMessageTranslations(profileId: string, runtime: { ex
 }
 
 function buildUnreadScanScript(app: RuntimeApp) {
+  if(app==='opensms')return buildOpenSmsScript({action:'unread'});
   const platformApp = JSON.stringify(app);
   return `
 (() => {
@@ -9525,20 +9765,34 @@ function buildUnreadScanScript(app: RuntimeApp) {
     };
   }
   if (platformApp === 'telegram') {
-    const stateKey = '__dfTelegramUnarchivedUnreadStateV2';
+    const stateKey = '__dfTelegramUnarchivedUnreadStateV3';
     const state = window[stateKey] || (window[stateKey] = {
       count: 0,
-      ready: false
+      ready: false,
+      archiveCount: 0,
+      nativeTitleReady: false
     });
+    const nativeTitleMatch = normalize(document.title || '').match(/^(?:\\((\\d[\\d, ]*)\\)\\s*Telegram|Telegram\\s*\\((\\d[\\d, ]*)\\))/i);
+    const nativeTitleCount = nativeTitleMatch
+      ? Math.min(999, Number((nativeTitleMatch[1] || nativeTitleMatch[2]).replace(/[, ]/g, '')) || 0)
+      : 0;
     const archiveLabelPattern = /^(?:archived chats?|archive|已归档(?:的)?聊天|归档聊天|封存的聊天)(?:\\s+\\d{1,3})?$/i;
     const rowSelectors = [
+      '.chatlist-chat',
+      '.chatlist .chatlist-chat',
+      '.chatlist [data-peer-id]',
       '.chatlist [role="listitem"]',
       '.chatlist [role="row"]',
       '.chatlist .ListItem',
-      '.chatlist [class*="dialog" i]',
       '.chatlist li',
       '[class*="chatlist" i] [role="listitem"]',
-      '[class*="chatlist" i] .ListItem'
+      '[class*="chatlist" i] .ListItem',
+      '.chat-list .ListItem',
+      '.chat-list .Chat',
+      '.chat-list [role="listitem"]',
+      '.dialogs-list [data-peer-id]',
+      '.dialogs-list .ListItem',
+      '.DialogList .ListItem'
     ];
     const badgeSelectors = [
       '.badge',
@@ -9548,30 +9802,34 @@ function buildUnreadScanScript(app: RuntimeApp) {
       '[aria-label*="未读"]',
       '[aria-label*="未讀"]'
     ];
-    const rows = Array.from(new Set(rowSelectors.flatMap((selector) => (
+    const matchedRows = Array.from(new Set(rowSelectors.flatMap((selector) => (
       Array.from(document.querySelectorAll(selector))
     )))).filter((row) => isVisible(row));
+    // A single contact can match both its outer ListItem/li and an inner link.
+    const rows = matchedRows.filter((row) => !matchedRows.some((other) => other !== row && other.contains(row)));
     const rowDescriptor = (row) => normalize([
       row.getAttribute?.('aria-label') || '',
       row.getAttribute?.('title') || '',
       row.textContent || ''
     ].join(' '));
-    const isArchiveEntry = (row) => archiveLabelPattern.test(rowDescriptor(row));
+    const isArchiveEntry = (row) => row.matches('.chat-item-archive, .is-archive, [data-peer-id="folder_1"]')
+      || archiveLabelPattern.test(rowDescriptor(row))
+      || Array.from(row.querySelectorAll('.fullName, .peer-title, .title')).some((title) => archiveLabelPattern.test(normalize(title.textContent || '')));
     const isInsideArchiveContainer = (row) => Boolean(row.closest?.(
-      '[data-folder-id="1"], [data-filter-id="1"], [class*="archived-list" i], [class*="archive-list" i], [class*="archived-chats" i]'
+      '[data-folder-id="1"], [class*="archived-list" i], [class*="archive-list" i], [class*="archived-chats" i]'
     ));
     const archiveEntryPresent = rows.some(isArchiveEntry);
-    const archiveViewActive = !archiveEntryPresent && Array.from(document.querySelectorAll(
+    const archiveViewActive = !archiveEntryPresent && (rows.some(isInsideArchiveContainer) || Array.from(document.querySelectorAll(
       'header, [class*="sidebar-header" i], [class*="chatlist-header" i], [role="heading"]'
-    )).some((element) => archiveLabelPattern.test(normalize(element.textContent || '')));
-    if (!archiveViewActive) {
-      const rowUnreadCounts = new Map();
-      for (const row of rows) {
-        if (isArchiveEntry(row) || isInsideArchiveContainer(row)) continue;
+    )).some((element) => isVisible(element) && archiveLabelPattern.test(normalize(element.textContent || ''))));
+    const readRowCount = (row) => {
         let rowCount = 0;
         for (const selector of badgeSelectors) {
           for (const badge of Array.from(row.querySelectorAll(selector))) {
             if (!isVisible(badge)) continue;
+            // Badge wrappers also contain pins, online status, mentions and mini-app buttons.
+            if (!/unread/i.test(badge.className || '') && badge.querySelector('[class*="unread" i]')) continue;
+            if (badge.matches('[class*="avatar" i], [class*="pinned" i], [class*="mention" i], [class*="reaction" i], [class*="miniapp" i]')) continue;
             const badgeText = normalize(
               badge.getAttribute?.('aria-label') ||
               badge.getAttribute?.('title') ||
@@ -9580,20 +9838,32 @@ function buildUnreadScanScript(app: RuntimeApp) {
             );
             rowCount = Math.max(
               rowCount,
-              toCount(badgeText, /unread|未读|未讀/i.test(selector + ' ' + badgeText) ? 1 : 0)
+              toCount(badgeText, /unread|未读|未讀/i.test(String(badge.className || '') + ' ' + badgeText) ? 1 : 0)
             );
           }
         }
-        if (rowCount > 0) rowUnreadCounts.set(row, rowCount);
-      }
+        return rowCount;
+    };
+    if (!archiveViewActive && rows.length) {
+      state.nativeTitleReady = false;
+      if (archiveEntryPresent) state.archiveCount = rows.filter(isArchiveEntry).reduce((sum, row) => sum + readRowCount(row), 0);
       state.count = Math.max(
         0,
-        Math.min(999, Array.from(rowUnreadCounts.values()).reduce((sum, count) => sum + count, 0))
+        Math.min(999, rows.filter((row) => !isArchiveEntry(row) && !isInsideArchiveContainer(row)).reduce((sum, row) => sum + readRowCount(row), 0))
       );
       state.ready = true;
     }
+    // Telegram can unmount or hide its list in a narrow window or while navigating.
+    // Missing DOM is not a confirmed zero. Its native title remains a usable
+    // signal when no known archived unread total would contaminate that signal.
+    const nativeTitleCleared = state.nativeTitleReady && /^Telegram(?: Web)?$/i.test(normalize(document.title || ''));
+    if (!archiveViewActive && !rows.length && !state.archiveCount && (nativeTitleCount > 0 || nativeTitleCleared)) {
+      state.nativeTitleReady = true;
+      return { count: nativeTitleCount, ready: true, titleCount: nativeTitleCount, badgeCount: 0, source: 'telegram-native-title' };
+    }
     return {
       count: state.ready ? state.count : 0,
+      ready: state.ready,
       titleCount: 0,
       badgeCount: state.ready ? state.count : 0,
       source: archiveViewActive
@@ -9654,6 +9924,7 @@ function buildMessageScanScript(
   app: RuntimeApp,
   options: { limit?: number; viewportScreensAbove?: number; viewportScreensBelow?: number; includeAlreadyTranslated?: boolean } = {}
 ) {
+  if(app==='opensms')return buildOpenSmsScript({action:'scan',options});
   const platformApp = JSON.stringify(app);
   const scanOptions = JSON.stringify(options);
   return `
@@ -10330,6 +10601,7 @@ function buildSignalDomProbeScript() {
 }
 
 function buildLegacyTranslationCacheCleanupScript(app: RuntimeApp) {
+  if(app==='opensms')return buildOpenSmsScript({action:'install'});
   const legacyRenderCacheKey = JSON.stringify(`df.translation.renderCache.v1.${app}`);
   return `
 (() => {
@@ -10368,6 +10640,7 @@ function buildSignalLegacyBubbleRuntimeRetirementScript() {
 }
 
 function buildCachedTranslationRuntimeScript(app: RuntimeApp, entries: Array<{ sourceHash: string; sourceText?: string; translatedText: string; updatedAt?: number }>) {
+  if(app==='opensms')return buildOpenSmsScript({action:'cache',entries});
   const payload = JSON.stringify({ app, entries });
   return `
 (() => {
@@ -11085,6 +11358,7 @@ function buildWebBubbleRefreshStateScript(key: string, state: 'processing' | 'id
 }
 
 function buildMessageTranslationInjectScript(key: string, translation: string, app: RuntimeApp, sourceText = '', replaceExisting = false) {
+  if(app==='opensms')return buildOpenSmsScript({action:'inject',key,translation,sourceText,replaceExisting});
   const payload = JSON.stringify({ key, translation, app, sourceText, replaceExisting });
   return `
 (() => {
@@ -11987,6 +12261,10 @@ onUnmounted(() => {
         <img :src="multiSignalIcon" alt="Signal" />
         <span v-if="unreadCountForApp('signal') > 0" class="app-unread-dot" aria-hidden="true"></span>
       </button>
+      <button type="button" class="app-short sms" :class="{active:currentApp==='opensms',unread:unreadCountForApp('opensms')>0}" title="打新增" aria-label="打新增" @click="selectRuntimeApp('opensms')">
+        <img :src="opensmsIcon" alt="打新增" /><small class="opensms-label">打新增</small>
+        <span v-if="unreadCountForApp('opensms')>0" class="app-unread-dot" aria-hidden="true"></span>
+      </button>
       <button
         type="button"
         class="runtime-customize-button"
@@ -12028,11 +12306,11 @@ onUnmounted(() => {
             <span v-if="unreadCountForProfile(tab.id) > 0" class="tab-unread-badge">{{ formatUnreadCount(unreadCountForProfile(tab.id)) }}</span>
             <span class="tab-icon"><img :src="tab.icon" :alt="tab.short" /></span>
             <b>{{ tab.name }}</b>
-            <em aria-label="rename" title="修改名称和分组" @click.stop="requestRenameProfile(tab)">✎</em>
-            <i aria-label="close" @click.stop="requestCloseProfile(tab)">×</i>
+            <em v-if="tab.platform!=='opensms'" aria-label="rename" title="修改名称和分组" @click.stop="requestRenameProfile(tab)">✎</em>
+            <i v-if="tab.platform!=='opensms'" aria-label="close" @click.stop="requestCloseProfile(tab)">×</i>
           </button>
         </template>
-        <button class="add-tab" type="button" :disabled="isCreatingProfile" @click="openCreateProfileDialog">+</button>
+        <button v-if="currentApp!=='opensms'" class="add-tab" type="button" :disabled="isCreatingProfile" @click="openCreateProfileDialog">+</button>
       </div>
       <div v-if="activeSensitiveSendPending" class="sensitive-send-trusted" role="status">
         <strong>发送前可信确认</strong>
@@ -12065,6 +12343,7 @@ onUnmounted(() => {
         :partition="item.profile.partition"
         :useragent="item.profile.fingerprint.userAgent"
         @dom-ready="(event: Event) => handleWebviewDomReady(event, item.profile)"
+        @page-title-updated="() => refreshUnreadCount(item.profile.id)"
         @render-process-gone="(event: Event) => handleWebviewRuntimeFailure(event, item.profile)"
         @did-fail-load="(event: Event) => handleWebviewRuntimeFailure(event, item.profile)"
         @ipc-message="(event: Event) => handleWebviewIpcMessage(event, item.profile)"
@@ -12077,9 +12356,10 @@ onUnmounted(() => {
           <button class="signal-open-button" type="button" @click="launchActiveSignalProfile">打开 Signal</button>
         </template>
         <template v-else>
-          <p>{{ currentAppTile.label }} 未打开多开环境</p>
-          <span>点击顶部 +，填写自定义名称后创建当前应用的多开。</span>
-          <button type="button" @click="openCreateProfileDialog">新建多开</button>
+          <p>{{ currentApp==='opensms'?'打新增':`${currentAppTile.label} 未打开多开环境` }}</p>
+          <span v-if="currentApp==='opensms'">{{openSmsError || (isCreatingProfile?'正在打开，请稍候…':'登录后即可翻译当前会话。')}}</span>
+          <span v-else>点击顶部 +，填写自定义名称后创建当前应用的多开。</span>
+          <button type="button" :disabled="isCreatingProfile" @click="openCreateProfileDialog">{{currentApp==='opensms'?'打开打新增':'新建多开'}}</button>
         </template>
       </div>
     </section>
@@ -12146,7 +12426,8 @@ onUnmounted(() => {
 
   <AssistantLibraryPanel v-if="signedIn && activePanel === 'session' && !lockScreenVisible && !hasBlockingModal"
     v-model:open="assistantOpen" :workspace="activePanel === 'session'" :collapsed="workspaceHeaderCollapsed" :class="themeClass"
-    :used-ids="assistantUsedIds" @copy="copyAssistantMaterial" :export-busy="conversationExportBusy" :export-status="conversationExportStatus"
+    :used-ids="assistantUsedIds" :copy-busy="assistantCopyBusy" :copy-status="assistantCopyStatus" :contact-title="assistantContacts[activeProfileId||'']?.title"
+    @copy="copyAssistantMaterial" @changed="assistantLibraryChanged" :export-busy="conversationExportBusy" :export-status="conversationExportStatus"
     @export="exportCurrentConversation" @cancel-export="cancelConversationExport" />
 
   <div

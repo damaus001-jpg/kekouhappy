@@ -16,7 +16,7 @@ const section = (start, end) => {
 };
 
 assert.match(appSource, /2026-10-11-telegram-stable-conversation-v60/);
-assert.match(appSource, /2026-10-01-signal-sensitive-state-v21/);
+assert.match(appSource, /2026-10-15-signal-emoji-scope-v22/);
 assert.equal(isDirectSendHttpUrl('https://example.com/path?a=1#top'), true);
 assert.equal(isDirectSendHttpUrl('http://example.com'), true);
 assert.equal(isDirectSendHttpUrl('www.example.com/path?a=1'), true);

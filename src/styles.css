@@ -1509,15 +1509,26 @@ select:focus {
 }
 
 .app-center {
+  position: relative;
   display: grid;
-  align-content: start;
+  place-items: center;
+  padding: 90px 34px;
+}
+
+.app-center > .section-title {
+  position: absolute;
+  top: 90px;
+  left: 34px;
 }
 
 .app-card-row {
   display: grid;
-  grid-template-columns: repeat(3, minmax(180px, 1fr));
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
   gap: 28px;
-  margin-top: 200px;
+  width: 100%;
+  max-width: 760px;
+  margin: 0;
+  transform: translateY(100px);
 }
 
 .launch-card {
@@ -1744,7 +1755,7 @@ select:focus {
   }
 
   .app-card-row {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 16px;
   }
 
@@ -1788,7 +1799,7 @@ select:focus {
   grid-column: 1;
   grid-row: 2 / 4;
   display: grid;
-  grid-template-rows: repeat(4, 78px) repeat(3, 72px) minmax(76px, 1fr);
+  grid-template-rows: repeat(4, 78px) repeat(4, 72px) minmax(76px, 1fr);
   align-items: center;
   justify-items: center;
   border-right: 1px solid rgba(216, 184, 111, 0.14);
@@ -1843,10 +1854,10 @@ select:focus {
 
 .runtime-side .runtime-customize-button {
   min-height: 0;
-  height: 76px;
+  height: 60px;
   align-self: end;
   align-content: start;
-  padding: 0 0 24px;
+  padding: 0 0 8px;
   border-block: 1px solid transparent;
   transition: color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
 }
@@ -5372,3 +5383,5 @@ select:focus {
   color: #fff;
   background: #277fb8;
 }
+.runtime-side .app-short.sms{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;min-height:64px;padding:2px}.app-short.sms img{width:42px;height:42px}.opensms-label{font-size:10px;line-height:12px;white-space:nowrap;color:var(--text)}
+@media(max-height:800px){.runtime-side{grid-template-rows:repeat(4,72px) repeat(4,64px) minmax(72px,1fr)}}

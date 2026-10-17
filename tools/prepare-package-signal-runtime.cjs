@@ -1,4 +1,5 @@
 const crypto = require('node:crypto');
+const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const asar = require('@electron/asar');
@@ -105,6 +106,17 @@ async function main() {
   const stagedAsar = path.join(targetRoot, 'resources', 'app.asar');
   if (!fs.statSync(stagedExe, { throwIfNoEntry: false })?.isFile()) throw new Error('Staged Signal.exe is missing.');
   if (!fs.statSync(stagedAsar, { throwIfNoEntry: false })?.isFile()) throw new Error('Staged Signal app.asar is missing.');
+  execFileSync(process.execPath, [path.join(__dirname, 'patch-signal-gpt-context.cjs'), stagedAsar], {
+    cwd: projectRoot,
+    stdio: 'inherit'
+  });
+  const stagedProjectionEntry = (await asar.listPackage(stagedAsar)).find((entry) => /(?:^|[\\/])bundles[\\/]chunks[\\/]messageBridgeChannels\.std-[^\\/]+\.js$/.test(entry));
+  const stagedProjection = stagedProjectionEntry
+    ? Buffer.from(await asar.extractFile(stagedAsar, stagedProjectionEntry.replace(/^[/\\]/, ''))).toString('utf8')
+    : '';
+  if (!stagedProjection.includes('isCurrentLocalCalendarDay') || !stagedProjection.includes('.slice(-18)')) {
+    throw new Error('Staged Signal GPT context is missing the current-day 18-message selector.');
+  }
 
   // Signal Desktop 8.18 loads its preload bridge from file://. Disabling this
   // compatibility fuse makes wrapper.js fail before the renderer can start and
