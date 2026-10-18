@@ -207,6 +207,9 @@ async function verifyClient(clientRoot) {
   for (const forbidden of [/license-issuer/i, /trial-config/i, /issuer-suite-key/i, /license-suite\.sealed/i]) {
     if (entries.some((entry) => forbidden.test(entry))) throw new Error(`Client app.asar contains forbidden entry matching ${forbidden}.`);
   }
+  if (!entries.some((entry) => /(?:^|[\\/])dist-electron[\\/]profile-data-cleanup\.js$/.test(entry))) {
+    throw new Error('Client app.asar is missing profile data cleanup used by the main process.');
+  }
   if (!entries.some((entry) => /(?:^|[\\/])dist-electron[\\/]signal-notification-routing\.js$/.test(entry))) {
     throw new Error('Client app.asar is missing strict Signal notification routing.');
   }

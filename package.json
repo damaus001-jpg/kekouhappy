@@ -176,6 +176,7 @@
       "dist-electron/assistant-library-types.js",
       "dist-electron/assistant-material-store.js",
       "dist-electron/assistant-material-types.js",
+      "dist-electron/profile-data-cleanup.js",
       "dist-electron/conversation-export.js",
       "dist-electron/conversation-export-core.js",
       "dist-electron/conversation-export-types.js",

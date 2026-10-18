@@ -22,6 +22,7 @@ assert.equal(packageJson.shortVersionWindows, '1.6.10.9');
 assert.equal(packageJson.version, expectedVersion);
 assert.equal(packageLock.version, expectedVersion);
 assert.equal(packageLock.packages?.['']?.version, expectedVersion);
+assert.ok(packageJson.build.files.includes('dist-electron/profile-data-cleanup.js'));
 assert.ok(appSource.includes("import { clientVersion } from './client-version';"));
 assert.ok(appSource.includes('<span>V{{ clientVersion }}</span>'));
 assert.ok(appSource.includes('皮卡丘翻译器 V{{ clientVersion }}'));
