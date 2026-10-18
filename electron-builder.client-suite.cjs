@@ -6,7 +6,7 @@ if (!output) throw new Error('MAOYI_CLIENT_BUILD_OUTPUT is required.');
 module.exports = {
   appId: 'com.maoyi.translator',
   productName: '皮卡丘翻译器',
-  buildVersion: '1.6.10.8',
+  buildVersion: '1.6.10.9',
   executableName: 'maoyi',
   asar: true,
   electronDist: 'node_modules/electron/dist',

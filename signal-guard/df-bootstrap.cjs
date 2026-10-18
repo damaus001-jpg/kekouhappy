@@ -20,6 +20,7 @@ const INSTANCE_BINDING_NAME = 'df-instance-binding.dat';
 const DATA_ROOT_NAMES = new Set([
   'maoyi data',
   'maoyi developer data',
+  'maoyi diagnostics client data',
   'maoyi'
 ]);
 

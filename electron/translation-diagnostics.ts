@@ -1,6 +1,6 @@
-import { appendFile, mkdir, rename, stat } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 export type DiagnosticEvent = { at: string; stage: string; [key: string]: string | number | boolean };
 // An allowlist prevents chat text, prompts, credentials and contact names entering this log.
@@ -37,6 +37,45 @@ export class TranslationDiagnostics {
       if (size > 8 * 1024 * 1024) await rename(file, `${file}.previous`).catch(() => {});
       await appendFile(file, `${JSON.stringify(event)}\n`, 'utf8');
     }).catch(() => { this.dropped++; }).finally(() => { this.writing--; });
+  }
+  removeProfileRecords(profileHash: string) {
+    this.writes = this.writes.catch(() => undefined).then(async () => {
+      for (let index = this.events.length - 1; index >= 0; index--) {
+        if (this.events[index].profileId === profileHash) this.events.splice(index, 1);
+      }
+      let entries;
+      try { entries = await readdir(this.directory, { withFileTypes: true }); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+        throw error;
+      }
+      for (const entry of entries) {
+        if (!entry.isFile() || !/^.+\.jsonl(?:\.previous)?$/i.test(entry.name)) continue;
+        const path = join(this.directory, entry.name);
+        let contents: string;
+        try { contents = await readFile(path, 'utf8'); }
+        catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+          throw error;
+        }
+        const kept: string[] = [];
+        let removed = false;
+        for (const line of contents.split(/\r?\n/)) {
+          if (!line) continue;
+          let matches = false;
+          try { matches = (JSON.parse(line) as Record<string, unknown>).profileId === profileHash; }
+          catch { matches = line.includes(profileHash); }
+          if (matches) removed = true;
+          else kept.push(line);
+        }
+        if (!removed) continue;
+        if (!kept.length) { await rm(path, { force: true }); continue; }
+        const temp = `${path}.${randomUUID()}.tmp`;
+        try { await writeFile(temp, `${kept.join('\n')}\n`, 'utf8'); await rename(temp, path); }
+        finally { await rm(temp, { force: true }).catch(() => undefined); }
+      }
+    }).catch(error => { this.dropped++; throw error; });
+    return this.writes;
   }
   async flush() { await this.writes; }
 }

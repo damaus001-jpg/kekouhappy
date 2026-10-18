@@ -11,6 +11,8 @@ import { buildConversationExportScript,mergeConversationExportRows,unwrapConvers
 import { buildSignalGptButtonScript } from './gpt-handoff-runtime';
 import { buildSignalEmojiPickerScript } from './signal-emoji-picker-runtime';
 import { buildOpenSmsScript } from './opensms-runtime';
+import { buildWhatsAppContactListResizeScript } from './whatsapp-contact-list-resize-runtime';
+import { buildOpenSmsContactListResizeScript } from './opensms-contact-list-resize-runtime';
 import opensmsIcon from './assets/opensms-bubble.svg';
 import { installTranslationLayoutWatchersFromDom } from './translation-layout-runtime';
 import type { ExportSnapshot } from './conversation-export-runtime';
@@ -2029,7 +2031,13 @@ function handleLockScreenKeydown(event: KeyboardEvent) {
 }
 
 function nextProfileName(app: RuntimeApp) {
-  if(app==='opensms')return '打新增';
+  if (app === 'opensms') {
+    const existingNames = new Set(profiles.value.filter(profile => profile.platform === 'opensms').map(profile => profile.name));
+    if (!existingNames.has('打新增')) return '打新增';
+    let suffix = 2;
+    while (existingNames.has(`打新增 ${suffix}`)) suffix += 1;
+    return `打新增 ${suffix}`;
+  }
   const prefix = app === 'whatsapp' ? 'WS' : app === 'telegram' ? 'TG' : 'SG';
   const next = profiles.value.filter((profile) => appForPlatform(profile.platform) === app).length + 1;
   return `${prefix}${String(next).padStart(2, '0')}`;
@@ -2049,7 +2057,7 @@ async function openOpenSms(){
   if(isCreatingProfile.value)return;
   isCreatingProfile.value=true;openSmsError.value='';
   try{
-    const profile=await window.chatTranslator.createProfile('opensms','打新增','打新增');
+    const profile=await window.chatTranslator.createProfile('opensms',nextProfileName('opensms'),'打新增');
     const config=await window.chatTranslator.getConfig();
     applyConfig({...config,activeProfileId:profile.id});currentApp.value='opensms';activePanel.value='session';
   }catch(error){openSmsError.value=error instanceof Error?error.message:String(error);}
@@ -2158,29 +2166,40 @@ async function confirmRenameProfile() {
 async function confirmCloseProfile() {
   if (!closeTargetProfile.value || !window.chatTranslator) return;
   const targetId = closeTargetProfile.value.id;
-  if (sensitiveSendPending.value?.profileId === targetId) await clearSensitiveSendPending(targetId);
-  const selectedApp = currentApp.value;
-  profiles.value = profiles.value.filter((profile) => profile.id !== targetId);
-  if (activeProfileId.value === targetId) {
-    activeProfileId.value = currentAppProfiles.value[0]?.id ?? null;
+  try {
+    if (sensitiveSendPending.value?.profileId === targetId) await clearSensitiveSendPending(targetId);
+    const selectedApp = currentApp.value;
+    profiles.value = profiles.value.filter(profile => profile.id !== targetId);
+    if (activeProfileId.value === targetId) activeProfileId.value = currentAppProfiles.value[0]?.id ?? null;
+    cancelCloseProfileDialog();
+    await nextTick();
+    const config = await window.chatTranslator.removeProfile(targetId);
+    clearUnreadState(targetId);
+    clearTranslationRuntimeCache(targetId);
+    delete assistantContacts.value[targetId];
+    delete assistantUsages.value[targetId];
+    delete signalDiagnosticStatus.value[targetId];
+    applyConfig(config);
+    currentApp.value = selectedApp;
+    const rememberedProfileId = lastActiveProfileIds.value[selectedApp];
+    if (!activeProfileId.value || appForPlatform(activeProfile.value?.platform ?? 'whatsapp') !== selectedApp) {
+      activeProfileId.value = profiles.value.some((profile) => (
+        profile.id === rememberedProfileId && appForPlatform(profile.platform) === selectedApp
+      ))
+        ? rememberedProfileId
+        : firstOrderedProfileIdForApp(selectedApp);
+    }
+    rememberActiveProfile(activeProfileId.value);
+    if (activeProfileId.value) void persistActiveProfile(activeProfileId.value);
+  } catch (error) {
+    console.error('Profile removal cleanup failed', error);
+    try {
+      const config = await window.chatTranslator.getConfig();
+      applyConfig(config);
+    } catch {
+      // Keep the already updated workspace responsive if config reload also fails.
+    }
   }
-  cancelCloseProfileDialog();
-  await nextTick();
-  const config = await window.chatTranslator.removeProfile(targetId);
-  clearUnreadState(targetId);
-  clearTranslationRuntimeCache(targetId);
-  applyConfig(config);
-  currentApp.value = selectedApp;
-  const rememberedProfileId = lastActiveProfileIds.value[selectedApp];
-  if (!activeProfileId.value || appForPlatform(activeProfile.value?.platform ?? 'whatsapp') !== selectedApp) {
-    activeProfileId.value = profiles.value.some((profile) => (
-      profile.id === rememberedProfileId && appForPlatform(profile.platform) === selectedApp
-    ))
-      ? rememberedProfileId
-      : firstOrderedProfileIdForApp(selectedApp);
-  }
-  rememberActiveProfile(activeProfileId.value);
-  if (activeProfileId.value) void persistActiveProfile(activeProfileId.value);
 }
 
 async function persistWorkspaceConfig() {
@@ -9022,6 +9041,11 @@ function handleWebviewDomReady(event: Event, profile: ChatProfile) {
 
   void webview.executeJavaScript(buildLegacyTranslationCacheCleanupScript(appForPlatform(profile.platform)), true);
   void webview.executeJavaScript(buildFingerprintScript(profile), true);
+  if (profile.platform === 'whatsapp') {
+    void webview.executeJavaScript(buildWhatsAppContactListResizeScript(), true).catch(() => undefined);
+  } else if (profile.platform === 'opensms') {
+    void webview.executeJavaScript(buildOpenSmsContactListResizeScript(), true).catch(() => undefined);
+  }
   void applyEyeCareTranslationToProfile(profile.id).catch(() => undefined);
   startUnreadBridge(profile.id);
   void preloadTranslationCache(profile.id).then(() => {
@@ -12306,11 +12330,11 @@ onUnmounted(() => {
             <span v-if="unreadCountForProfile(tab.id) > 0" class="tab-unread-badge">{{ formatUnreadCount(unreadCountForProfile(tab.id)) }}</span>
             <span class="tab-icon"><img :src="tab.icon" :alt="tab.short" /></span>
             <b>{{ tab.name }}</b>
-            <em v-if="tab.platform!=='opensms'" aria-label="rename" title="修改名称和分组" @click.stop="requestRenameProfile(tab)">✎</em>
-            <i v-if="tab.platform!=='opensms'" aria-label="close" @click.stop="requestCloseProfile(tab)">×</i>
+            <em aria-label="rename" title="修改名称和分组" @click.stop="requestRenameProfile(tab)">✎</em>
+            <i aria-label="close" @click.stop="requestCloseProfile(tab)">×</i>
           </button>
         </template>
-        <button v-if="currentApp!=='opensms'" class="add-tab" type="button" :disabled="isCreatingProfile" @click="openCreateProfileDialog">+</button>
+        <button class="add-tab" type="button" :disabled="isCreatingProfile" @click="openCreateProfileDialog">+</button>
       </div>
       <div v-if="activeSensitiveSendPending" class="sensitive-send-trusted" role="status">
         <strong>发送前可信确认</strong>
@@ -12390,11 +12414,11 @@ onUnmounted(() => {
 
     <div v-if="closeTargetProfile" class="modal-mask" @click.self="cancelCloseProfileDialog">
       <section class="modal-card">
-        <h3>关闭多开</h3>
-        <p>是否关闭“{{ closeTargetProfile.name }}”的窗口？</p>
+        <h3>移除多开</h3>
+        <p>移除“{{ closeTargetProfile.name }}”后，此多开的本机数据和翻译记录都将被清除。下次扫码登录后，所有对话将从头开始翻译。</p>
         <div class="modal-actions">
-          <button type="button" @click="cancelCloseProfileDialog">否</button>
-          <button type="button" @click="confirmCloseProfile">是</button>
+          <button type="button" @click="cancelCloseProfileDialog">取消</button>
+          <button type="button" @click="confirmCloseProfile">移除</button>
         </div>
       </section>
     </div>

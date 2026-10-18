@@ -117,6 +117,12 @@ async function main() {
   if (!stagedProjection.includes('isCurrentLocalCalendarDay') || !stagedProjection.includes('.slice(-18)')) {
     throw new Error('Staged Signal GPT context is missing the current-day 18-message selector.');
   }
+  const stagedAsarHeaderHash = crypto.createHash('sha256')
+    .update(asar.getRawHeader(stagedAsar).headerString)
+    .digest('hex');
+  if (!fs.readFileSync(stagedExe).includes(Buffer.from(stagedAsarHeaderHash, 'utf8'))) {
+    throw new Error('Staged Signal.exe does not contain the matching embedded app.asar header hash.');
+  }
 
   // Signal Desktop 8.18 loads its preload bridge from file://. Disabling this
   // compatibility fuse makes wrapper.js fail before the renderer can start and

@@ -59,7 +59,7 @@ if (!process.versions.electron) {
         async openExternal() {opened=true;}
       });
       assert.equal(opened,false);
-      assert.ok(copied.endsWith('请结合以上聊天记录，并在记忆功能可用时参考你在 ChatGPT 个性化设置中保存的记忆，为我方生成三组自然、符合上下文的美式英文回复。每组附上忠实、简洁的中文释义。不要编造聊天记录中没有的信息，回复长度和语气要适合当前对话。'));
+      assert.ok(copied.endsWith('请结合以上聊天记录，翻译对方的最后两句话并揣摩其中的意思向我用中文表达清楚。并在记忆功能可用时参考你在 ChatGPT 个性化设置中保存的记忆，为我方生成三组自然、符合上下文的美式英文回复。每组附上忠实、简洁的中文释义。不要编造聊天记录中没有的信息，回复长度和语气要适合当前对话。'));
       await execute(web.buildSmartReplyUiStateScript({ latestMessageKey:payload.latestMessageKey,conversationSignature:'test-contact',state:'idle' }));
       assert.equal(await execute(`Array.from(document.querySelectorAll('.df-smart-reply-button')).at(-1).disabled`),false);
 

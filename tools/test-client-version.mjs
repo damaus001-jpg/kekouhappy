@@ -15,9 +15,9 @@ const clientBuilder = fs.readFileSync(
 
 const expectedVersion = packageJson.version;
 assert.match(expectedVersion, /^\d+\.\d+\.\d+$/);
-assert.match(clientVersionSource, /export const clientVersion = '1\.6\.10\.8';/);
-assert.equal(packageJson.build.buildVersion, '1.6.10.8');
-assert.equal(packageJson.shortVersionWindows, '1.6.10.8');
+assert.match(clientVersionSource, /export const clientVersion = '1\.6\.10\.9';/);
+assert.equal(packageJson.build.buildVersion, '1.6.10.9');
+assert.equal(packageJson.shortVersionWindows, '1.6.10.9');
 
 assert.equal(packageJson.version, expectedVersion);
 assert.equal(packageLock.version, expectedVersion);
@@ -27,7 +27,7 @@ assert.ok(appSource.includes('<span>V{{ clientVersion }}</span>'));
 assert.ok(appSource.includes('皮卡丘翻译器 V{{ clientVersion }}'));
 assert.ok(appSource.includes('皮卡丘翻译器 v{{ clientVersion }}'));
 assert.doesNotMatch(appSource, /V0\.1\.2/);
-assert.match(clientBuilder, /buildVersion: '1\.6\.10\.8'/);
+assert.match(clientBuilder, /buildVersion: '1\.6\.10\.9'/);
 assert.match(clientBuilder, /artifactName: 'pikaqiufanyiqi-\$\{buildVersion\}-Setup\.\$\{ext\}'/);
 
 console.log('client-version: package, lock file, client UI, and installer artifact contracts passed');

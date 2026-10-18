@@ -249,8 +249,11 @@ async function main() {
 
 async function refreshSourceHardenedDeveloperDataRoot({ asarPath, exePath, tempDir, unpackedPath }) {
   const mainEntry = 'bundles/main.js';
-  const oldMarker = 'new Set([`maoyi data`,`maoyi`])';
-  const newMarker = 'new Set([`maoyi data`,`maoyi developer data`,`maoyi`])';
+  const oldMarkers = [
+    'new Set([`maoyi data`,`maoyi`])',
+    'new Set([`maoyi data`,`maoyi developer data`,`maoyi`])'
+  ];
+  const newMarker = 'new Set([`maoyi data`,`maoyi developer data`,`maoyi diagnostics client data`,`maoyi`])';
   const oldSurfaceMarker = 'c&&D(c),s.isVisible()||a.get(s)?.show()}';
   const newSurfaceMarker = 'c&&D(c),s.isVisible()||a.get(s)?.show(),s.webContents.isDestroyed()||s.webContents.invalidate()}';
   const sourceNativeSurfaceMarkers = [
@@ -286,7 +289,7 @@ async function refreshSourceHardenedDeveloperDataRoot({ asarPath, exePath, tempD
   }
   if (
     needsDeveloperDataRoot &&
-    (!currentMain.includes(oldMarker) || currentMain.indexOf(oldMarker) !== currentMain.lastIndexOf(oldMarker))
+    (!oldMarkers.some(marker => currentMain.includes(marker) && currentMain.indexOf(marker) === currentMain.lastIndexOf(marker)))
   ) {
     throw new Error('Source-hardened Signal developer data-root marker is missing or ambiguous.');
   }
@@ -312,7 +315,8 @@ async function refreshSourceHardenedDeveloperDataRoot({ asarPath, exePath, tempD
     const mainPath = path.join(refreshDir, mainEntry);
     if (needsDeveloperDataRoot) {
       const source = await fs.readFile(mainPath, 'utf8');
-      if (!source.includes(oldMarker) || source.indexOf(oldMarker) !== source.lastIndexOf(oldMarker)) {
+      const oldMarker = oldMarkers.find(marker => source.includes(marker) && source.indexOf(marker) === source.lastIndexOf(marker));
+      if (!oldMarker) {
         throw new Error('Extracted source-hardened Signal developer data-root marker is missing or ambiguous.');
       }
       await fs.writeFile(mainPath, source.replace(oldMarker, newMarker), 'utf8');

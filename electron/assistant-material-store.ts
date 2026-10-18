@@ -25,6 +25,29 @@ export async function readAssistantUsage(profileId: string): Promise<AssistantUs
   if (data.schemaVersion !== 1 || !Array.isArray(data.records)) throw new Error('素材使用记录损坏');
   return data.records.filter((r: AssistantUsage) => profileId === '*' || r.profileId === profileId);
 }
+export function removeAssistantUsageForProfile(profileId: string): Promise<void> {
+  bounded(profileId, 128, '账号');
+  const operation = async () => {
+    const records = await readAssistantUsage('*');
+    const remaining = records.filter(record => record.profileId !== profileId);
+    for (const [token, receipt] of receipts) {
+      if (receipt.profileId === profileId) receipts.delete(token);
+    }
+    if (remaining.length === records.length) return;
+    if (!safeStorage.isEncryptionAvailable()) throw new Error('素材使用记录保护不可用，无法清理');
+    await mkdir(directory(), { recursive: true });
+    const temp = join(directory(), `usage-${randomUUID()}.tmp`);
+    try {
+      await writeFile(temp, safeStorage.encryptString(JSON.stringify({ schemaVersion: 1, records: remaining })));
+      await rename(temp, filename());
+    } finally {
+      await unlink(temp).catch(() => {});
+    }
+  };
+  const next = queue.then(operation, operation);
+  queue = next.catch(() => {});
+  return next;
+}
 export async function stageAssistantMaterial(material: AssistantMaterial): Promise<AssistantStagedMaterial> {
   bounded(material.id, 200, '素材编号');
   const value: AssistantStagedMaterial = { id: material.id, type: material.type, token: randomUUID(), expiresAt: Date.now() + 30 * 60 * 1000 };

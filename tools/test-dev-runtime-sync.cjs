@@ -16,6 +16,15 @@ const preparedRuntime = path.join(
 );
 
 const syncSource = fs.readFileSync(syncPath, 'utf8');
+const diagnosticsLauncher = fs.readFileSync(path.join(root, 'tools', 'start-translation-diagnostics.cjs'), 'utf8');
+for (const [needle, message] of [
+  ['ensureSignalAcceptsDiagnosticDataRoot(copiedRuntime, copiedAsar)', 'developer launcher does not validate the embedded Signal data-root guard in its isolated runtime'],
+  ['patch-signal-control-channel.cjs', 'developer launcher cannot repair a stale embedded Signal guard'],
+  ['maoyi diagnostics client data', 'developer launcher does not require its active Signal data-root name']
+]) {
+  if (!diagnosticsLauncher.includes(needle)) throw new Error(message);
+}
+
 const requiredContracts = [
   ["const baselineVersion = '8.18.0';", 'runtime synchronization is not bound to Signal 8.18.0'],
   ["requiredFile(sourceRoot, 'Signal.exe');", 'runtime synchronization does not require Signal.exe'],

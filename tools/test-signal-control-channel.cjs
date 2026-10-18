@@ -12,8 +12,8 @@ const runtimeDir = process.env.MAOYI_SIGNAL_RUNTIME_DIR
   : path.resolve('.runtime/signal-desktop');
 const signalExe = path.join(runtimeDir, 'Signal.exe');
 const testRoot = path.resolve('.tmp', `signal-control-test-${Date.now().toString(36)}`);
-const dataRootName = process.env.MAOYI_SIGNAL_TEST_DATA_ROOT_NAME || 'maoyi Data';
-if (!['maoyi Data', 'maoyi Developer Data'].includes(dataRootName)) {
+const dataRootName = process.env.MAOYI_SIGNAL_TEST_DATA_ROOT_NAME || 'maoyi Diagnostics Client Data';
+if (!['maoyi Data', 'maoyi Developer Data', 'maoyi Diagnostics Client Data'].includes(dataRootName)) {
   throw new Error(`Unsupported Signal test data-root name: ${dataRootName}`);
 }
 const dataRoot = path.join(testRoot, dataRootName);

@@ -1,4 +1,5 @@
 const fs = require('node:fs/promises');
+const crypto = require('node:crypto');
 const path = require('node:path');
 const asar = require('@electron/asar');
 
@@ -12,6 +13,28 @@ function assertInsideProject(target) {
   if (!relative || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
     throw new Error(`Signal GPT context patch path must stay inside the project: ${target}`);
   }
+}
+
+function asarHeaderHash(archivePath) {
+  const rawHeader = asar.getRawHeader(archivePath);
+  return crypto.createHash('sha256').update(rawHeader.headerString).digest('hex');
+}
+
+async function patchExecutableAsarHash(executablePath, oldHash, newHash) {
+  const exe = await fs.readFile(executablePath);
+  const oldBytes = Buffer.from(oldHash, 'utf8');
+  const newBytes = Buffer.from(newHash, 'utf8');
+  const index = exe.indexOf(oldBytes);
+  if (index < 0) {
+    throw new Error(`Signal.exe does not contain the previous app.asar header hash: ${oldHash}`);
+  }
+  if (exe.indexOf(oldBytes, index + oldBytes.length) >= 0) {
+    throw new Error('Signal.exe contains an ambiguous app.asar header hash.');
+  }
+  newBytes.copy(exe, index);
+  const temporaryExe = `${executablePath}.${process.pid}.tmp`;
+  await fs.writeFile(temporaryExe, exe);
+  await fs.rename(temporaryExe, executablePath);
 }
 
 async function patchSignalGptContext(archivePath) {
@@ -38,6 +61,15 @@ async function patchSignalGptContext(archivePath) {
   if (firstIndex < 0 || source.indexOf(oldFunctions, firstIndex + oldFunctions.length) >= 0) {
     throw new Error('Signal message bridge context selector does not match the expected 8-message source.');
   }
+  const oldHeaderHash = asarHeaderHash(targetArchive);
+  const executablePath = path.resolve(path.dirname(path.dirname(targetArchive)), 'Signal.exe');
+  const pairedExecutableExists = await fs.stat(executablePath).then(stat => stat.isFile(), () => false);
+  if (pairedExecutableExists) {
+    const executableBytes = await fs.readFile(executablePath);
+    if (!executableBytes.includes(Buffer.from(oldHeaderHash, 'utf8'))) {
+      throw new Error('Signal.exe and app.asar were already out of sync before the GPT context patch.');
+    }
+  }
   await fs.writeFile(bridgePath, source.replace(oldFunctions, newFunctions), 'utf8');
   await asar.createPackageWithOptions(extracted, packed, {
     unpack: '*.node',
@@ -55,6 +87,9 @@ async function patchSignalGptContext(archivePath) {
     const packedUnpacked = `${packed}.unpacked`;
     if (await fs.stat(packedUnpacked).then(() => true, () => false)) {
       await fs.rename(packedUnpacked, targetUnpacked);
+    }
+    if (pairedExecutableExists) {
+      await patchExecutableAsarHash(executablePath, oldHeaderHash, asarHeaderHash(targetArchive));
     }
   } catch (error) {
     await fs.rm(targetArchive, { force: true });
@@ -76,4 +111,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { patchSignalGptContext, oldFunctions, newFunctions };
+module.exports = { patchSignalGptContext, oldFunctions, newFunctions, asarHeaderHash };

@@ -1,4 +1,5 @@
 const fs = require('node:fs');
+const crypto = require('node:crypto');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawn } = require('node:child_process');
@@ -212,6 +213,12 @@ async function verifyClient(clientRoot) {
   const signalExecutable = path.join(resources, 'signal', 'Signal.exe');
   await verifySignalFuses(signalExecutable);
   const signalAsar = path.join(resources, 'signal', 'resources', 'app.asar');
+  const signalAsarHeaderHash = crypto.createHash('sha256')
+    .update(asar.getRawHeader(signalAsar).headerString)
+    .digest('hex');
+  if (!fs.readFileSync(signalExecutable).includes(Buffer.from(signalAsarHeaderHash, 'utf8'))) {
+    throw new Error('Bundled Signal.exe embedded app.asar header hash does not match the bundled app.asar.');
+  }
   const signalMain = Buffer.from(await asar.extractFile(signalAsar, 'bundles/main.js')).toString('utf8');
   const signalEntries = await asar.listPackage(signalAsar);
   let hasMaoyiNotificationActivation = false;

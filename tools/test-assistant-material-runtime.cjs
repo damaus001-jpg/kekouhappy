@@ -127,5 +127,9 @@ app.whenReady().then(async()=>{
   const stored=await fs.readFile(path.join(directory,'assistant-library','usage.enc'));
   assert.ok(!stored.includes(Buffer.from('Edited material')));
   assert.equal((await store.readAssistantUsage('*')).length,6);
+  await store.removeAssistantUsageForProfile('fixture-whatsapp');
+  assert.equal((await store.readAssistantUsage('fixture-whatsapp')).length,0,'profile removal clears its persisted material-use history');
+  assert.equal((await store.readAssistantUsage('*')).length,4,'material-use cleanup preserves other profiles');
+  assert.ok((await service.readAssistantLibrary()).modules.quotes.entries[0].media.length > 0,'profile removal preserves the global material library');
   console.log(JSON.stringify({passed:results,encrypted:true,profileIsolation:true}));server.close();app.exit(0);
 }).catch(error=>{console.error(error);app.exit(1);});

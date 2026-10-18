@@ -115,8 +115,15 @@ assert.match(
 );
 assert.match(
   mainSource,
-  /async function removeProfile[\s\S]*?await removeProfileTranslationCache\(profile\.id\)/,
-  'explicit profile removal must delete its encrypted disk translation cache'
+  /async function removeProfile[\s\S]*?await destroyProfilePartition\(profile\.partition\)[\s\S]*?await removeProfileTranslationCache\(profile\.id\)/,
+  'explicit profile removal must clean its browser partition and disk translation cache'
 );
+const partitionCleanup = mainSource.match(/async function destroyProfilePartition\(partition: string\) \{[\s\S]*?\n\}/)?.[0] || '';
+assert.match(partitionCleanup, /await Promise\.all\(closingContents\)[\s\S]*?await ses\.closeAllConnections\(\)[\s\S]*?await removePathWithRetry\(storagePath\)/,
+  'partition cleanup closes its pages and removes the isolated browser directory');
+assert.doesNotMatch(partitionCleanup, /clearStorageData|clearCache/,
+  'profile deletion removes the isolated directory directly instead of redundantly clearing each browser store');
+assert.match(mainSource, /const savedConfig = await saveConfig\(config\);[\s\S]*?await cleanupOrphanProfilePartitions\(savedConfig\)/,
+  'profile removal preserves the previous config-first cleanup flow');
 
 console.log('profile-tab-order: default/manual order, last-active restore, and no-reload contracts passed');

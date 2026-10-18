@@ -31,7 +31,8 @@ import { readAssistantLibrary, saveAssistantModule, importAssistantModule, attac
 import type { AssistantKind, AssistantModule } from './assistant-library-types.js';
 import { handoffChatToGpt } from './gpt-handoff.js';
 import { installOpenSmsLoginPersistence, removeOpenSmsLogin } from './opensms-login.js';
-import { stageAssistantMaterial, currentAssistantMaterial, readAssistantUsage, recordAssistantUse, readAssistantImage } from './assistant-material-store.js';
+import { stageAssistantMaterial, currentAssistantMaterial, readAssistantUsage, recordAssistantUse, readAssistantImage, removeAssistantUsageForProfile } from './assistant-material-store.js';
+import { filterProfileScopedJsonl, profileLogIdentityHash } from './profile-data-cleanup.js';
 import type { AssistantMaterial, AssistantUseRequest } from './assistant-material-types.js';
 import { exportConversationFile } from './conversation-export.js';
 import type { ConversationExportRequest } from './conversation-export-types.js';
@@ -304,12 +305,15 @@ const runtimeLoggingEnabled = !app.isPackaged;
 const translationDiagnosticsEnabled = !app.isPackaged && process.env.MAOYI_TRANSLATION_DIAGNOSTICS === '1';
 const translationDiagnostics = translationDiagnosticsEnabled
   ? new TranslationDiagnostics(join(initialDiagnosticsRoot(), 'logs')) : null;
+const profilesBeingRemoved = new Set<string>();
+let profileLogWriteQueue: Promise<void> = Promise.resolve();
 let diagnosticServiceSecret = '';
 const diagnosticInFlight = new Map<string, { startedAt: number; platform: string; reason: string }>();
 function initialDiagnosticsRoot() {
   return join(developmentProjectRoot, '.tmp', 'translation-diagnostics-client');
 }
 function recordTranslationDiagnostic(stage: string, details: Record<string, unknown> = {}) {
+  if (typeof details.profileId === 'string' && profilesBeingRemoved.has(details.profileId)) return;
   translationDiagnostics?.record(stage, details);
 }
 let diagnosticProbe = { state: 'idle', elapsedMs: 0 };
@@ -551,6 +555,7 @@ const signalControlClients = new Map<string, SignalControlClient>();
 let signalNotificationRoutes = new Map<string, SignalNotificationRouteRecord>();
 let signalNotificationRoutesLoaded = false;
 let signalNotificationRouteWriteQueue: Promise<void> = Promise.resolve();
+let signalControlStatusWriteQueue: Promise<void> = Promise.resolve();
 const pendingSignalNotificationActivationIds: string[] = [];
 type PendingSignalCacheSnapshotRequest = {
   requestId: string;
@@ -2184,6 +2189,16 @@ function installWebContentsSecurityPolicy() {
       if (!isAllowedPlatformUrl(platform, targetUrl)) event.preventDefault();
     });
 
+    // Temporary developer-only inspector for identifying WhatsApp layout seams.
+    if (platform === 'whatsapp' && !app.isPackaged) {
+      contents.on('before-input-event', (event, input) => {
+        if (input.type !== 'keyDown' || input.key !== 'F12' || input.isAutoRepeat) return;
+        event.preventDefault();
+        if (contents.isDevToolsOpened()) contents.closeDevTools();
+        else contents.openDevTools({ mode: 'detach' });
+      });
+    }
+
     if ((platform === 'telegram-k' || platform === 'telegram-a') && runtimeLoggingEnabled) {
       let enterSequence = 0;
       contents.on('before-input-event', (_event, input) => {
@@ -2398,6 +2413,7 @@ async function loadSignalNotificationRoutes() {
 }
 
 function registerSignalNotificationRoute(appId: string, message: Record<string, unknown>) {
+  if (profilesBeingRemoved.has(profileIdFromSignalAppId(appId))) return false;
   const record = validateSignalNotificationRegistration(message, appId);
   if (!record) return false;
   const records = insertSignalNotificationRoute(currentSignalNotificationRoutes(), record);
@@ -3854,39 +3870,60 @@ function hashForLog(text: string) {
 }
 
 async function appendTranslateRequestLog(event: Record<string, unknown>) {
+  if (profileLogEventIsBeingRemoved(event)) return;
   if (translationDiagnosticsEnabled) {
     recordTranslationDiagnostic(`api:${String(event.status || 'event')}`, event);
     return;
   }
   if (!runtimeLoggingEnabled) return;
-  try {
-    await mkdir(app.getPath('userData'), { recursive: true });
-    await appendFile(
-      translateRequestLogPath(),
-      `${JSON.stringify({ at: new Date().toISOString(), ...event })}\n`,
-      'utf8'
-    );
-  } catch {
-    // Logging must never block translation.
-  }
+  await enqueueProfileLogOperation(async () => {
+    if (profileLogEventIsBeingRemoved(event)) return;
+    try {
+      await mkdir(app.getPath('userData'), { recursive: true });
+      await appendFile(
+        translateRequestLogPath(),
+        `${JSON.stringify({ at: new Date().toISOString(), ...event })}\n`,
+        'utf8'
+      );
+    } catch {
+      // Logging must never block translation.
+    }
+  });
 }
 
 async function appendSignalTranslationDebugLog(event: Record<string, unknown>) {
+  if (profileLogEventIsBeingRemoved(event)) return;
   if (translationDiagnosticsEnabled) {
     recordTranslationDiagnostic(`renderer:${String(event.type || 'event')}`, event);
     return;
   }
   if (!runtimeLoggingEnabled) return;
-  try {
-    await mkdir(app.getPath('userData'), { recursive: true });
-    await appendFile(
-      signalTranslationDebugLogPath(),
-      `${JSON.stringify({ at: new Date().toISOString(), ...event })}\n`,
-      'utf8'
-    );
-  } catch {
-    // Diagnostics must never block Signal translation.
-  }
+  await enqueueProfileLogOperation(async () => {
+    if (profileLogEventIsBeingRemoved(event)) return;
+    try {
+      await mkdir(app.getPath('userData'), { recursive: true });
+      await appendFile(
+        signalTranslationDebugLogPath(),
+        `${JSON.stringify({ at: new Date().toISOString(), ...event })}\n`,
+        'utf8'
+      );
+    } catch {
+      // Diagnostics must never block Signal translation.
+    }
+  });
+}
+
+function profileLogEventIsBeingRemoved(event: Record<string, unknown>) {
+  return Array.from(profilesBeingRemoved).some(profileId =>
+    event.profileId === profileId || event.userId === `df-${profileId}` ||
+    event.appId === `signal:${profileId}` || event.appId === signalAppId(profileId)
+  );
+}
+
+function enqueueProfileLogOperation(operation: () => Promise<void>) {
+  const next = profileLogWriteQueue.catch(() => undefined).then(operation);
+  profileLogWriteQueue = next.catch(() => undefined);
+  return next;
 }
 
 function randomId() {
@@ -3931,10 +3968,6 @@ async function createProfile(platform: Platform, name: string, group: string): P
 }
 async function createProfileRecord(platform: Platform, name: string, group: string): Promise<ChatProfile> {
   const config = await readConfig();
-  if (platform === 'opensms') {
-    const existing = config.profiles.find(profile => profile.platform === 'opensms');
-    if (existing) return existing;
-  }
   const nextName = name.trim();
   const nextGroup = group.trim();
   if (!nextName) throw new Error('Profile name is required.');
@@ -6199,19 +6232,23 @@ function handleSignalControlMessage(appId: string, message: Record<string, unkno
 
 async function persistSignalControlStatus() {
   if (!runtimeLoggingEnabled) return;
-  const entries = Array.from(signalControlClients.entries()).map(([appId, client]) => ({
-    appId,
-    processId: client.processId,
-    connected: !client.socket.destroyed,
-    connectedAt: client.connectedAt,
-    lastSeenAt: client.lastSeenAt
-  }));
-  try {
-    await mkdir(app.getPath('userData'), { recursive: true });
-    await writeJsonAtomic(signalControlStatusPath(), { port: signalControlPort, entries, updatedAt: Date.now() });
-  } catch {
-    // Diagnostics must not block Signal runtime control.
-  }
+  const operation = signalControlStatusWriteQueue.catch(() => undefined).then(async () => {
+    const entries = Array.from(signalControlClients.entries()).map(([appId, client]) => ({
+      appId,
+      processId: client.processId,
+      connected: !client.socket.destroyed,
+      connectedAt: client.connectedAt,
+      lastSeenAt: client.lastSeenAt
+    }));
+    try {
+      await mkdir(app.getPath('userData'), { recursive: true });
+      await writeJsonAtomic(signalControlStatusPath(), { port: signalControlPort, entries, updatedAt: Date.now() });
+    } catch {
+      // Diagnostics must not block Signal runtime control.
+    }
+  });
+  signalControlStatusWriteQueue = operation.catch(() => undefined);
+  await operation;
 }
 
 async function cleanupPackagedRuntimeLogs() {
@@ -6636,6 +6673,113 @@ async function removeProfileTranslationCache(profileId: string) {
   }
 }
 
+async function drainProfileTranslationCacheWrites(profileId: string) {
+  const marker = `${sep}${safeProfileFileName(profileId)}${sep}`;
+  const pending = Array.from(translationCacheWriteQueues.entries())
+    .filter(([key]) => key.includes(marker))
+    .map(([, promise]) => promise.catch(() => false));
+  await Promise.all(pending);
+}
+
+async function removeProfileNonEnglishMarkers(profileId: string) {
+  const excludedRoot = join(translationCacheRoot(), 'excluded-contacts');
+  for (const platform of supportedPlatforms) {
+    await removePathWithRetry(containedPath(excludedRoot, safePathPart(platform), safeProfileFileName(profileId)));
+  }
+}
+
+async function removeSignalNotificationRoutesForProfile(profileId: string) {
+  if (!signalNotificationRoutesLoaded) await loadSignalNotificationRoutes();
+  const appId = signalAppId(profileId);
+  const removedActivationIds = new Set(
+    Array.from(signalNotificationRoutes.values())
+      .filter(route => route.appId === appId)
+      .map(route => route.activationId)
+  );
+  signalNotificationRoutes = new Map(
+    Array.from(signalNotificationRoutes.entries()).filter(([, route]) => route.appId !== appId)
+  );
+  for (let index = pendingSignalNotificationActivationIds.length - 1; index >= 0; index -= 1) {
+    if (removedActivationIds.has(pendingSignalNotificationActivationIds[index])) {
+      pendingSignalNotificationActivationIds.splice(index, 1);
+    }
+  }
+  await signalNotificationRouteWriteQueue.catch(() => undefined);
+  const path = signalNotificationRoutesPath();
+  const hasStoredFile = await pathExists(path);
+  if (!hasStoredFile && signalNotificationRoutes.size === 0) return;
+  if (!safeStorage.isEncryptionAvailable()) throw new Error('Signal 通知记录无法解密清理，请重新启动后重试');
+  const payload = JSON.stringify({ schemaVersion: 1, records: currentSignalNotificationRoutes() });
+  const temp = `${path}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temp, safeStorage.encryptString(payload));
+    await rename(temp, path);
+  } finally {
+    await rm(temp, { force: true }).catch(() => undefined);
+  }
+}
+
+async function removeProfileSignalControlStatus(profileId: string) {
+  await signalControlStatusWriteQueue.catch(() => undefined);
+  const path = signalControlStatusPath();
+  let raw: string;
+  try {
+    raw = await readFile(path, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    await rm(path, { force: true });
+    return;
+  }
+  if (!Array.isArray(parsed.entries)) {
+    await rm(path, { force: true });
+    return;
+  }
+  const remaining = parsed.entries.filter(entry =>
+    !entry || typeof entry !== 'object' || (entry as Record<string, unknown>).appId !== signalAppId(profileId)
+  );
+  if (remaining.length === parsed.entries.length) return;
+  await writeJsonAtomic(path, { ...parsed, entries: remaining, updatedAt: Date.now() });
+}
+
+async function rewriteProfileScopedJsonl(path: string, profileId: string) {
+  let contents: string;
+  try {
+    contents = await readFile(path, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
+  const filtered = filterProfileScopedJsonl(contents, profileId);
+  if (!filtered.removed) return;
+  if (!filtered.contents) {
+    await rm(path, { force: true });
+    return;
+  }
+  const temp = `${path}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temp, filtered.contents, 'utf8');
+    await rename(temp, path);
+  } finally {
+    await rm(temp, { force: true }).catch(() => undefined);
+  }
+}
+
+async function removeProfileScopedRuntimeLogs(profileId: string) {
+  await enqueueProfileLogOperation(async () => {
+    await rewriteProfileScopedJsonl(translateRequestLogPath(), profileId);
+    await rewriteProfileScopedJsonl(signalTranslationDebugLogPath(), profileId);
+  });
+
+  if (!translationDiagnostics) return;
+  await translationDiagnostics.removeProfileRecords(profileLogIdentityHash(profileId));
+}
+
 async function readTranslationCacheIndex(request: TranslationCacheLoadRequest | TranslationCacheSetRequest): Promise<TranslationCacheIndex> {
   try {
     const raw = (await readFile(chunkedTranslationCacheIndexPath(request), 'utf8')).replace(/^\uFEFF/, '');
@@ -6918,6 +7062,7 @@ async function saveTranslationCacheEntry(
 ): Promise<boolean> {
   if (
     !request.profileId ||
+    profilesBeingRemoved.has(request.profileId) ||
     !request.sourceHash ||
     !request.translatedText ||
     !isEnglishChatSource(request.sourceText) ||
@@ -6936,7 +7081,7 @@ async function saveTranslationCacheEntry(
   const nextWrite = previousWrite
     .catch(() => false)
     .then(async () => {
-      if (!shouldContinue()) return false;
+      if (profilesBeingRemoved.has(request.profileId) || !shouldContinue()) return false;
       await saveTranslationCacheEntryNow(request);
       return true;
     });
@@ -7013,16 +7158,23 @@ async function destroyProfilePartition(partition: string) {
   const ses = session.fromPartition(partition);
   const storagePolicyKey = sessionStoragePolicyKey(ses.storagePath);
 
-  for (const contents of webContents.getAllWebContents()) {
-    if (contents.isDestroyed() || contents.session !== ses) continue;
-    contents.close({ waitForBeforeUnload: false });
-  }
+  const closingContents = webContents.getAllWebContents()
+    .filter(contents => !contents.isDestroyed() && contents.session === ses)
+    .map(contents => new Promise<void>(resolve => {
+      if (contents.isDestroyed()) {
+        resolve();
+        return;
+      }
+      contents.once('destroyed', () => resolve());
+      contents.close({ waitForBeforeUnload: false });
+      if (contents.isDestroyed()) resolve();
+    }));
 
-  await ses.clearStorageData();
-  await ses.clearCache();
+  await Promise.all(closingContents);
   await ses.closeAllConnections();
   ses.flushStorageData();
-
+  // A profile owns this entire persistent Chromium partition. Removing the
+  // directory is both faster and more complete than clearing stores one by one.
   await removePathWithRetry(storagePath);
 
   configuredPartitions.delete(partition);
@@ -7363,6 +7515,7 @@ async function translateWithDeepSeekCore(
   abortSignal?: AbortSignal,
   logPolicy: 'standard' | 'content-free' = 'standard'
 ): Promise<string> {
+  if (request.profileId && profilesBeingRemoved.has(request.profileId)) throw new Error('该多开正在清理，已停止翻译');
   if (abortSignal?.aborted) throw new Error('Translation request was cancelled.');
   const config = await readConfig();
   const deepseekApiKey = clientLicenseManager?.getServiceSecret() || await readDevelopmentServiceSecret();
@@ -7765,6 +7918,7 @@ function validateTranslateRequest(value: TranslateRequest) {
 function validateCacheRequest(value: TranslationCacheLoadRequest | TranslationCacheSetRequest | TranslationCacheLookupRequest) {
   if (!value || typeof value !== 'object') throw new Error('Translation cache request is invalid.');
   assertProfileId(value.profileId);
+  if (profilesBeingRemoved.has(value.profileId)) throw new Error('该多开正在清理，暂不能读写记录');
   if (value.platform) validatePlatform(value.platform);
   for (const field of ['profileName', 'contactId', 'contactTitle', 'contactRemark'] as const) {
     if (value[field] !== undefined) assertText(value[field], `Cache ${field}`, 512, true);
@@ -7841,7 +7995,9 @@ function registerIpc() {
   });
   trustedHandle('assistant:use', true, async (_event, value: AssistantUseRequest) => {
     assertAssistantUnlocked(); assertSerializedSize(value, 'Assistant use', 100 * 1024); assertProfileId(value.profileId);
+    if (profilesBeingRemoved.has(value.profileId)) throw new Error('该多开正在清理，无法记录素材使用');
     const profile=(await readProfileBackup()).find(p=>p.id===value.profileId);
+    if (profilesBeingRemoved.has(value.profileId)) throw new Error('该多开正在清理，无法记录素材使用');
     const platform=profile?.platform==='telegram-a'||profile?.platform==='telegram-k'?'telegram':profile?.platform;
     if(!profile||platform!==value.platform)throw new Error('素材使用账号或平台不匹配');
     return recordAssistantUse(value);
@@ -8017,6 +8173,7 @@ function registerIpc() {
   });
   trustedHandle('translate', true, async (event, request: TranslateRequest) => {
     const validated = validateTranslateRequest(request);
+    if (validated.profileId && profilesBeingRemoved.has(validated.profileId)) throw new Error('该多开正在清理，无法翻译');
     const requestId = validated.requestId || randomUUID();
     const key = `${event.sender.id}:${requestId}`;
     if (translationControllers.has(key)) throw new Error('Translation request is already running.');

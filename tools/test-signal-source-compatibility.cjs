@@ -513,14 +513,17 @@ assert.match(runtimePatcher, /sourceNativeLongMessageMarkers\.every/);
 assert.match(runtimePatcher, /e\.show\(\),e\.moveTop\(\),s\.webContents\.invalidate\(\)/);
 assert.match(runtimePatcher, /text\/x-signal-plain/);
 assert.match(runtimePatcher, /maoyi developer data/);
+assert.match(runtimePatcher, /maoyi diagnostics client data/);
 assert.match(runtimePatcher, /marker is missing or ambiguous/);
 assert.ok(sourceExperimentTool.includes('GIT_CEILING_DIRECTORIES'));
 
 const guard = read('signal-guard/df-bootstrap.cjs');
 const guardRuntime = require(path.join(root, 'signal-guard', 'df-bootstrap.cjs'));
 const developerDataRoot = path.resolve('D:\\Fixture', 'maoyi Developer Data');
+const diagnosticDataRoot = path.resolve('D:\\Fixture', 'maoyi Diagnostics Client Data');
 const developerProfileId = '00000000-0000-4000-8000-000000000001';
 assert.equal(guardRuntime.isOwnedDataRoot(developerDataRoot), true);
+assert.equal(guardRuntime.isOwnedDataRoot(diagnosticDataRoot), true);
 assert.equal(
   guardRuntime.deriveDataRoot(path.join(
     developerDataRoot,
@@ -531,6 +534,7 @@ assert.equal(
 );
 assert.equal(guardRuntime.isOwnedDataRoot(path.resolve('D:\\Fixture', 'untrusted-data')), false);
 assert.match(guard, /maoyi developer data/);
+assert.match(guard, /maoyi diagnostics client data/);
 assert.match(guard, /local-direct-blocked/);
 assert.match(guard, /缺少启动器，请从maoyi启动/);
 assert.match(guard, /foreign-initializing/);
