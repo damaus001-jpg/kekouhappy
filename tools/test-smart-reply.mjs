@@ -57,6 +57,14 @@ const validRequest = {
 };
 
 assert.deepEqual(validateSmartReplyRequest(validRequest), validRequest);
+const validOpenSmsRequest = {
+  ...validRequest,
+  platform: 'opensms',
+  openSmsAreaContext: { areaCode: '423', state: '田纳西州', city: '查塔努加' }
+};
+assert.deepEqual(validateSmartReplyRequest(validOpenSmsRequest), validOpenSmsRequest);
+assert.throws(() => validateSmartReplyRequest({...validOpenSmsRequest, openSmsAreaContext: {...validOpenSmsRequest.openSmsAreaContext, areaCode: '85'}}), /area context/);
+assert.throws(() => validateSmartReplyRequest({...validRequest, openSmsAreaContext: validOpenSmsRequest.openSmsAreaContext}), /area context/);
 const protectedTranscript = buildProtectedSmartReplyTranscript(validRequest);
 assert.equal(protectedTranscript.protectedValueCount, 2);
 assert.doesNotMatch(JSON.stringify(protectedTranscript.payload), /first\.example|second\.example/);

@@ -21,7 +21,8 @@ const exactInputKeys = new Set([
   'latestSpeaker',
   'replyCount',
   'outputLanguage',
-  'allowSensitiveEcho'
+  'allowSensitiveEcho',
+  'openSmsAreaContext'
 ]);
 const exactMessageKeys = new Set(['speaker', 'text']);
 const exactResponseKeys = new Set(['schema_version', 'replies']);
@@ -77,6 +78,20 @@ export function validateSmartReplyRequest(value: unknown): SmartReplyRequest {
   }
   if (request.replyCount !== 3 || request.outputLanguage !== 'en-US' || request.allowSensitiveEcho !== false) {
     throw new Error('Smart reply request policy is invalid.');
+  }
+  if (request.openSmsAreaContext !== undefined) {
+    if (request.platform !== 'opensms' || !request.openSmsAreaContext || typeof request.openSmsAreaContext !== 'object' || Array.isArray(request.openSmsAreaContext)) {
+      throw new Error('OpenSMS area context is invalid.');
+    }
+    const area = request.openSmsAreaContext as Record<string, unknown>;
+    if (!hasExactKeys(area, new Set(['areaCode', 'state', 'city'])) || typeof area.areaCode !== 'string' || !/^\d{3}$/.test(area.areaCode)) {
+      throw new Error('OpenSMS area context is invalid.');
+    }
+    for (const field of ['state', 'city'] as const) {
+      if (typeof area[field] !== 'string' || !area[field].trim() || area[field].length > 80 || /[\u0000-\u001f\u007f]/.test(area[field])) {
+        throw new Error('OpenSMS area context is invalid.');
+      }
+    }
   }
   if (Buffer.byteLength(JSON.stringify(request), 'utf8') > 96 * 1024) {
     throw new Error('Smart reply request is too large.');

@@ -32,6 +32,16 @@ for (const platform of ['whatsapp', 'telegram-a', 'telegram-k', 'signal', 'opens
   assert.equal(events[2][1], 'https://chatgpt.com/');
   assert.equal(events[0][1], text);
 }
+const regionalOpenSmsRequest = {
+  ...request,
+  platform: 'opensms',
+  openSmsAreaContext: { areaCode: '213', state: '加利福尼亚州', city: '洛杉矶' }
+};
+const regionalOpenSmsText = buildGptClipboardText(regionalOpenSmsRequest);
+assert.ok(regionalOpenSmsText.startsWith(text), 'OpenSMS area guidance follows the unchanged base transcript and prompt');
+assert.ok(regionalOpenSmsText.endsWith('当前识别对方区号是213，位于加利福尼亚州，代表城市是洛杉矶。此地域信息仅可作为话题延展的参考，必须先核对聊天记录是否与该地区一致；若记录不支持或无法确认，请不要提及该地域，也不要据此推断对方实际位置。'));
+const { openSmsAreaContext: _ignoredAreaContext, ...genericPlatformRequest } = regionalOpenSmsRequest;
+assert.equal(buildGptClipboardText({...genericPlatformRequest, platform: 'whatsapp'}), text, 'area context never changes another platform prompt');
 let opened = false;
 await handoffChatToGpt(request, {writeClipboard() {}, async showPrompt() {return false;}, async openExternal() {opened = true;}});
 assert.equal(opened, false, 'cancel must retain copied text without opening a browser');

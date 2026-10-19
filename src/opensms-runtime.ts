@@ -2,11 +2,11 @@
 export function openSmsRuntime(command: any) {
   const w = window as any;
   if (!['opensms.cc', 'www.opensms.cc'].includes(location.hostname)) return false;
-  const version = '2026-10-18-opensms-v7';
+  const version = '2026-10-18-opensms-v9';
   const startupGuardMarker = '2026-10-16-opensms-v1';
   if (w.__dfOpenSms?.version !== version) {
     w.__dfOpenSms?.dispose();
-    const state: any = { version, signature: '', pending: null, ready: null, sensitive: null, sending: false, writing: false, cache: new Map(), enabled: true, topbarFolded: (()=>{try{return localStorage.getItem('df-opensms-topbar-folded-v1')==='1';}catch{return false;}})() };
+    const state: any = { version, signature: '', pending: null, ready: null, sensitive: null, sending: false, writing: false, cache: new Map(), enabled: true, topbarFolded: (()=>{try{return localStorage.getItem('df-opensms-topbar-folded-v1')==='1';}catch{return false;}})(), nightMode:(()=>{try{return localStorage.getItem('df-opensms-night-mode-v1')==='1';}catch{return false;}})() };
     const normalize = (s: string) => (s || '').replace(/\s+/g, ' ').trim();
     const canonical = (s: string) => (s || '').replace(/\r\n?/g, '\n').replace(/\u00a0/g, ' ').normalize('NFC').trim();
     const hash = (s: string) => { let h=2166136261;for(const c of normalize(s)){h=Math.imul(h^c.charCodeAt(0),16777619);}return (h>>>0).toString(36); };
@@ -122,6 +122,7 @@ export function openSmsRuntime(command: any) {
         const label=hintNode.querySelector<HTMLElement>('.df-opensms-area-hint-text')!;
         const [city,stateName,zone]=info;const now=new Date();const delta=Math.round((timezoneOffsetMinutes(zone,now)-timezoneOffsetMinutes('America/Los_Angeles',now))/60);
         const text=`${city}-${stateName}-时差${delta>=0?'+':''}${delta}`;if(label.textContent!==text)label.textContent=text;
+        const sameTimeAsLosAngeles=delta===0;label.style.setProperty('color',sameTimeAsLosAngeles?'#dc2626':'#245b37','important');label.style.setProperty('font-weight',sameTimeAsLosAngeles?'700':'600','important');
         const hintTitle='按号码区号推测的代表区域；号码携转后实际所在地可能不同';if(hintNode.title!==hintTitle)hintNode.title=hintTitle;if(hintNode.getAttribute('aria-label')!==text)hintNode.setAttribute('aria-label',text);
       }
     };
@@ -139,9 +140,9 @@ export function openSmsRuntime(command: any) {
       let button=right.querySelector<HTMLButtonElement>(':scope > .df-opensms-topbar-fold');
       if(!button){
         button=document.createElement('button');button.type='button';button.className='df-opensms-topbar-fold';button.setAttribute('aria-controls','opensms-top-toolbar');
-        button.addEventListener('click',()=>{state.topbarFolded=!state.topbarFolded;try{localStorage.setItem('df-opensms-topbar-folded-v1',state.topbarFolded?'1':'0');}catch{};syncTopbarFold();});
         right.prepend(button);
       }
+      if(button.dataset.dfOpensmsFoldHandler!==version){button.onclick=()=>{state.topbarFolded=!state.topbarFolded;try{localStorage.setItem('df-opensms-topbar-folded-v1',state.topbarFolded?'1':'0');}catch{};syncTopbarFold();};button.dataset.dfOpensmsFoldHandler=version;}
       const toolbar=right.querySelector<HTMLElement>(':scope > .im-top');
       if(toolbar&&toolbar.id!=='opensms-top-toolbar')toolbar.id='opensms-top-toolbar';
       right.classList.toggle('df-opensms-topbar-is-folded',Boolean(state.topbarFolded));
@@ -149,6 +150,24 @@ export function openSmsRuntime(command: any) {
       const label=state.topbarFolded?'展开顶部栏':'收起顶部栏';if(button.textContent!==label)button.textContent=label;
       const expanded=state.topbarFolded?'false':'true';if(button.getAttribute('aria-expanded')!==expanded)button.setAttribute('aria-expanded',expanded);
       const title=state.topbarFolded?'展开顶部功能区':'折叠顶部功能区，为会话腾出更多高度';if(button.title!==title)button.title=title;
+    };
+    const syncNightMode=()=>{
+      const enabled=Boolean(state.nightMode);
+      document.documentElement.classList.toggle('df-opensms-night-mode',enabled);
+      let style=document.getElementById('df-opensms-night-mode-style') as HTMLStyleElement|null;
+      if(!style){
+        style=document.createElement('style');style.id='df-opensms-night-mode-style';
+        style.textContent=`html.df-opensms-night-mode{color-scheme:dark!important;--el-bg-color:#18212a;--el-bg-color-page:#111820;--el-text-color-primary:#e5eaf0;--el-text-color-regular:#cbd5df;--el-text-color-secondary:#9aa8b7;--el-border-color:#3b4856;--el-border-color-light:#33404d;--el-fill-color-blank:#18212a;--el-fill-color-light:#25313d;--el-color-white:#18212a}html.df-opensms-night-mode,html.df-opensms-night-mode body,html.df-opensms-night-mode #app,html.df-opensms-night-mode .main,html.df-opensms-night-mode .main.content,html.df-opensms-night-mode .left,html.df-opensms-night-mode .left-bar,html.df-opensms-night-mode .right,html.df-opensms-night-mode .im-chat,html.df-opensms-night-mode .im-chat-top,html.df-opensms-night-mode .im-chat-footer,html.df-opensms-night-mode .im-chat-main-box,html.df-opensms-night-mode #message-box,html.df-opensms-night-mode .chat-list,html.df-opensms-night-mode .contact-list,html.df-opensms-night-mode .el-container,html.df-opensms-night-mode .el-aside,html.df-opensms-night-mode .el-header,html.df-opensms-night-mode .el-main{background-color:#161d25!important;color:#e5eaf0!important;border-color:#364351!important}html.df-opensms-night-mode .chat-item{background-color:#1b242e!important;color:#dce4ec!important;border-color:#303c49!important}html.df-opensms-night-mode .chat-item:hover{background-color:#25313d!important}html.df-opensms-night-mode .chat-item.active{background-color:#26384a!important;color:#f3f6fa!important}html.df-opensms-night-mode .chat-item.active>.df-opensms-area-hint{background:#315c46!important;color:#f0fff4!important;border-color:#71ce96!important;box-shadow:0 0 0 2px #4ade8040,0 3px 10px #050a0780!important}html.df-opensms-night-mode .chat-item.active>.df-opensms-area-hint [aria-hidden=true]{background:#315c46!important;border-color:#71ce96!important}html.df-opensms-night-mode .im-chat-other .im-chat-text,html.df-opensms-night-mode .im-chat-other .message-content{background-color:#26313d!important;color:#e5eaf0!important}html.df-opensms-night-mode .im-chat-mine .im-chat-text,html.df-opensms-night-mode .im-chat-mine .message-content{background-color:#24543d!important;color:#effaf3!important}html.df-opensms-night-mode .message-info,html.df-opensms-night-mode .msg-time,html.df-opensms-night-mode .info-other,html.df-opensms-night-mode .tag-receiver{color:#aab7c5!important}html.df-opensms-night-mode input,html.df-opensms-night-mode textarea,html.df-opensms-night-mode [contenteditable=true],html.df-opensms-night-mode .el-input__wrapper,html.df-opensms-night-mode .el-input__inner,html.df-opensms-night-mode .el-textarea__inner{background-color:#1d2732!important;color:#e5eaf0!important;border-color:#465363!important}html.df-opensms-night-mode input::placeholder,html.df-opensms-night-mode textarea::placeholder{color:#93a1b0!important}html.df-opensms-night-mode button,html.df-opensms-night-mode .el-button,html.df-opensms-night-mode .el-dialog,html.df-opensms-night-mode .el-message-box,html.df-opensms-night-mode .el-popover,html.df-opensms-night-mode .el-dropdown-menu,html.df-opensms-night-mode .el-select-dropdown,html.df-opensms-night-mode .el-picker-panel{background-color:#202a35!important;color:#e5eaf0!important;border-color:#465363!important}html.df-opensms-night-mode .im-chat-send button{background-color:#216342!important;color:#f2fff6!important;border-color:#28754d!important}html.df-opensms-night-mode .df-opensms-area-hint{background:#183126!important;color:#c8ead4!important;border-color:#347653!important}html.df-opensms-night-mode .df-opensms-area-hint [aria-hidden=true]{background:#183126!important;border-color:#347653!important}html.df-opensms-night-mode .df-opensms-night-toggle{background:#293541!important;color:#e5eaf0!important;border-color:#4b5968!important}html.df-opensms-night-mode ::-webkit-scrollbar-track{background:#17202a!important}html.df-opensms-night-mode ::-webkit-scrollbar-thumb{background:#465363!important;border-color:#17202a!important}.df-opensms-night-toggle{position:absolute;z-index:30000;top:8px;left:126px;min-height:30px;padding:4px 11px;border:1px solid #cbd5e1;border-radius:15px;background:#fff;color:#334155;font:600 12px/1.4 sans-serif;box-shadow:0 2px 8px #0f172a18;cursor:pointer}.df-opensms-night-toggle:hover{background:#f1f5f9}.df-opensms-night-toggle:focus-visible{outline:2px solid #3b82f6;outline-offset:2px}`;
+        (document.head||document.documentElement).appendChild(style);
+        style.textContent+=`html.df-opensms-night-mode .chat-item.active{background-color:#1b242e!important;color:#dce4ec!important}html.df-opensms-night-mode .chat-item.active>.df-opensms-area-hint{background:#c7f4d5!important;color:#245b37!important;border-color:#4ca96c!important;box-shadow:0 0 0 2px #4ade8040,0 3px 10px #050a0780!important}html.df-opensms-night-mode .chat-item.active>.df-opensms-area-hint [aria-hidden=true]{background:#c7f4d5!important;border-color:#4ca96c!important}html.df-opensms-night-mode .chat-item.active .address-name{color:#f8fff9!important;font-weight:700!important;text-shadow:0 0 6px #86efac80!important}`;
+      }
+      const right=document.querySelector<HTMLElement>('.main.content > .right');if(!right)return;
+      let button=right.querySelector<HTMLButtonElement>(':scope > .df-opensms-night-toggle');
+      if(!button){button=document.createElement('button');button.type='button';button.className='df-opensms-night-toggle';button.setAttribute('aria-pressed','false');right.appendChild(button);}
+      if(button.dataset.dfOpensmsNightHandler!==version){button.onclick=()=>{state.nightMode=!state.nightMode;try{localStorage.setItem('df-opensms-night-mode-v1',state.nightMode?'1':'0');}catch{};syncNightMode();};button.dataset.dfOpensmsNightHandler=version;}
+      const label=enabled?'日间模式':'夜间模式';if(button.textContent!==label)button.textContent=label;
+      const title=enabled?'切换到日间模式':'切换到夜间模式';if(button.title!==title)button.title=title;
+      const pressed=enabled?'true':'false';if(button.getAttribute('aria-pressed')!==pressed)button.setAttribute('aria-pressed',pressed);
     };
     const visible = (el: Element | null): el is HTMLElement => !!el && el.getClientRects().length>0 && getComputedStyle(el).display!=='none' && getComputedStyle(el).visibility!=='hidden';
     const contact = () => {
@@ -189,10 +208,11 @@ export function openSmsRuntime(command: any) {
       state.pending=null;state.ready=null;state.sensitive=null;
       const input=editor();if(input){delete input.dataset.dfTranslatorRequestId;delete input.dataset.dfTranslatorReadyRequestId;}
     };
-    const sync = () => {
-      const id=contact().id;if(id!==state.signature){state.signature=id;reset();w.__dfConversationSignature=id;emit('conversation-change',id);hint('');}
-      renderAreaCodeHint();
+    const sync = (refreshAreaHints=false) => {
+      const id=contact().id;const conversationChanged=id!==state.signature;if(conversationChanged){state.signature=id;reset();w.__dfConversationSignature=id;emit('conversation-change',id);hint('');}
+      if(conversationChanged||refreshAreaHints)renderAreaCodeHint();
       syncTopbarFold();
+      syncNightMode();
       // The preload guard intentionally blocks Enter until this exact marker
       // confirms that the page-world handler has installed successfully.
       document.documentElement.dataset.dfOpenSmsGuard=startupGuardMarker;
@@ -246,7 +266,12 @@ export function openSmsRuntime(command: any) {
           const current=rows().filter(r=>r.dayKey===todayKey());const index=current.findIndex(r=>r.key===item.key);if(index<0||item.direction!=='incoming'||contact().id!==item.contactId)return;
           const messages=current.slice(0,index+1).filter(r=>/[A-Za-z]{2,}/.test(r.text)&&!/[\u3400-\u9fff]/.test(r.text)&&r.text.length<=4000).slice(-18).map(r=>({speaker:r.direction==='outgoing'?'self':'other',text:r.text}));
           while(new TextEncoder().encode(JSON.stringify(messages)).length>80_000&&messages.length>1)messages.shift();
-          if(messages.length&&new TextEncoder().encode(JSON.stringify(messages)).length<=80_000)emit('smart-reply-request',JSON.stringify({latestMessageKey:`smart-${hash(item.key)}-${hash(item.text)}`,messages}),`sms-gpt-${Date.now().toString(36)}`);
+          const activeCards=Array.from(document.querySelectorAll<HTMLElement>('.chat-item.active')).filter(visible);
+          const activeNumber=activeCards.length===1?activeCards[0].querySelector<HTMLElement>('.tag-receiver')?.parentElement?.querySelector<HTMLElement>('.address-name'):null;
+          const rawNumber=activeNumber?.getAttribute('title')||activeNumber?.textContent||'';
+          const areaCode=phoneAreaCode(rawNumber);const area=areaCode?areaCodeInfo[areaCode]:undefined;
+          const openSmsAreaContext=area?{areaCode,state:area[1],city:area[0]}:undefined;
+          if(messages.length&&new TextEncoder().encode(JSON.stringify(messages)).length<=80_000)emit('smart-reply-request',JSON.stringify({latestMessageKey:`smart-${hash(item.key)}-${hash(item.text)}`,messages,...(openSmsAreaContext?{openSmsAreaContext}:{})}),`sms-gpt-${Date.now().toString(36)}`);
         };item.body.parentElement!.appendChild(button);
       }
       return items;
@@ -302,7 +327,7 @@ export function openSmsRuntime(command: any) {
     const focus=()=>{const input=editor();if(!input)return false;const id=contact().id;input.focus();return input.isConnected&&editor()===input&&contact().id===id;};
     state.apply=(cmd:any):any=>{
       sync();
-      if(cmd.action==='bootstrap')return true;
+      if(cmd.action==='bootstrap'){renderAreaCodeHint();return true;}
       if(cmd.action==='contact')return contact();
       if(cmd.action==='install'){decorate();return true;}
       if(cmd.action==='enabled'){state.enabled=cmd.enabled;if(!cmd.enabled)reset();return true;}
@@ -371,9 +396,21 @@ export function openSmsRuntime(command: any) {
       return false;
     };
     document.addEventListener('keydown',onKey,true);document.addEventListener('click',onPointer,true);document.addEventListener('input',onInput,true);
-    const timer=setInterval(()=>{sync();decorate();},600);
-    const observer=new MutationObserver(sync);observer.observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['class','data-id']});
-    state.dispose=()=>{observer.disconnect();clearInterval(timer);document.removeEventListener('keydown',onKey,true);document.removeEventListener('click',onPointer,true);document.removeEventListener('input',onInput,true);delete document.documentElement.dataset.dfOpenSmsGuard;};
+    let syncTimer:number|undefined;let decorateTimer:number|undefined;
+    const scheduleSync=()=>{if(syncTimer!==undefined)return;syncTimer=window.setTimeout(()=>{syncTimer=undefined;sync(true);},120);};
+    const scheduleDecorate=()=>{if(decorateTimer!==undefined)return;decorateTimer=window.setTimeout(()=>{decorateTimer=undefined;decorate();},250);};
+    // The host app already scans for translations periodically. Keep this as a
+    // lightweight route/contact fallback instead of rescanning every bubble twice a second.
+    const timer=setInterval(()=>sync(),1800);
+    const observer=new MutationObserver(records=>{
+      let needsSync=false;let needsDecorate=false;
+      for(const record of records){
+        const target=record.target instanceof Element?record.target:record.target.parentElement;
+        if(target?.closest('#message-box'))needsDecorate=true;else needsSync=true;
+      }
+      if(needsSync)scheduleSync();if(needsDecorate)scheduleDecorate();
+    });observer.observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['class','data-id']});
+    state.dispose=()=>{observer.disconnect();clearInterval(timer);if(syncTimer!==undefined)clearTimeout(syncTimer);if(decorateTimer!==undefined)clearTimeout(decorateTimer);document.removeEventListener('keydown',onKey,true);document.removeEventListener('click',onPointer,true);document.removeEventListener('input',onInput,true);delete document.documentElement.dataset.dfOpenSmsGuard;};
     state.editor=editor;w.__dfOpenSms=state;
   }
   return w.__dfOpenSms.apply(command);

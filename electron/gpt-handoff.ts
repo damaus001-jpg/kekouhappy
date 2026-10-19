@@ -14,9 +14,12 @@ export function buildGptClipboardText(request: SmartReplyRequest) {
     output_language: 'en-US',
     allow_sensitive_echo: false
   };
-  return JSON.stringify(transcript, null, 2)
+  const base = JSON.stringify(transcript, null, 2)
     + '\n\nself 表示我方，other 表示对方；聊天记录按时间从旧到新排列。\n\n'
     + gptReplyInstruction;
+  if (validated.platform !== 'opensms' || !validated.openSmsAreaContext) return base;
+  const { areaCode, state, city } = validated.openSmsAreaContext;
+  return `${base}\n\n当前识别对方区号是${areaCode}，位于${state}，代表城市是${city}。此地域信息仅可作为话题延展的参考，必须先核对聊天记录是否与该地区一致；若记录不支持或无法确认，请不要提及该地域，也不要据此推断对方实际位置。`;
 }
 
 export async function handoffChatToGpt(request: SmartReplyRequest, services: {

@@ -52,6 +52,7 @@ import {
   type SignalNotificationActivation,
   type SignalWorkspaceBounds,
   type SmartReplyMessage,
+  type OpenSmsAreaContext,
   type SmartReplySuggestion,
   type StorageLocationStatus,
   type TranslationCacheEntry,
@@ -3592,6 +3593,13 @@ async function handleInjectedComposerEvent(
     const latestMessageKey = typeof payload.latestMessageKey === 'string' ? payload.latestMessageKey.trim() : '';
     if (!/^smart-[a-z0-9]+-[a-z0-9]+$/i.test(latestMessageKey)) return;
     if (!Array.isArray(payload.messages) || payload.messages.length < 1 || payload.messages.length > 18) return;
+    let openSmsAreaContext: OpenSmsAreaContext | undefined;
+    if (profile.platform === 'opensms' && payload.openSmsAreaContext && typeof payload.openSmsAreaContext === 'object' && !Array.isArray(payload.openSmsAreaContext)) {
+      const area = payload.openSmsAreaContext as Record<string, unknown>;
+      if (typeof area.areaCode === 'string' && typeof area.state === 'string' && typeof area.city === 'string') {
+        openSmsAreaContext = { areaCode: area.areaCode, state: area.state, city: area.city };
+      }
+    }
     const messages: SmartReplyMessage[] = [];
     let totalLength = 0;
     for (const item of payload.messages) {
@@ -3624,7 +3632,8 @@ async function handleInjectedComposerEvent(
         latestSpeaker: 'other',
         replyCount: 3,
         outputLanguage: 'en-US',
-        allowSensitiveEcho: false
+        allowSensitiveEcho: false,
+        ...(openSmsAreaContext ? { openSmsAreaContext } : {})
       });
       await executeProfileScript<boolean>(profileId, buildSmartReplyUiStateScript({
         latestMessageKey, conversationSignature: effectiveSignature, state: 'idle'

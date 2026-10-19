@@ -340,6 +340,12 @@ export type SmartReplyMessage = {
   text: string;
 };
 
+export type OpenSmsAreaContext = {
+  areaCode: string;
+  state: string;
+  city: string;
+};
+
 export type SmartReplyRequest = {
   requestId?: string;
   userId?: string;
@@ -350,6 +356,7 @@ export type SmartReplyRequest = {
   replyCount: 3;
   outputLanguage: 'en-US';
   allowSensitiveEcho: false;
+  openSmsAreaContext?: OpenSmsAreaContext;
 };
 
 export type SmartReplySuggestion = {
