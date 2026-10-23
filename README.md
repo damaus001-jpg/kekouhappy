@@ -1,7 +1,5 @@
 # KekouHappy Workspace
 
-桌面应用项目源码、构建工具与恢复说明。
-
 ```powershell
 npm.cmd ci
 npm.cmd run dev
