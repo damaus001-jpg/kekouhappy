@@ -6,7 +6,7 @@ if (!output) throw new Error('MAOYI_CLIENT_BUILD_OUTPUT is required.');
 module.exports = {
   appId: 'com.maoyi.translator',
   productName: '皮卡丘翻译器',
-  buildVersion: '1.6.10.9',
+  buildVersion: '1.6.16',
   executableName: 'maoyi',
   asar: true,
   electronDist: 'node_modules/electron/dist',
@@ -18,6 +18,7 @@ module.exports = {
     'dist-electron/client-license.js',
     'dist-electron/license-core.js',
     'dist-electron/clone-reset.js',
+    'dist-electron/storage-migration.js',
     'dist-electron/runtime-security.js',
     'dist-electron/runtime-security-core.js',
     'dist-electron/remote-guard.js',
@@ -29,12 +30,23 @@ module.exports = {
     'dist-electron/translation-prompt-bundle.js',
     'dist-electron/prompt-bundle-signing.js',
     'dist-electron/smart-reply-core.js',
+    'dist-electron/gpt-handoff.js',
     'dist-electron/opensms-login.js',
     'dist-electron/smart-reply-prompt-bundle.js',
     'dist-electron/translation-english-style.js',
     'dist-electron/signal-notification-routing.js',
-    'dist-electron/storage-migration.js',
     'dist-electron/shared.js',
+    'dist-electron/assistant-library.js',
+    'dist-electron/assistant-library-core.js',
+    'dist-electron/assistant-library-types.js',
+    'dist-electron/assistant-material-store.js',
+    'dist-electron/assistant-material-types.js',
+    'dist-electron/profile-data-cleanup.js',
+    'dist-electron/conversation-export.js',
+    'dist-electron/conversation-export-core.js',
+    'dist-electron/conversation-export-types.js',
+    'dist-electron/local-speech-recognition.js',
+    'dist-electron/local-speech-core.js',
     'electron/preload.cjs',
     'electron/webview-send-guard-preload.cjs',
     'package.json'
@@ -46,6 +58,10 @@ module.exports = {
     {
       from: '.package-staging/signal',
       to: 'signal'
+    },
+    {
+      from: '.package-staging/local-speech',
+      to: 'local-speech'
     },
     {
       from: 'src/assets/pikachu-translator.ico',

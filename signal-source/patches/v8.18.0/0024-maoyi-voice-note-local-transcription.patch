@@ -1,0 +1,19 @@
+diff --git a/ts/components/conversation/MessageAudio.dom.tsx b/ts/components/conversation/MessageAudio.dom.tsx
+--- a/ts/components/conversation/MessageAudio.dom.tsx
++++ b/ts/components/conversation/MessageAudio.dom.tsx
+@@ -400,12 +400,14 @@ export function MessageAudio(props: Props): JSX.Element {
+ 
+   return (
+     <div
+       className={classNames(
+         CSS_BASE,
+         `${CSS_BASE}--${direction}`,
+         withContentBelow ? `${CSS_BASE}--with-content-below` : null,
+         withContentAbove ? `${CSS_BASE}--with-content-above` : null
+       )}
++      data-df-audio-url={audioUrl || ''}
++      data-df-audio-message-id={id}
+     >
+       <div className={`${CSS_BASE}__button-and-waveform`}>
+         {button}
+         {waveform}

@@ -32,6 +32,7 @@ async function main() {
     const profile = { id: platform + '-account', platform, name: platform };
     let scanCalls = 0;
     const scan = harness('const translationScansInFlight = new Map();\n' + functions('scanAndTranslateMessages'), {
+      profiles: { value: [profile] },
       scanAndTranslateMessagesOnce() { scanCalls++; return new Promise(() => {}); },
     });
     const first = scan.scanAndTranslateMessages(profile.id);

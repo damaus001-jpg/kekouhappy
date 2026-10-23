@@ -22,7 +22,7 @@ $NodeArchiveSha256 = 'CC5149EABD53779CE1E7BDC5401643622D0C7E6800ADE18928A767E940
 $NodeDownloadUri = "https://nodejs.org/dist/v$NodeVersion/$NodeArchiveName"
 $PnpmVersion = '11.5.2'
 $SignalVersion = '8.18.0'
-$SignalPatchSetSha256 = '38AF0DA1AEC1CEC40C44173F53DC68E6C835F0A94F974A8A8D2824B5FC3B43FE'
+$SignalPatchSetSha256 = '95332C3BD5805BBEA5B3FEEEA656749364D2A5CB90A0DA76D28BA75929F0399E'
 
 $Report = [ordered]@{
   schemaVersion = 1
@@ -538,6 +538,10 @@ function Main {
     -Detail "$($env:MAOYI_SIGNAL_SOURCE_EXE) SHA-256 $($env:MAOYI_SIGNAL_SOURCE_SHA256)"
   Invoke-CheckedCommand -Name '同步 Signal 到 maoyi 运行目录' -FilePath $nodeExe `
     -ArgumentList @('tools\sync-signal-source-runtime.cjs') -WorkingDirectory $ProjectRoot
+  Invoke-CheckedCommand -Name '下载并校验离线语音识别模型' -FilePath $nodeExe `
+    -ArgumentList @('tools\prepare-local-speech-assets.cjs') -WorkingDirectory $ProjectRoot
+  Invoke-CheckedCommand -Name '验证本地语音识别运行资源' -FilePath $nodeExe `
+    -ArgumentList @('tools\test-local-speech-runtime.mjs') -WorkingDirectory $ProjectRoot
 
   Invoke-CheckedCommand -Name '检查新套装再生产能力' -FilePath $npmCmd `
     -ArgumentList @('run', 'test:public-reproduction') -WorkingDirectory $ProjectRoot

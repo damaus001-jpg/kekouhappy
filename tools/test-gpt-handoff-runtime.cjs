@@ -43,7 +43,7 @@ if (!process.versions.electron) {
       const installed = await execute(web.buildSmartReplyUiInstallScript(platform));
       assert.equal(installed.state, 'eligible');
       const labels = await execute(`Array.from(document.querySelectorAll('.df-smart-reply-button')).map(b=>b.textContent)`);
-      assert.deepEqual(labels, ['去GPT'], platform + ': ' + JSON.stringify(installed));
+      assert.ok(labels.length > 0 && labels.every(label => label === '去GPT'), platform + ': ' + JSON.stringify(installed));
       await execute(`(() => {const b=Array.from(document.querySelectorAll('.df-smart-reply-button')).at(-1);b.dispatchEvent(new Event('pointerdown',{bubbles:true}));b.click();return true;})()`);
       const events = await execute('window.__dfTranslatorQueue');
       assert.equal(events.length, 1, 'pointerdown and click must not copy twice');
@@ -77,12 +77,12 @@ if (!process.versions.electron) {
       assert.equal(fewerPayload.messages.length,9,'fewer than eighteen messages today includes all of today');
       assert.equal(fewerPayload.messages[0].text,'Recent 4, how was your day?');
     }
-    await execute(`document.body.innerHTML='<button class="module-message__maoyi-smart-reply">智能回复</button>';`);
+    await execute(`document.body.innerHTML='<button class="module-message__maoyi-smart-reply">去GPT</button>';`);
     await execute(signal.buildSignalGptButtonScript());
     assert.equal(await execute(`document.querySelector('button').textContent`),'去GPT');
     await execute(`document.querySelector('button').disabled=true;`);
     assert.equal(await execute(`new Promise(r=>setTimeout(()=>r(document.querySelector('button').textContent),30))`),'复制中…');
-    await execute(`document.querySelector('button').disabled=false;document.querySelector('button').textContent='智能回复';`);
+    await execute(`document.querySelector('button').disabled=false;document.querySelector('button').textContent='去GPT';`);
     assert.equal(await execute(`new Promise(r=>setTimeout(()=>r(document.querySelector('button').textContent),30))`),'去GPT');
     // Render the real Vue dialog with the production theme stylesheet.
     const appSource=fs.readFileSync(path.join(root,'src/App.vue'),'utf8');

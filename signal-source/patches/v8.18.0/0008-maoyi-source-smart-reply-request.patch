@@ -638,9 +638,9 @@ index 64c9b4127d64e4f4492d1dedbed1c23b517e1554..374753d7fd3cab89bb6bc1b6fd1cb800
 +        type="button"
 +        className="module-message__maoyi-smart-reply"
 +        aria-busy={maoyiSmartReplyPending || undefined}
-+        aria-label={maoyiSmartReplyPending ? '生成中...' : '智能回复'}
++        aria-label={maoyiSmartReplyPending ? '复制中…' : '去GPT'}
 +        disabled={maoyiSmartReplyPending}
-+        title={maoyiSmartReplyPending ? '生成中...' : '智能回复'}
++        title={maoyiSmartReplyPending ? '复制中…' : '去GPT'}
 +        onClick={event => {
 +          event.preventDefault();
 +          event.stopPropagation();
@@ -649,7 +649,7 @@ index 64c9b4127d64e4f4492d1dedbed1c23b517e1554..374753d7fd3cab89bb6bc1b6fd1cb800
 +          }
 +        }}
 +      >
-+        {maoyiSmartReplyPending ? '生成中...' : '智能回复'}
++        {maoyiSmartReplyPending ? '复制中…' : '去GPT'}
 +      </button>
 +    );
 +  }
@@ -2073,7 +2073,7 @@ index 0000000000000000000000000000000000000000..fc1638efcae5348024217f918d9dfc19
 +      smartTimelineItem,
 +      /maoyiMessageProjection\?\.direction === 'incoming'[\s\S]*?maoyiMessageProjection\.messageId === maoyiSmartReplyMessageId/
 +    );
-+    assert.match(message, /maoyiSmartReplyPending \? '生成中\.\.\.' : '智能回复'/);
++    assert.match(message, /maoyiSmartReplyPending \? '复制中…' : '去GPT'/);
 +    assert.match(message, /disabled=\{maoyiSmartReplyPending\}/);
 +    assert.match(smartReplyRuntime, /applyMaoyiSmartReplyPending/);
 +    assert.match(smartReplyRuntime, /useMaoyiSmartReplyPending/);

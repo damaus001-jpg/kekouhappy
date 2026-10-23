@@ -19,7 +19,7 @@ function gate() {
 async function main() {
   const calls = [];
   const pending = [];
-  const scan = new Function('scanAndTranslateMessagesOnce', 'withTranslationDeadline', `const webRuntimeControllers = new Map(); ${compiled}; return scanAndTranslateMessages;`)(id => {
+  const scan = new Function('scanAndTranslateMessagesOnce', 'withTranslationDeadline', `const webRuntimeControllers = new Map(); const profiles = { value: [{ id: 'account-a', platform: 'whatsapp' }, { id: 'account-b', platform: 'telegram' }] }; const conversationExportBusy = { value: false }, conversationExportProfileId = { value: '' }; ${compiled}; return scanAndTranslateMessages;`)(id => {
     calls.push(id);
     const next = gate();
     pending.push(next);
@@ -44,7 +44,7 @@ async function main() {
   const deadlineCompiled = compiled.replace(/30_?000/g, '8');
   assert.notEqual(deadlineCompiled, compiled, 'the simulated scan deadline must be shortened');
   let timedCalls = 0;
-  const timedScan = new Function('scanAndTranslateMessagesOnce', 'withTranslationDeadline', `const webRuntimeControllers = new Map(); ${deadlineCompiled}; return scanAndTranslateMessages;`)(() => {
+  const timedScan = new Function('scanAndTranslateMessagesOnce', 'withTranslationDeadline', `const webRuntimeControllers = new Map(); const profiles = { value: [] }; const conversationExportBusy = { value: false }, conversationExportProfileId = { value: '' }; ${deadlineCompiled}; return scanAndTranslateMessages;`)(() => {
     timedCalls++;
     return new Promise(() => {});
   }, recovery.withTranslationDeadline);
@@ -54,7 +54,7 @@ async function main() {
   const runtime = new AbortController();
   const controllers = new Map([['reload-account', runtime]]);
   let scanSignal;
-  const reloadScan = new Function('scanAndTranslateMessagesOnce', 'withTranslationDeadline', 'webRuntimeControllers', `${compiled}; return scanAndTranslateMessages;`)((id, signal) => {
+  const reloadScan = new Function('scanAndTranslateMessagesOnce', 'withTranslationDeadline', 'webRuntimeControllers', `const profiles = { value: [] }; const conversationExportBusy = { value: false }, conversationExportProfileId = { value: '' }; ${compiled}; return scanAndTranslateMessages;`)((id, signal) => {
     scanSignal = signal;
     return new Promise(() => {});
   }, recovery.withTranslationDeadline, controllers);

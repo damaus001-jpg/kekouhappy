@@ -47,6 +47,24 @@ async function main() {
   assert.equal(recovering.unreadScansInFlight.size,0,'failed scans must release their slot');
   pending=recovering.refresh('tg');recovering.scans[1].resolve({count:2});await pending;
   assert.equal(recovering.counts.get('tg'),2,'normal polling must recover after navigation');
+  const resumeStart=source.indexOf('function refreshTelegramUnreadCountsOnResume()');
+  const resumeEnd=source.indexOf('\nfunction handleWebviewDomReady(',resumeStart);
+  assert.ok(resumeStart>=0&&resumeEnd>resumeStart,'Telegram refresh-on-resume handler is defined');
+  const resumeCode=ts.transpileModule(source.slice(resumeStart,resumeEnd),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+  const resumed=[];
+  const resumeHarness=new Function('document','profiles','appForPlatform','refreshUnreadCount',`${resumeCode};return refreshTelegramUnreadCountsOnResume;`)({visibilityState:'visible'},
+    {value:[{id:'tg-a',platform:'telegram-a'},{id:'tg-k',platform:'telegram-k'},{id:'wa',platform:'whatsapp'},{id:'sg',platform:'signal'}]},
+    platform=>platform.startsWith('telegram')?'telegram':platform,
+    id=>resumed.push(id));
+  resumeHarness();
+  assert.deepEqual(resumed,['tg-a','tg-k'],'window resume refreshes every Telegram instance without switching to it');
+  resumed.length=0;
+  const hiddenResumeHarness=new Function('document','profiles','appForPlatform','refreshUnreadCount',`${resumeCode};return refreshTelegramUnreadCountsOnResume;`)({visibilityState:'hidden'},
+    {value:[{id:'tg-a',platform:'telegram-a'}]},platform=>'telegram',id=>resumed.push(id));
+  hiddenResumeHarness();
+  assert.deepEqual(resumed,[],'hidden visibility events do not trigger redundant scans');
+  assert.match(source,/window\.addEventListener\('focus',\s*refreshTelegramUnreadCountsOnResume\)/);
+  assert.match(source,/document\.addEventListener\('visibilitychange',\s*refreshTelegramUnreadCountsOnResume\)/);
   console.log('unread-refresh: overlap, unavailable state, confirmed clear, reload, removal and navigation recovery passed');
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});

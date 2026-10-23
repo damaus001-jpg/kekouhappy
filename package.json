@@ -1,8 +1,8 @@
 {
   "name": "maoyi",
   "productName": "皮卡丘翻译器",
-  "version": "1.6.10",
-  "shortVersionWindows": "1.6.10.9",
+  "version": "1.6.16",
+  "shortVersionWindows": "1.6.16",
   "private": true,
   "description": "皮卡丘翻译器多账号聊天翻译工作台。",
   "main": "dist-electron/main.js",
@@ -20,7 +20,7 @@
     "test:opensms-login": "node tools/test-opensms-login.cjs",
     "test:conversation-export": "node tools/test-conversation-export.mjs",
     "dev:diagnostics": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/start-translation-diagnostics.ps1",
-    "predev": "npm run test:signal-source-artifact:v8.18 && node tools/sync-signal-source-runtime.cjs",
+    "predev": "npm run prepare:local-speech-assets && npm run test:signal-source-artifact:v8.18 && node tools/sync-signal-source-runtime.cjs",
     "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
     "build": "vue-tsc --noEmit && vite build && tsc -p electron/tsconfig.json",
     "start": "electron .",
@@ -32,6 +32,7 @@
     "test:signal-control": "npm run build && node tools/patch-signal-control-channel.cjs --rebuild-from-backup && node tools/test-signal-control-channel.cjs",
     "test:signal-cache-response": "node tools/test-signal-cache-response-contract.cjs",
     "test:signal-live-translation": "node tools/test-signal-live-translation-queue.cjs",
+    "test:local-speech": "node tools/test-local-speech-runtime.mjs",
     "test:signal-transitional-status": "node tools/test-signal-transitional-status.mjs",
     "test:signal-window-visibility": "node tools/test-signal-window-visibility-policy.mjs",
     "test:web-bubble-refresh-layout": "node tools/test-web-bubble-refresh-layout.mjs",
@@ -116,11 +117,12 @@
     "prepare:signal-runtime": "node tools/patch-signal-control-channel.cjs",
     "prepare:package-output": "node tools/prepare-package-output.cjs release",
     "prepare:package-signal-runtime": "node tools/prepare-package-signal-runtime.cjs",
+    "prepare:local-speech-assets": "node tools/prepare-local-speech-assets.cjs",
     "suite:create": "node tools/create-license-suite.cjs",
     "suite:package": "node tools/package-license-suite.cjs",
     "prepare:client-suite": "node tools/prepare-client-license-suite.cjs",
     "security:check": "node tools/security-gate.cjs",
-    "package:win": "npm run prepare:package-output && node tools/prepare-client-license-suite.cjs && npm run prepare:signal-runtime && npm run build && node tools/build-client-prompt-bundles.cjs && npm run prepare:package-signal-runtime && npm run security:check && electron-builder --win nsis && node tools/verify-packaged-output.cjs --client=release"
+    "package:win": "npm run prepare:package-output && node tools/prepare-client-license-suite.cjs && npm run prepare:signal-runtime && npm run build && node tools/build-client-prompt-bundles.cjs && node tools/prepare-local-speech-assets.cjs && npm run prepare:package-signal-runtime && npm run security:check && electron-builder --win nsis && node tools/verify-packaged-output.cjs --client=release"
   },
   "devDependencies": {
     "@electron/asar": "^4.2.0",
@@ -137,7 +139,7 @@
     "wait-on": "^8.0.3"
   },
   "build": {
-    "buildVersion": "1.6.10.9",
+    "buildVersion": "1.6.16",
     "appId": "com.maoyi.translator",
     "productName": "皮卡丘翻译器",
     "executableName": "maoyi",
@@ -180,6 +182,8 @@
       "dist-electron/conversation-export.js",
       "dist-electron/conversation-export-core.js",
       "dist-electron/conversation-export-types.js",
+      "dist-electron/local-speech-recognition.js",
+      "dist-electron/local-speech-core.js",
       "electron/preload.cjs",
       "electron/webview-send-guard-preload.cjs",
       "package.json"
@@ -200,6 +204,10 @@
       {
         "from": ".package-staging/signal",
         "to": "signal"
+      },
+      {
+        "from": ".package-staging/local-speech",
+        "to": "local-speech"
       },
       {
         "from": "src/assets/pikachu-translator.ico",

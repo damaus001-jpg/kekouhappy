@@ -199,6 +199,15 @@ async function verifyClient(clientRoot) {
   const resources = path.join(appRoot, 'resources');
   verifyNoForbiddenResources(resources);
   verifyEnterpriseWindowsIcon(resources);
+  const speechModel = path.join(resources, 'local-speech', 'ggml-base-q5_1.bin');
+  const speechM4aHelper = path.join(resources, 'local-speech', 'm4a-to-wav.ps1');
+  if (!fs.statSync(speechModel, { throwIfNoEntry: false })?.isFile() || fs.statSync(speechModel).size < 50 * 1024 * 1024) {
+    throw new Error('Client package is missing the bundled local speech model.');
+  }
+  const m4aHelperSource = fs.readFileSync(speechM4aHelper, 'utf8');
+  if (!m4aHelperSource.includes('$profile.Audio.SampleRate = 16000') || !m4aHelperSource.includes('$profile.Audio.ChannelCount = 1')) {
+    throw new Error('Client package is missing the verified local M4A conversion helper.');
+  }
   const suite = verifyPublicLicenseSuite(resources);
   verifySignedPrompt(resources, suite, 'translation-prompts.dfp', 'translation', 'translation');
   verifySignedPrompt(resources, suite, 'smart-reply-prompt.dfp', 'smart-reply', 'smartReply');

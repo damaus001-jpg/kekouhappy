@@ -9,7 +9,7 @@ const readBuffer = relativePath => fs.readFileSync(path.join(root, relativePath)
 const defaultBaselineVersion = '8.17.0';
 const supportedBaselines = Object.freeze({
   '8.17.0': 'B692DD94A5CBE9AC7969B0FF0C51B4DA05B2CE82B5F055A6264889251901CD57',
-  '8.18.0': '38AF0DA1AEC1CEC40C44173F53DC68E6C835F0A94F974A8A8D2824B5FC3B43FE'
+  '8.18.0': '95332C3BD5805BBEA5B3FEEEA656749364D2A5CB90A0DA76D28BA75929F0399E'
 });
 
 function selectBaselineVersion(argv) {
@@ -210,6 +210,10 @@ if (baselineVersion === '8.18.0') {
   expectedPatchSeries.push({
     file: '0023-maoyi-translation-recovery.patch',
     sha256: '53327F562599C71BF9A9616E733CEB1EB2529C647BFE1F94D74CAEE9169AC668'
+  });
+  expectedPatchSeries.push({
+    file: '0024-maoyi-voice-note-local-transcription.patch',
+    sha256: 'BD713F4A89EC0288CFD6F5882F50B54678489DF4F4526098FCE0247C8E455C18'
   });
 }
 assert.deepEqual(patchSeries.patches, expectedPatchSeries);
@@ -445,7 +449,7 @@ if (baselineVersion === '8.18.0') {
     '+  @include mixins.font-body-2;',
     '+        applyMaoyiSmartReplyPending(message);',
     '+        pendingSmartReplies.clear();',
-    "maoyiSmartReplyPending ? '生成中...' : '智能回复'",
+    "maoyiSmartReplyPending ? '复制中…' : '去GPT'",
     'sourceSmartReplyContract_test.node.ts',
     'writeMaoyiSmartReplyToComposer'
   ]) {

@@ -16,6 +16,7 @@ import {
   webContents,
   type IpcMainEvent,
   type IpcMainInvokeEvent,
+  type MessageBoxOptions as ElectronOpenDialogOptions,
   type Session,
 } from 'electron';
 import { appendFile, cp, readdir, readFile, writeFile, mkdir, rename, rm, stat } from 'node:fs/promises';
@@ -36,6 +37,7 @@ import { filterProfileScopedJsonl, profileLogIdentityHash } from './profile-data
 import type { AssistantMaterial, AssistantUseRequest } from './assistant-material-types.js';
 import { exportConversationFile } from './conversation-export.js';
 import type { ConversationExportRequest } from './conversation-export-types.js';
+import { decodeLocalSpeechAudio } from './local-speech-core.js';
 import type {
   AppConfig,
   AppTheme,
@@ -163,6 +165,7 @@ import {
   requestWindowsWorkstationLock
 } from './remote-guard.js';
 import { TranslationDiagnostics } from './translation-diagnostics.js';
+import { transcribeLocalSpeechAudio, transcribeLocalSpeechFile } from './local-speech-recognition.js';
 
 const defaultModel = 'deepseek-flash';
 const appDisplayName = '皮卡丘翻译器';
@@ -190,7 +193,7 @@ const signalSourceExperimentValue = !app.isPackaged
   : '';
 const supportedSignalSourcePatchSets: Readonly<Record<string, string>> = Object.freeze({
   '8.17.0': 'B692DD94A5CBE9AC7969B0FF0C51B4DA05B2CE82B5F055A6264889251901CD57',
-  '8.18.0': '38AF0DA1AEC1CEC40C44173F53DC68E6C835F0A94F974A8A8D2824B5FC3B43FE'
+  '8.18.0': '95332C3BD5805BBEA5B3FEEEA656749364D2A5CB90A0DA76D28BA75929F0399E'
 });
 const signalSourceOnlyAcceptanceValue =
   process.env.MAOYI_SIGNAL_SOURCE_ONLY_ACCEPTANCE?.trim() || '';
@@ -7065,7 +7068,7 @@ async function saveTranslationCacheEntry(
     profilesBeingRemoved.has(request.profileId) ||
     !request.sourceHash ||
     !request.translatedText ||
-    !isEnglishChatSource(request.sourceText) ||
+    (!request.voiceTranscript && !isEnglishChatSource(request.sourceText)) ||
     !shouldContinue()
   ) {
     return false;
@@ -7110,6 +7113,7 @@ async function saveTranslationCacheEntryNow(request: TranslationCacheSetRequest)
     direction: request.direction,
     timestamp: request.timestamp,
     messagePart: request.messagePart,
+    voiceTranscript: request.voiceTranscript,
     updatedAt: Date.now()
   };
   const targetDir = chunkedTranslationCacheDir(request);
@@ -7377,7 +7381,7 @@ async function prepareSensitiveSend(request: SensitiveSendPrepareRequest) {
   const inspection = inspectSensitiveSendText(request.text);
   if (!inspection.candidate || !inspection.valid || !inspection.kind) {
     const reason = inspection.reason || '该内容不是可确认的收款账号或 USDT 地址';
-    const options = {
+    const options: ElectronOpenDialogOptions & { title: string; message: string; buttons: string[] } = {
       type: 'warning' as const,
       title: '无法发送',
       message: inspection.kind === 'numeric-account' ? '收款账号无效，已阻止发送' : '地址无效或暂不支持，已阻止发送',
@@ -7415,7 +7419,7 @@ async function prepareSensitiveSend(request: SensitiveSendPrepareRequest) {
   if (signalProfileToRestore) hideAllSignalWindows();
   let response: number;
   try {
-    const options = {
+    const options: ElectronOpenDialogOptions & { title: string; message: string; buttons: string[] } = {
       type: 'warning' as const,
       title: '发送前可信确认',
       message: inspection.kind === 'numeric-account' ? '确认收款账号' : '确认 USDT 地址与网络',
@@ -8167,6 +8171,39 @@ function registerIpc() {
   trustedHandle('signal:execute-script', true, (_event, id: string, script: string) =>
     executeSignalScript(assertProfileId(id), assertText(script, 'Signal operation script', 900 * 1024))
   );
+  trustedHandle('speech:transcribe-local', true, async (_event, request: { audioBase64?: unknown }) => {
+    if (!request || typeof request !== 'object' || Object.keys(request).some((key) => key !== 'audioBase64')) {
+      throw new Error('语音识别请求无效');
+    }
+    assertSerializedSize(request, 'Local speech recognition request', 44 * 1024 * 1024);
+    return transcribeLocalSpeechAudio(request.audioBase64);
+  });
+  const speechOutputDirectory = join(app.getPath('downloads'), '皮卡丘翻译器', '语音');
+  trustedHandle('speech:save-audio', true, async (_event, request: { audioBase64?: unknown }) => {
+    if (!request || typeof request !== 'object' || Object.keys(request).some((key) => key !== 'audioBase64')) {
+      throw new Error('语音保存请求无效');
+    }
+    assertSerializedSize(request, 'Local speech audio save request', 44 * 1024 * 1024);
+    const { bytes, extension } = decodeLocalSpeechAudio(request.audioBase64);
+    await mkdir(speechOutputDirectory, { recursive: true });
+    const fileName = `voice-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}.${extension}`;
+    const filePath = join(speechOutputDirectory, fileName);
+    await writeFile(filePath, bytes, { flag: 'wx' });
+    return { path: filePath };
+  });
+  trustedHandle('speech:save-and-transcribe', true, async (_event, request: { audioBase64?: unknown }) => {
+    if (!request || typeof request !== 'object' || Object.keys(request).some((key) => key !== 'audioBase64')) {
+      throw new Error('语音识别请求无效');
+    }
+    assertSerializedSize(request, 'Local speech audio request', 44 * 1024 * 1024);
+    const { bytes, extension } = decodeLocalSpeechAudio(request.audioBase64);
+    await mkdir(speechOutputDirectory, { recursive: true });
+    const fileName = `voice-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}.${extension}`;
+    const filePath = join(speechOutputDirectory, fileName);
+    await writeFile(filePath, bytes, { flag: 'wx' });
+    const transcript = await transcribeLocalSpeechFile(filePath);
+    return { path: filePath, transcript };
+  });
   trustedHandle('signal:debug-log', true, (_event, debugEvent: Record<string, unknown>) => {
     assertSerializedSize(debugEvent, 'Signal debug event', 64 * 1024);
     return appendSignalTranslationDebugLog(debugEvent);

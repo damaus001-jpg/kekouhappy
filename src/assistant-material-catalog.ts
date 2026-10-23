@@ -9,9 +9,10 @@ async function entryMaterials(entry: AssistantEntry, prefix: string) {
   return [...(entry.text.trim() ? [await textMaterial(`${prefix}:text`,entry.text)] : []),
     ...entry.media.filter(m=>m.mime.startsWith('image/')).map(m=>({id:`image:${m.id.split('.')[0]}`,type:'image' as const,mediaId:m.id,name:m.name}))];
 }
+export async function buildAssistantCard(kind:'schedule'|'quotes', entry:AssistantEntry):Promise<AssistantCard>{
+  return {id:entry.id,title:entry.title||'未命名卡片',date:kind==='schedule'?'':entry.date,materials:await entryMaterials(entry,`${kind}:${entry.id}`)};
+}
 export async function buildAssistantCatalog(library: AssistantLibrary): Promise<AssistantCatalog> {
-  const cards = (kind:'schedule'|'quotes') => Promise.all(library.modules[kind].entries.map(async (e: AssistantEntry): Promise<AssistantCard> => ({
-    id:e.id,title:e.title||'未命名卡片',date:kind==='schedule'?'':e.date,materials:await entryMaterials(e,`${kind}:${e.id}`)
-  })));
+  const cards = (kind:'schedule'|'quotes') => Promise.all(library.modules[kind].entries.map((e: AssistantEntry) => buildAssistantCard(kind,e)));
   return { persona:[],personaText:library.modules.persona.text,schedule:await cards('schedule'),quotes:await cards('quotes') };
 }

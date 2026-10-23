@@ -13,6 +13,7 @@ import { buildSignalEmojiPickerScript } from './signal-emoji-picker-runtime';
 import { buildOpenSmsScript } from './opensms-runtime';
 import { buildWhatsAppContactListResizeScript } from './whatsapp-contact-list-resize-runtime';
 import { buildOpenSmsContactListResizeScript } from './opensms-contact-list-resize-runtime';
+import { buildVoiceConversationSignatureScript, buildVoiceMessageActionButtonStateScript, buildVoiceMessageScanScript, buildVoiceMessageAudioChunkScript } from './local-speech-runtime';
 import opensmsIcon from './assets/opensms-bubble.svg';
 import { installTranslationLayoutWatchersFromDom } from './translation-layout-runtime';
 import type { ExportSnapshot } from './conversation-export-runtime';
@@ -121,6 +122,8 @@ type MessageCandidate = {
   nearConversationEnd?: boolean;
   nearConversationStart?: boolean;
   nonEnglishContactMarker?: boolean;
+  voiceMessage?: boolean;
+  conversationSignature?: string;
 };
 
 type UnreadSnapshot = {
@@ -236,6 +239,10 @@ const suppressTabClickProfileId = ref<string | null>(null);
 let workspaceConfigSaveQueue: Promise<void> = Promise.resolve();
 const translatedDrafts = ref<Record<string, string>>({});
 const composerStatus = ref<Record<string, string>>({});
+const voiceTranslationStatus = ref<Record<string, string>>({});
+const voiceCandidatesByProfile = ref<Record<string, MessageCandidate[]>>({});
+const voiceActionBusyByProfile = ref<Record<string, boolean>>({});
+const voiceProcessedKeysByProfile = ref<Record<string, string[]>>({});
 const composerFeedbackStates = ref<Record<string, ComposerFeedbackState>>({});
 const composerSentStatusTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const enterOnlyHintTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -671,6 +678,7 @@ const totalUnreadCount = computed(() => (
 ));
 const hasActiveRenderableProfile = computed(() => Boolean(activeProfile.value && activeWebUrl.value));
 const activeComposerStatus = computed(() => (activeProfileId.value ? composerStatus.value[activeProfileId.value] ?? '' : ''));
+const activeVoiceTranslationStatus = computed(() => (activeProfileId.value ? voiceTranslationStatus.value[activeProfileId.value] ?? '' : ''));
 const activeComposerFeedbackText = computed(() => {
   const state = activeProfileId.value ? composerFeedbackStates.value[activeProfileId.value] || '' : '';
   if (state === 'typing') return '正在输入中文...';
@@ -2343,6 +2351,83 @@ function setComposerStatus(profileId: string, status: string) {
   composerStatus.value = { ...composerStatus.value, [profileId]: status };
 }
 
+function setVoiceTranslationStatus(profileId: string, status: string) {
+  voiceTranslationStatus.value = { ...voiceTranslationStatus.value, [profileId]: status };
+  diagnosticEvent('speech:status', { profileId, status });
+}
+
+function updateVoiceCandidates(profileId: string, candidates: MessageCandidate[]) {
+  const done = new Set(voiceProcessedKeysByProfile.value[profileId] || []);
+  // Keep recognized candidates available after navigating away and back so
+  // their transcript and cached translation can be restored into Signal's new DOM.
+  const available = candidates.filter((candidate) => !done.has(candidate.key) || Boolean(candidate.text));
+  voiceCandidatesByProfile.value = { ...voiceCandidatesByProfile.value, [profileId]: available };
+}
+
+function voiceTranscriptCacheIdentity(candidate: MessageCandidate) {
+  const contactId = `${candidate.conversationSignature || ''}|${candidate.key}`;
+  return {
+    contactId,
+    sourceHash: `voice-transcript-${hashText(contactId)}`
+  };
+}
+
+async function restoreSignalVoiceTranscripts(profile: ChatProfile, candidates: MessageCandidate[], runtime: { execute: <T>(script: string) => Promise<T> }) {
+  if (profile.platform !== 'signal' || !window.chatTranslator?.lookupTranslationCache) return;
+  const restored: MessageCandidate[] = [];
+  await Promise.all(candidates.map(async (candidate) => {
+    const identity = voiceTranscriptCacheIdentity(candidate);
+    try {
+      const entries = await window.chatTranslator!.lookupTranslationCache!({
+        profileId: profile.id,
+        platform: 'signal',
+        profileName: profile.name,
+        contactId: identity.contactId,
+        contactIdType: 'platform',
+        sourceHashes: [identity.sourceHash]
+      });
+      const entry = entries.find((item) => item.voiceTranscript && item.sourceHash === identity.sourceHash && item.sourceText);
+      if (!entry?.sourceText) return;
+      candidate.text = entry.sourceText;
+      restored.push(candidate);
+    } catch {
+      // A cache read failure should leave the normal manual transcription path available.
+    }
+  }));
+  if (!restored.length) return;
+  const currentSignature = await runtime.execute<string>(buildVoiceConversationSignatureScript('signal')).catch(() => '');
+  if (currentSignature !== restored[0].conversationSignature) return;
+  for (const candidate of restored) {
+    if (candidate.conversationSignature !== currentSignature) continue;
+    await runtime.execute<boolean>(`(()=>{const expected=${JSON.stringify(currentSignature)},current=document.querySelector('.CompositionArea[data-df-signal-conversation-id]')?.getAttribute('data-df-signal-conversation-id')||'';if(current!==expected)return false;const el=Array.from(document.querySelectorAll('[data-df-voice-key]')).find(node=>node.dataset.dfVoiceKey===${JSON.stringify(candidate.key)});if(!el)return false;el.dataset.dfVoiceTranscript=${JSON.stringify(candidate.text)};return true;})()`).catch(() => false);
+  }
+  await lookupTranslationCacheForCandidates(profile, restored);
+  for (const candidate of restored) {
+    const translatedText = getCachedTranslation(profile.id, candidate.text, candidate);
+    if (!translatedText) continue;
+    await runtime.execute<boolean>(buildMessageTranslationInjectScript(candidate.key, translatedText, 'signal', candidate.text, true, true, currentSignature)).catch(() => false);
+    await setVoiceMessageButtonState(profile.id, candidate.key, '语音已翻译', true);
+    markVoiceCandidateProcessed(profile.id, candidate.key);
+  }
+}
+
+function markVoiceCandidateProcessed(profileId: string, key: string) {
+  const done = new Set(voiceProcessedKeysByProfile.value[profileId] || []);
+  done.add(key);
+  voiceProcessedKeysByProfile.value = { ...voiceProcessedKeysByProfile.value, [profileId]: [...done] };
+  updateVoiceCandidates(profileId, voiceCandidatesByProfile.value[profileId] || []);
+}
+
+function unmarkVoiceCandidateProcessed(profileId: string, key: string) {
+  const done = new Set(voiceProcessedKeysByProfile.value[profileId] || []);
+  done.delete(key);
+  voiceProcessedKeysByProfile.value = { ...voiceProcessedKeysByProfile.value, [profileId]: [...done] };
+}
+
+async function setVoiceMessageButtonState(profileId: string, key: string, label: string, busy: boolean) {
+  await executeProfileScript<boolean>(profileId, buildVoiceMessageActionButtonStateScript(key, label, busy)).catch(() => false);
+}
+
 function clearTranslationRuntimeCache(profileId: string) {
   webRuntimeControllers.get(profileId)?.abort();
   webRuntimeControllers.delete(profileId);
@@ -2990,7 +3075,7 @@ function buildGuardedMessageTranslationScript(key: string, attempt: number, scri
 
 function enqueueMessageTranslationTask(profile: ChatProfile, candidate: MessageCandidate, reason: TranslationQueueReason) {
   if(conversationExportBusy.value&&conversationExportProfileId.value===profile.id)return false;
-  if (isSignalLegacyBubbleTranslationDisabled(profile)) return false;
+  if (isSignalLegacyBubbleTranslationDisabled(profile) && !candidate.voiceMessage) return false;
   const sourceText = normalizeCacheText(candidate.text || '');
   if (!sourceText || !window.chatTranslator) return false;
 
@@ -3053,18 +3138,37 @@ function enqueueMessageTranslationTask(profile: ChatProfile, candidate: MessageC
       })()`);
       if (!registered) throw new Error('Translation task replaced');
       assertCurrent();
+      if (candidate.voiceMessage && candidate.conversationSignature) {
+        const signature = await runtime.execute<string>(buildVoiceConversationSignatureScript(appForPlatform(currentProfile.platform) as 'whatsapp' | 'telegram' | 'signal'));
+        if (signature !== candidate.conversationSignature) throw new Error('Voice translation cancelled after conversation change');
+      }
       // Outgoing bubbles are intentionally back-translated instead of reusing the original Chinese draft.
       await setManualRefreshState('processing');
       assertCurrent();
       const requestId = createTranslationRequestId(reason, currentProfile.id);
       const cancelRequest = () => { void window.chatTranslator?.cancelTranslation?.(requestId).catch(() => undefined); };
+      const voiceAbortController = candidate.voiceMessage ? new AbortController() : null;
+      const requestSignal = voiceAbortController
+        ? AbortSignal.any(signal ? [signal, voiceAbortController.signal] : [voiceAbortController.signal])
+        : signal;
+      let voiceConversationCheckActive = false;
+      const voiceConversationCheck = candidate.voiceMessage && candidate.conversationSignature
+        ? setInterval(() => {
+            if (voiceConversationCheckActive) return;
+            voiceConversationCheckActive = true;
+            void runtime.execute<string>(buildVoiceConversationSignatureScript(appForPlatform(currentProfile.platform) as 'whatsapp' | 'telegram' | 'signal'))
+              .then((signature) => { if (signature !== candidate.conversationSignature) { voiceAbortController?.abort(); cancelRequest(); } })
+              .catch(() => { voiceAbortController?.abort(); cancelRequest(); })
+              .finally(() => { voiceConversationCheckActive = false; });
+          }, 500)
+        : null;
       signal?.addEventListener('abort', cancelRequest, { once: true });
       let translated: string;
       try {
         translated = await withTranslationDeadline(window.chatTranslator.translate({
         text: sourceText,
-        from: 'English',
-        to: 'Chinese',
+        from: candidate.voiceMessage && /[\u3400-\u9fff]/.test(sourceText) ? 'Chinese' : 'English',
+        to: candidate.voiceMessage && /[\u3400-\u9fff]/.test(sourceText) ? 'English' : 'Chinese',
         reason,
         profileId: currentProfile.id,
         profileName: currentProfile.name,
@@ -3078,8 +3182,9 @@ function enqueueMessageTranslationTask(profile: ChatProfile, candidate: MessageC
         contactTitle: candidate.contactTitle,
         direction: candidate.direction,
         messagePart: candidate.messagePart
-        }), 90_000, signal, cancelRequest);
+        }), 90_000, requestSignal, cancelRequest);
       } finally {
+        if (voiceConversationCheck) clearInterval(voiceConversationCheck);
         signal?.removeEventListener('abort', cancelRequest);
       }
       assertCurrent();
@@ -3090,11 +3195,15 @@ function enqueueMessageTranslationTask(profile: ChatProfile, candidate: MessageC
       setCachedTranslation(currentProfile, { ...candidate, text: sourceText }, translated);
       const injected = await runtime.execute<boolean>(
         buildGuardedMessageTranslationScript(candidate.key, pageAttempt,
-          buildMessageTranslationInjectScript(candidate.key, translated, appForPlatform(currentProfile.platform), sourceText, true))
+          buildMessageTranslationInjectScript(candidate.key, translated, appForPlatform(currentProfile.platform), sourceText, true, Boolean(candidate.voiceMessage), candidate.conversationSignature))
       );
       assertCurrent();
       diagnosticEvent('bubble:inject', { profileId: profile.id, platform: profile.platform, injected });
       if (!injected) throw new Error('message translation inject failed');
+      if (candidate.voiceMessage) {
+        setVoiceTranslationStatus(profile.id, '语音已翻译');
+        await setVoiceMessageButtonState(profile.id, candidate.key, '语音已翻译', true);
+      }
       await setManualRefreshState('idle');
       if (currentProfile.platform === 'signal' && reason !== 'history-backfill') {
         setComposerStatus(profile.id, `Signal 已翻译：${sourceText.slice(0, 40)}`);
@@ -3106,6 +3215,12 @@ function enqueueMessageTranslationTask(profile: ChatProfile, candidate: MessageC
     },
     onFinalFailure: (error) => {
       if (!isCurrent()) return;
+      if (candidate.voiceMessage) {
+        const detail = error instanceof Error ? error.message : String(error);
+        unmarkVoiceCandidateProcessed(profile.id, candidate.key);
+        void setVoiceMessageButtonState(profile.id, candidate.key, '重试', false);
+        setVoiceTranslationStatus(profile.id, `语音翻译失败：${detail.slice(0, 90)}`);
+      }
       diagnosticEvent('bubble:failed', { profileId: profile.id, platform: profile.platform, reason, errorCode: /inject/i.test(String(error)) ? 'inject-failed' : /bad translation/i.test(String(error)) ? 'invalid-result' : 'request-failed' });
       if (reason !== 'history-backfill') setComposerStatus(profile.id, '气泡翻译失败');
       failedMessageTranslationUntil.set(sourceCacheKey, Date.now() + 60_000);
@@ -3117,6 +3232,10 @@ function enqueueMessageTranslationTask(profile: ChatProfile, candidate: MessageC
     },
     onCancelled: () => {
       if (!isCurrent()) return;
+      if (candidate.voiceMessage) {
+        unmarkVoiceCandidateProcessed(profile.id, candidate.key);
+        void setVoiceMessageButtonState(profile.id, candidate.key, '重试', false);
+      }
       void setManualRefreshState('idle');
       releaseMessageState();
     }
@@ -3505,6 +3624,31 @@ async function handleInjectedComposerEvent(
 ) {
   const profile = profiles.value.find((item) => item.id === profileId);
   if (!profile || !window.chatTranslator) return;
+  if (action === 'voice-translate') {
+    if (profile.platform === 'opensms') return;
+    let request: { key?: unknown; conversationSignature?: unknown } = {};
+    try {
+      request = JSON.parse(text || '{}') as typeof request;
+    } catch { return; }
+    const key = typeof request.key === 'string' ? request.key : '';
+    const signature = typeof request.conversationSignature === 'string' ? request.conversationSignature : '';
+    if (!/^[A-Za-z0-9._:-]{1,256}$/.test(key) || !signature || signature !== conversationSignature) return;
+    if (!voiceCandidatesByProfile.value[profileId]?.some((candidate) => candidate.key === key)) {
+      const runtime = getRuntimeScriptExecutor(profile);
+      if (runtime) {
+        const candidates = await runtime.execute<MessageCandidate[]>(buildVoiceMessageScanScript(appForPlatform(profile.platform) as 'whatsapp' | 'telegram' | 'signal')).catch(() => []);
+        updateVoiceCandidates(profileId, candidates || []);
+      }
+    }
+    const candidate = voiceCandidatesByProfile.value[profileId]?.find((item) => item.key === key);
+    if (!candidate || candidate.conversationSignature !== signature) {
+      await setVoiceMessageButtonState(profileId, key, '重试', false);
+      setVoiceTranslationStatus(profileId, '这条语音已离开当前会话，请重新扫描后重试');
+      return;
+    }
+    await processSelectedVoiceMessage(profileId, key);
+    return;
+  }
   if (action === 'whatsapp-long-message-expanded') {
     if (appForPlatform(profile.platform) !== 'whatsapp') return;
     window.setTimeout(() => void scanAndTranslateMessages(profileId), 120);
@@ -9041,6 +9185,13 @@ async function refreshUnreadCount(profileId: string) {
   }
 }
 
+function refreshTelegramUnreadCountsOnResume() {
+  if (document.visibilityState === 'hidden') return;
+  for (const profile of profiles.value) {
+    if (appForPlatform(profile.platform) === 'telegram') void refreshUnreadCount(profile.id);
+  }
+}
+
 function handleWebviewDomReady(event: Event, profile: ChatProfile) {
   const webview = event.currentTarget as Electron.WebviewTag | null;
   if (!webview) return;
@@ -9172,6 +9323,7 @@ function startSignalTranslationRuntime(profileId: string) {
   );
   startComposerInstallLoop(profileId);
   if (!legacyBubbleDisabled) startTranslationBridge(profileId);
+  else startSignalVoiceTranslationBridge(profileId);
   [800, 2000, 4000, 7000].forEach((delay, index) => {
     window.setTimeout(() => {
       const currentProfile = profiles.value.find((item) => item.id === profileId && item.platform === 'signal');
@@ -9179,6 +9331,8 @@ function startSignalTranslationRuntime(profileId: string) {
       void probeSignalRuntime(profileId, index + 1);
       if (!isSignalLegacyBubbleTranslationDisabled(currentProfile)) {
         void scanAndTranslateMessages(profileId);
+      } else if (index === 0 || index === 2) {
+        void scanSignalVoiceMessages(profileId);
       }
     }, delay);
   });
@@ -9322,18 +9476,263 @@ function startTranslationBridge(profileId: string) {
 }
 
 const translationScansInFlight = new Map<string, Promise<void>>();
+const signalVoiceScansInFlight = new Map<string, Promise<void>>();
 
+function startSignalVoiceTranslationBridge(profileId: string) {
+  const intervalKey = `voice:${profileId}`;
+  if (translationIntervals.has(intervalKey)) return;
+  const timer = setInterval(() => {
+    if (!profiles.value.some((item) => item.id === profileId && item.platform === 'signal')) {
+      clearInterval(timer);
+      translationIntervals.delete(intervalKey);
+      return;
+    }
+    void scanSignalVoiceMessages(profileId);
+  }, 15000);
+  translationIntervals.set(intervalKey, timer);
+}
+
+function scanSignalVoiceMessages(profileId: string): Promise<void> {
+  const existing = signalVoiceScansInFlight.get(profileId);
+  if (existing) return existing;
+  if (activeProfileId.value !== profileId || activePanel.value !== 'session' || lockScreenVisible.value) return Promise.resolve();
+  const profile = profiles.value.find((item) => item.id === profileId && item.platform === 'signal');
+  if (!profile || !window.chatTranslator?.transcribeLocalSpeech) return Promise.resolve();
+  const runtime = getRuntimeScriptExecutor(profile);
+  if (!runtime) return Promise.resolve();
+  const scan = (async () => {
+    let voiceCandidates: MessageCandidate[] = [];
+    try {
+      voiceCandidates = (await runtime.execute<MessageCandidate[]>(buildVoiceMessageScanScript('signal'))) ?? [];
+    } catch (error) {
+      setVoiceTranslationStatus(profileId, `Signal 语音扫描失败：${(error instanceof Error ? error.message : String(error)).slice(0, 80)}`);
+      return;
+    }
+    if (!voiceCandidates.length) {
+      updateVoiceCandidates(profileId, []);
+      const previousStatus = voiceTranslationStatus.value[profileId] || '';
+      if (!previousStatus.includes('失败') && !previousStatus.includes('已保存') && !previousStatus.includes('译文已显示')) {
+        setVoiceTranslationStatus(profileId, '当前 Signal 会话未检测到可识别的可见语音条');
+      }
+      return;
+    }
+    await restoreSignalVoiceTranscripts(profile, voiceCandidates, runtime);
+    updateVoiceCandidates(profileId, voiceCandidates);
+    diagnosticEvent('speech:scan', { profileId, platform: 'signal', candidates: voiceCandidates.length });
+    const availableCount = voiceCandidatesByProfile.value[profileId]?.length || 0;
+    if (availableCount) {
+      setVoiceTranslationStatus(profileId, `Signal 检测到 ${availableCount} 条语音，可在对应气泡下点击“翻译”`);
+    }
+  })().catch((error) => {
+    setVoiceTranslationStatus(profileId, `Signal 语音处理失败：${(error instanceof Error ? error.message : String(error)).slice(0, 80)}`);
+  }).finally(() => {
+    if (signalVoiceScansInFlight.get(profileId) === scan) signalVoiceScansInFlight.delete(profileId);
+  });
+  signalVoiceScansInFlight.set(profileId, scan);
+  return scan;
+}
+
+async function transcribeVoiceMessageCandidates(
+  profile: ChatProfile,
+  runtime: { execute: <T>(script: string) => Promise<T> },
+  candidates: MessageCandidate[],
+  conversationCandidates: MessageCandidate[],
+  signal?: AbortSignal
+) {
+  // Background scans discover voice notes but never download or transcribe them.
+  const voiceCandidates = candidates.filter((item) => item.voiceMessage);
+  if (voiceCandidates.length) {
+    updateVoiceCandidates(profile.id, voiceCandidates);
+    const availableCount = voiceCandidatesByProfile.value[profile.id]?.length || 0;
+    if (availableCount && !voiceTranslationStatus.value[profile.id]?.includes('失败')) {
+      setVoiceTranslationStatus(profile.id, `检测到 ${availableCount} 条语音，可在对应气泡下点击“翻译”`);
+    }
+  }
+  return candidates.filter((item) => !item.voiceMessage || Boolean(item.text));
+}
+
+async function processSelectedVoiceMessage(profileId: string, candidateKey = '') {
+  const profile = profiles.value.find((item) => item.id === profileId);
+  const candidate = voiceCandidatesByProfile.value[profileId]?.find((item) => !candidateKey || item.key === candidateKey);
+  if (!profile || !candidate || voiceActionBusyByProfile.value[profileId]) return;
+  const api = window.chatTranslator;
+  if (!candidate.text && !api?.saveAndTranscribeLocalSpeech) {
+    setVoiceTranslationStatus(profileId, '当前版本缺少语音保存能力，请重启开发版后再试');
+    return;
+  }
+  voiceActionBusyByProfile.value = { ...voiceActionBusyByProfile.value, [profileId]: true };
+  try {
+    const runtime = getRuntimeScriptExecutor(profile);
+    if (!runtime) throw new Error('No active runtime');
+    const platform = appForPlatform(profile.platform) as 'whatsapp' | 'telegram' | 'signal';
+    if (candidate.text) {
+      await setVoiceMessageButtonState(profileId, candidate.key, '正在翻译语音', true);
+      setVoiceTranslationStatus(profileId, '正在翻译语音');
+    }
+    if (!candidate.text) {
+    const audioPipelineStartedAt = performance.now();
+    const runtime = getRuntimeScriptExecutor(profile);
+    if (!runtime) throw new Error('当前平台运行窗口不可用');
+    const platform = appForPlatform(profile.platform) as 'whatsapp' | 'telegram' | 'signal';
+    await setVoiceMessageButtonState(profileId, candidate.key, '正在识别语音', true);
+    setVoiceTranslationStatus(profileId, '正在识别语音');
+    let result = await runtime.execute<{ ok?: boolean; error?: string; totalChars?: number; chunk?: string; durationSeconds?: number }>(
+      buildVoiceMessageAudioChunkScript(platform, candidate.key, 'prepare', 0, 240 * 1024, candidate.conversationSignature)
+    );
+    if (!result?.ok || !result.totalChars || !result.chunk) throw new Error(result?.error || '读取语音附件失败');
+    const parts = [result.chunk];
+    for (let offset = result.chunk.length; offset < result.totalChars; offset += 240 * 1024) {
+      const next = await runtime.execute<{ ok?: boolean; error?: string; chunk?: string }>(
+        buildVoiceMessageAudioChunkScript(platform, candidate.key, 'chunk', offset, 240 * 1024, candidate.conversationSignature)
+      );
+      if (!next?.ok || typeof next.chunk !== 'string') throw new Error(next?.error || '语音数据读取中断');
+      parts.push(next.chunk);
+    }
+    const audioBase64 = parts.join('');
+    const audioDownloadMs = Math.round(performance.now() - audioPipelineStartedAt);
+    diagnosticEvent('speech:download-complete', { profileId, platform: profile.platform, elapsedMs: audioDownloadMs, encodedChars: audioBase64.length });
+    setVoiceTranslationStatus(profileId, '正在识别语音');
+    await runtime.execute<boolean>(buildVoiceMessageAudioChunkScript(platform, candidate.key, 'clear')).catch(() => false);
+    const recognitionStartedAt = performance.now();
+    const recognition = await api.saveAndTranscribeLocalSpeech(audioBase64);
+    const recognitionElapsedMs = Math.round(performance.now() - recognitionStartedAt);
+    diagnosticEvent('speech:save-and-recognition-complete', { profileId, platform: profile.platform, elapsedMs: recognitionElapsedMs, transcriptLength: recognition.transcript.trim().length });
+    candidate.text = recognition.transcript.trim();
+    if (!candidate.text) throw new Error('没有识别出语音内容');
+    }
+    const currentSignature = await runtime.execute<string>(buildVoiceConversationSignatureScript(platform)).catch(() => '');
+    if (currentSignature !== candidate.conversationSignature) throw new Error('会话已变化，请在当前联系人中重试');
+    const stored = await runtime.execute<boolean>(`(()=>{const expected=${JSON.stringify(candidate.conversationSignature)},current=${platform === 'signal' ? "document.querySelector('.CompositionArea[data-df-signal-conversation-id]')?.getAttribute('data-df-signal-conversation-id')||''" : "location.href+'|'+String(document.querySelector('header')?.innerText||document.querySelector('header')?.textContent||'').replace(/\\s+/g,' ').trim().slice(0,180)"};if(current!==expected)return false;const el=Array.from(document.querySelectorAll('[data-df-voice-key]')).find(node=>node.dataset.dfVoiceKey===${JSON.stringify(candidate.key)});if(!el)return false;el.dataset.dfVoiceTranscript=${JSON.stringify(candidate.text)};return true;})()`).catch(() => false);
+    if (!stored) throw new Error('语音气泡已变化，请重新扫描后再试');
+    if (platform === 'signal' && window.chatTranslator?.saveTranslationCacheEntry) {
+      const identity = voiceTranscriptCacheIdentity(candidate);
+      await window.chatTranslator.saveTranslationCacheEntry({
+        profileId,
+        platform: 'signal',
+        profileName: profile.name,
+        contactId: identity.contactId,
+        contactIdType: 'platform',
+        sourceHash: identity.sourceHash,
+        sourceText: candidate.text,
+        translatedText: candidate.text,
+        messagePart: 'body',
+        voiceTranscript: true
+      });
+    }
+    await preloadTranslationCache(profileId);
+    await preloadScopedTranslationCaches(profile, [candidate]);
+    await lookupTranslationCacheForCandidates(profile, [candidate]);
+    const cached = getCachedTranslation(profileId, candidate.text, candidate);
+    if (cached) {
+      const injected = await runtime.execute<boolean>(buildMessageTranslationInjectScript(candidate.key, cached, platform, candidate.text, true, true, candidate.conversationSignature)).catch(() => false);
+      if (injected) {
+        markVoiceCandidateProcessed(profileId, candidate.key);
+        await setVoiceMessageButtonState(profileId, candidate.key, '语音已翻译', true);
+        setVoiceTranslationStatus(profileId, '语音已翻译');
+        return;
+      }
+    }
+    if (enqueueMessageTranslationTask(profile, candidate, 'visible-message')) {
+      markVoiceCandidateProcessed(profileId, candidate.key);
+      await setVoiceMessageButtonState(profileId, candidate.key, '正在识别语音', true);
+      setVoiceTranslationStatus(profileId, '正在识别语音');
+    } else {
+      throw new Error('识别完成，但翻译任务未进入队列');
+    }
+  } catch (error) {
+    await setVoiceMessageButtonState(profileId, candidate.key, '重试', false);
+    setVoiceTranslationStatus(profileId, `语音下载或识别失败：${(error instanceof Error ? error.message : String(error)).slice(0, 100)}`);
+  } finally {
+    voiceActionBusyByProfile.value = { ...voiceActionBusyByProfile.value, [profileId]: false };
+  }
+}
+
+/*
+async function transcribeVoiceMessageCandidatesLegacy(
+  profile: ChatProfile,
+  runtime: { execute: <T>(script: string) => Promise<T> },
+  candidates: MessageCandidate[],
+  conversationCandidates: MessageCandidate[],
+  signal?: AbortSignal
+) {
+  if (!window.chatTranslator?.transcribeLocalSpeech) return candidates.filter((item) => !item.voiceMessage || item.text);
+  const voiceCandidates = candidates.filter((item) => item.voiceMessage).slice(0, 1);
+  const contact = conversationCandidates.find((item) => item.contactId) || conversationCandidates[0];
+  let recognizedCount = 0;
+  for (const candidate of voiceCandidates) {
+    let clearAudio = false;
+    if (contact) {
+      candidate.contactId = contact.contactId;
+      candidate.contactIdType = contact.contactIdType;
+      candidate.contactTitle = contact.contactTitle;
+      candidate.contactRemark = contact.contactRemark;
+      candidate.contactKey = contact.contactKey;
+    }
+    if (candidate.text || signal?.aborted) continue;
+    try {
+      setVoiceTranslationStatus(profile.id, '已发现语音条，正在本机识别');
+      setComposerStatus(profile.id, '正在本地识别语音…');
+      let result = await runtime.execute<{ ok?: boolean; error?: string; totalChars?: number; chunk?: string; durationSeconds?: number }>(
+      buildVoiceMessageAudioChunkScript(appForPlatform(profile.platform) as 'whatsapp' | 'telegram' | 'signal', candidate.key, 'prepare', 0, 240 * 1024, candidate.conversationSignature)
+      );
+      if (!result?.ok || !result.totalChars || !result.chunk) throw new Error(result?.error || '语音附件读取失败');
+      diagnosticEvent('speech:audio-prepared', { profileId: profile.id, platform: profile.platform, durationSeconds: result.durationSeconds, encodedChars: result.totalChars });
+      clearAudio = true;
+      const parts = [result.chunk];
+      for (let offset = result.chunk.length; offset < result.totalChars; offset += 240 * 1024) {
+        if (signal?.aborted) throw new Error('语音识别已取消');
+        const next = await runtime.execute<{ ok?: boolean; error?: string; totalChars?: number; chunk?: string }>(
+          buildVoiceMessageAudioChunkScript(appForPlatform(profile.platform) as 'whatsapp' | 'telegram' | 'signal', candidate.key, 'chunk', offset, 240 * 1024, candidate.conversationSignature)
+        );
+        if (!next?.ok || typeof next.chunk !== 'string') throw new Error(next?.error || '语音数据读取中断');
+        parts.push(next.chunk);
+      }
+      if (signal?.aborted) throw new Error('语音识别已取消');
+      diagnosticEvent('speech:recognition-start', { profileId: profile.id, platform: profile.platform, encodedChars: parts.join('').length });
+      const transcript = await window.chatTranslator.transcribeLocalSpeech(parts.join(''));
+      diagnosticEvent('speech:recognition-complete', { profileId: profile.id, platform: profile.platform, transcriptLength: transcript.trim().length });
+      await runtime.execute<boolean>(buildVoiceMessageAudioChunkScript(appForPlatform(profile.platform) as 'whatsapp' | 'telegram' | 'signal', candidate.key, 'clear')).catch(() => false);
+      clearAudio = false;
+      const currentSignature = await runtime.execute<string>(buildVoiceConversationSignatureScript(appForPlatform(profile.platform) as 'whatsapp' | 'telegram' | 'signal'));
+      if (signal?.aborted || currentSignature !== candidate.conversationSignature) continue;
+      candidate.text = transcript.trim();
+      if (!candidate.text) throw new Error('没有识别出语音内容');
+      const transcriptStored = await runtime.execute<boolean>(`(()=>{const p=${JSON.stringify(appForPlatform(profile.platform))},expected=${JSON.stringify(candidate.conversationSignature)},current=p==='signal'?document.querySelector('.CompositionArea[data-df-signal-conversation-id]')?.getAttribute('data-df-signal-conversation-id')||'':location.href+'|'+String(document.querySelector('header')?.innerText||document.querySelector('header')?.textContent||'').replace(/\\s+/g,' ').trim().slice(0,180);if(current!==expected)return false;const el=Array.from(document.querySelectorAll('[data-df-voice-key]')).find(node=>node.dataset.dfVoiceKey===${JSON.stringify(candidate.key)});if(!el)return false;el.dataset.dfVoiceTranscript=${JSON.stringify(candidate.text)};return true;})()`).catch(() => false);
+      if (!transcriptStored) { candidate.text = ''; continue; }
+      recognizedCount += 1;
+      setVoiceTranslationStatus(profile.id, '语音已识别，正在准备译文');
+    } catch (error) {
+      if (clearAudio) await runtime.execute<boolean>(buildVoiceMessageAudioChunkScript(appForPlatform(profile.platform) as 'whatsapp' | 'telegram' | 'signal', candidate.key, 'clear')).catch(() => false);
+      const detail = error instanceof Error ? error.message : String(error);
+      if (/会话已切换|已取消/.test(detail)) continue;
+      setVoiceTranslationStatus(profile.id, `语音识别失败：${detail.slice(0, 90)}`);
+      diagnosticEvent('speech:failed', { profileId: profile.id, platform: profile.platform });
+      setComposerStatus(profile.id, `语音本地识别失败：${detail.slice(0, 80)}`);
+    }
+  }
+  if (recognizedCount && composerStatus.value[profile.id] === '正在本地识别语音…') setComposerStatus(profile.id, '');
+  return candidates.filter((item) => !item.voiceMessage || Boolean(item.text));
+}
+
+*/
 function scanAndTranslateMessages(profileId: string): Promise<void> {
   if(conversationExportBusy.value&&conversationExportProfileId.value===profileId)return Promise.resolve();
   const existing = translationScansInFlight.get(profileId);
   if (existing) return existing;
+  const profile = profiles.value.find((item) => item.id === profileId);
+  const scanDeadlineMs = profile && profile.platform !== 'opensms' ? 150_000 : 30_000;
   const controller = new AbortController();
   const runtimeSignal = webRuntimeControllers.get(profileId)?.signal;
   const abortScan = () => controller.abort();
   runtimeSignal?.addEventListener('abort', abortScan, { once: true });
   if (runtimeSignal?.aborted) controller.abort();
-  const scan = withTranslationDeadline(scanAndTranslateMessagesOnce(profileId, controller.signal), 30_000,
-    runtimeSignal, abortScan).catch(() => undefined).finally(() => {
+  const scan = withTranslationDeadline(scanAndTranslateMessagesOnce(profileId, controller.signal), scanDeadlineMs,
+    runtimeSignal, abortScan).catch((error) => {
+    if (!runtimeSignal?.aborted && error instanceof Error && error.message === 'Translation operation timed out') {
+      setComposerStatus(profileId, '消息或语音处理超时，请稍后重试');
+    }
+    return undefined;
+  }).finally(() => {
     runtimeSignal?.removeEventListener('abort', abortScan);
     if (translationScansInFlight.get(profileId) === scan) {
       translationScansInFlight.delete(profileId);
@@ -9387,10 +9786,21 @@ async function scanAndTranslateMessagesOnce(profileId: string, signal?: AbortSig
   let realtimeCandidates = candidates;
   try {
     realtimeCandidates = (await runtime.execute<MessageCandidate[]>(buildMessageScanScript(appForPlatform(profile.platform)))) ?? [];
+    const voiceCandidates = await runtime.execute<MessageCandidate[]>(
+      buildVoiceMessageScanScript(appForPlatform(profile.platform) as 'whatsapp' | 'telegram' | 'signal')
+    );
+    realtimeCandidates.push(...(voiceCandidates || []));
+    if (voiceCandidates?.length) {
+      setVoiceTranslationStatus(profileId, `发现 ${voiceCandidates.length} 条可见语音条`);
+    } else if (!voiceTranslationStatus.value[profileId]?.includes('失败') && !voiceTranslationStatus.value[profileId]?.includes('已保存') && !voiceTranslationStatus.value[profileId]?.includes('译文已显示')) {
+      setVoiceTranslationStatus(profileId, '当前会话未检测到可识别的可见语音条');
+    }
   } catch {
     realtimeCandidates = candidates.slice(0, 12);
   }
-  await registerNonEnglishContactMarkers(profile, realtimeCandidates);
+  realtimeCandidates = await transcribeVoiceMessageCandidates(profile, runtime, realtimeCandidates, candidates, signal);
+  realtimeCandidates = [...realtimeCandidates.filter((candidate) => candidate.voiceMessage), ...realtimeCandidates.filter((candidate) => !candidate.voiceMessage)];
+  await registerNonEnglishContactMarkers(profile, realtimeCandidates.filter((candidate) => !candidate.voiceMessage));
   realtimeCandidates = realtimeCandidates.filter((candidate) => !candidate.nonEnglishContactMarker);
   if (signal?.aborted) return;
   let loadedHistoryPageForScan = false;
@@ -9400,6 +9810,10 @@ async function scanAndTranslateMessagesOnce(profileId: string, signal?: AbortSig
   let cacheInjectionFailedCount = 0;
   let alreadyTranslatedCount = 0;
   for (const candidate of realtimeCandidates.slice(0, 12)) {
+    if (candidate.voiceMessage && candidate.conversationSignature) {
+      const signature = await runtime.execute<string>(buildVoiceConversationSignatureScript(appForPlatform(profile.platform) as 'whatsapp' | 'telegram' | 'signal')).catch(() => '');
+      if (signature !== candidate.conversationSignature) continue;
+    }
     const cacheKey = `${profileId}:${candidate.key}`;
     const sourceCacheKey = `${profileId}:${hashText(candidate.text)}`;
     if (translatingMessages.has(cacheKey) || translatingMessages.has(sourceCacheKey)) continue;
@@ -9420,10 +9834,11 @@ async function scanAndTranslateMessagesOnce(profileId: string, signal?: AbortSig
     }
     if (cachedTranslation) {
       const injected = await runtime.execute<boolean>(
-        buildMessageTranslationInjectScript(candidate.key, cachedTranslation, appForPlatform(profile.platform), candidate.text)
+        buildMessageTranslationInjectScript(candidate.key, cachedTranslation, appForPlatform(profile.platform), candidate.text, false, Boolean(candidate.voiceMessage), candidate.conversationSignature)
       );
       if (injected) {
         cachedTranslationCount += 1;
+        if (candidate.voiceMessage) setVoiceTranslationStatus(profileId, '语音译文已从本地缓存显示');
         if (profile.platform === 'signal') setComposerStatus(profileId, 'Signal 已注入缓存译文');
         translatedMessages.add(cacheKey);
         translatedMessages.add(sourceCacheKey);
@@ -9432,8 +9847,13 @@ async function scanAndTranslateMessagesOnce(profileId: string, signal?: AbortSig
       cacheInjectionFailedCount += 1;
     }
     if (translatedMessages.has(cacheKey) || translatedMessages.has(sourceCacheKey)) { alreadyTranslatedCount += 1; continue; }
-    if (!isLatestVisibleMessageCandidate(appForPlatform(profile.platform), candidate)) continue;
-    if (enqueueMessageTranslationTask(profile, candidate, 'visible-message')) queuedCount += 1;
+    if (!candidate.voiceMessage && !isLatestVisibleMessageCandidate(appForPlatform(profile.platform), candidate)) continue;
+    if (enqueueMessageTranslationTask(profile, candidate, 'visible-message')) {
+      queuedCount += 1;
+      if (candidate.voiceMessage) setVoiceTranslationStatus(profileId, '语音已识别，正在请求翻译');
+    } else if (candidate.voiceMessage && !translatedMessages.has(cacheKey) && !translatedMessages.has(sourceCacheKey)) {
+      setVoiceTranslationStatus(profileId, '语音已识别，但翻译任务未进入队列；请检查运行状态');
+    }
   }
   const historyBackfillQueuedCount = enqueueHistoryBackfillTranslations(profile, candidates, profileCacheWarmupReady);
   diagnosticEvent('scan:complete', { profileId, platform: profile.platform, candidates: candidates.length, queued: queuedCount + historyBackfillQueuedCount, cacheBlocked: cacheWarmupBlockedCount, cacheReady: profileCacheWarmupReady, running: runningTranslationCount, cacheHits: cachedTranslationCount, cacheInjectionFailed: cacheInjectionFailedCount, alreadyTranslated: alreadyTranslatedCount });
@@ -9667,7 +10087,7 @@ async function installAssistantMaterialRuntime(profile:ChatProfile){
   const installed=await executeProfileScript<{fresh:boolean}>(profile.id,buildAssistantRuntimeScript({command:'install',config:{platform:appForPlatform(profile.platform),catalog,colors,icon:await assistantIconData(),usages,enabled,showButton:false}}));
   if(!enabled||installed?.fresh)assistantStageTokens.delete(profile.id);
 }
-async function copyAssistantMaterial(material:AssistantMaterial){
+async function copyAssistantMaterial(material:AssistantMaterial,cardTitle=''){
   if(assistantCopyBusy.value)return;
   const profile=profiles.value.find(p=>p.id===activeProfileId.value);if(!profile)return;
   assistantCopyBusy.value=true;assistantCopyStatus.value='正在准备素材…';
@@ -9683,7 +10103,7 @@ async function copyAssistantMaterial(material:AssistantMaterial){
     const pending=await window.chatTranslator.stageAssistantMaterial(known);
     if(pending.type==='image'&&pending.mediaId)await transferAssistantImage(profile.id,pending.mediaId,pending.imageData||'');
     assistantCopyStatus.value='请在聊天窗口确认素材及目标联系人';
-    await executeProfileScript(profile.id,buildAssistantRuntimeScript({command:'confirm',pending:{...pending,imageData:undefined},contactId:contact.id}));
+    await executeProfileScript(profile.id,buildAssistantRuntimeScript({command:'confirm',pending:{...pending,imageData:undefined},contactId:contact.id,cardTitle:cardTitle.slice(0,200)}));
     let confirmed:{status:string;contactId?:string;actualText?:string}|undefined;
     while(true){
       if(pending.expiresAt<Date.now()||!signedIn.value||lockScreenVisible.value||hasBlockingModal.value||activePanel.value!=='session'||activeProfileId.value!==profile.id)throw new Error('会话或授权状态已变化，请重新操作');
@@ -10903,14 +11323,18 @@ function buildCachedTranslationRuntimeScript(app: RuntimeApp, entries: Array<{ s
   };
   const readDirection = (bubble) => {
     if (!bubble) return 'unknown';
-    const explicitHost = bubble.closest?.('[data-id^="true_"], [data-id^="false_"], .message-in, .message-out') || bubble;
+    const signalDirectionNode = payload.app === 'signal'
+      ? (bubble.closest?.('.module-message__container--incoming, .module-message__container--outgoing, .module-message--incoming, .module-message--outgoing') || bubble.querySelector?.('.module-message__container--incoming, .module-message__container--outgoing, .module-message--incoming, .module-message--outgoing'))
+      : null;
+    const explicitHost = signalDirectionNode || bubble.closest?.('[data-id^="true_"], [data-id^="false_"], .message-in, .message-out') || bubble;
     const explicitId = (explicitHost.getAttribute?.('data-id') || '').toString();
     if (explicitId.startsWith('true_') || explicitHost.classList?.contains('message-out')) return 'outgoing';
     if (explicitId.startsWith('false_') || explicitHost.classList?.contains('message-in')) return 'incoming';
     const marker = [
       bubble.getAttribute?.('data-id') || '',
       bubble.getAttribute?.('data-testid') || '',
-      bubble.className || ''
+      bubble.className || '',
+      signalDirectionNode?.className || ''
     ].join(' ');
     if (marker.includes('message-out') || marker.startsWith('true_') || /\\bown\\b|outgoing|is-out|from-me|sent/.test(marker)) return 'outgoing';
     if (marker.includes('message-in') || marker.startsWith('false_') || /incoming|is-in|from-them|received/.test(marker)) return 'incoming';
@@ -11390,12 +11814,18 @@ function buildWebBubbleRefreshStateScript(key: string, state: 'processing' | 'id
 `;
 }
 
-function buildMessageTranslationInjectScript(key: string, translation: string, app: RuntimeApp, sourceText = '', replaceExisting = false) {
+function buildMessageTranslationInjectScript(key: string, translation: string, app: RuntimeApp, sourceText = '', replaceExisting = false, voiceMessage = false, conversationSignature = '') {
   if(app==='opensms')return buildOpenSmsScript({action:'inject',key,translation,sourceText,replaceExisting});
-  const payload = JSON.stringify({ key, translation, app, sourceText, replaceExisting });
+  const payload = JSON.stringify({ key, translation, app, sourceText, replaceExisting, voiceMessage, conversationSignature });
   return `
 (() => {
   const payload = ${payload};
+  if (payload.voiceMessage && payload.conversationSignature) {
+    const signature = payload.app === 'signal'
+      ? (document.querySelector('.CompositionArea[data-df-signal-conversation-id]')?.getAttribute('data-df-signal-conversation-id') || '')
+      : (location.href + '|' + String(document.querySelector('header')?.innerText || document.querySelector('header')?.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 180));
+    if (signature !== payload.conversationSignature) return false;
+  }
   const normalize = (text) => (text || '').replace(/\\s+/g, ' ').trim();
   const textWithoutTranslatorUi = (el) => {
     const clone = el.cloneNode(true);
@@ -11581,7 +12011,12 @@ function buildMessageTranslationInjectScript(key: string, translation: string, a
         target.closest('[data-testid="msg-container"] [data-testid="selectable-text"], [data-pre-plain-text] .selectable-text, [data-testid="selectable-text"], .selectable-text.copyable-text, .selectable-text') ||
         target
       );
-  const mount = quoteMount || textMount;
+  const voiceControls = payload.voiceMessage && payload.app === 'signal'
+    ? Array.from(document.querySelectorAll('.df-voice-controls')).find((el) => el.dataset.dfVoiceControlsKey === payload.key)
+    : null;
+  const mount = payload.voiceMessage
+    ? (payload.app === 'signal' ? (voiceControls || container) : payload.app === 'telegram' ? (container.querySelector('.bubble-content') || container) : container)
+    : (quoteMount || textMount);
   const prepareTelegramMount = () => {
     if (payload.app !== 'telegram' || !mount) return;
     const widthTarget = mount.matches?.('.bubble-content, .bubble-content-wrapper')
@@ -11601,7 +12036,7 @@ function buildMessageTranslationInjectScript(key: string, translation: string, a
   };
   prepareTelegramMount();
   if (payload.app === 'signal') {
-    mount.style.minWidth = '88px';
+    mount.style.minWidth = payload.voiceMessage ? '0' : '88px';
     mount.style.boxSizing = 'border-box';
   }
   if (payload.app === 'telegram') {
@@ -11610,7 +12045,10 @@ function buildMessageTranslationInjectScript(key: string, translation: string, a
     }
   }
   const styleTranslationNode = (targetNode) => {
-    const translationColor = payload.app === 'signal' && readDirection(container || mount) === 'outgoing' ? '#f8fbff' : '#166534';
+    const signalDirection = payload.app === 'signal' ? readDirection(container || mount) : 'unknown';
+    const translationColor = payload.app === 'signal' && payload.voiceMessage
+      ? 'inherit'
+      : payload.app === 'signal' && signalDirection === 'outgoing' ? '#f8fbff' : '#166534';
     targetNode.style.cssText = [
       'display:block',
       'margin-top:5px',
@@ -11704,7 +12142,9 @@ function buildMessageTranslationInjectScript(key: string, translation: string, a
     tail.append(last, button);
     targetNode.appendChild(tail);
   };
-  const existingTranslations = Array.from(mount.querySelectorAll('.df-chat-translation'));
+  const existingTranslations = payload.voiceMessage
+    ? Array.from(document.querySelectorAll('.df-chat-translation[data-df-voice-translation-key]')).filter((node) => node.dataset.dfVoiceTranslationKey === payload.key)
+    : Array.from(mount.querySelectorAll('.df-chat-translation'));
   if (existingTranslations.length && !payload.replaceExisting) {
     if (payload.app !== 'telegram' || existingTranslations.some((node) => node.parentElement === mount)) {
       for (const existingTranslation of existingTranslations) {
@@ -11719,9 +12159,25 @@ function buildMessageTranslationInjectScript(key: string, translation: string, a
   }
   const node = document.createElement('div');
   node.className = 'df-chat-translation';
+  if (payload.voiceMessage) node.dataset.dfVoiceTranslationKey = payload.key;
   renderWebTranslationWithRefresh(node);
   styleTranslationNode(node);
-  if (payload.app === 'telegram' && mount.matches?.('.message.spoilers-container, .message')) {
+  if (payload.voiceMessage && payload.app === 'signal') {
+    node.style.marginLeft = '0';
+    node.style.marginRight = '0';
+    node.style.width = 'fit-content';
+    node.style.maxWidth = 'min(100%, 560px)';
+    node.style.alignSelf = 'flex-start';
+    mount.appendChild(node);
+  } else if (payload.voiceMessage && container.parentElement) {
+    node.style.marginLeft = '12px';
+    node.style.marginRight = '12px';
+    node.style.width = 'fit-content';
+    node.style.maxWidth = 'min(88%, 560px)';
+    node.style.alignSelf = readDirection(container) === 'outgoing' ? 'flex-end' : 'flex-start';
+    const actionRow = Array.from(container.parentElement.children).find((item) => item.classList?.contains('df-voice-action-row') && item.dataset.dfVoiceKey === payload.key);
+    (actionRow || container).insertAdjacentElement('afterend', node);
+  } else if (payload.app === 'telegram' && mount.matches?.('.message.spoilers-container, .message')) {
     const anchor = Array.from(mount.children).find((child) =>
       child.classList?.contains('time') || child.classList?.contains('clearfix')
     );
@@ -11870,6 +12326,8 @@ onMounted(() => {
     lockScreenClock.value = Date.now();
   }, 1000);
   window.addEventListener('resize', scheduleSignalWorkspaceSync);
+  window.addEventListener('focus', refreshTelegramUnreadCountsOnResume);
+  document.addEventListener('visibilitychange', refreshTelegramUnreadCountsOnResume);
   removeTranslationLayoutWatchers=installTranslationLayoutWatchersFromDom(()=>{
     scheduleSignalWorkspaceSyncBurst();
     if(!signedIn.value||lockScreenVisible.value||activePanel.value!=='session'||!activeProfileId.value)return;
@@ -11971,6 +12429,8 @@ onUnmounted(() => {
   removeSignalWorkspaceSyncListener?.();
   removeRemoteGuardStatusListener?.();
   window.removeEventListener('resize', scheduleSignalWorkspaceSync);
+  window.removeEventListener('focus', refreshTelegramUnreadCountsOnResume);
+  document.removeEventListener('visibilitychange', refreshTelegramUnreadCountsOnResume);
   void hideInactiveSignalProfiles(null);
 });
 </script>
@@ -12358,6 +12818,9 @@ onUnmounted(() => {
         <span>{{ activeComposerStatus || 'Signal 翻译状态：等待输入或消息' }}</span>
         <strong>{{ activeSignalDiagnosticStatus || 'Signal 诊断：等待探针结果' }}</strong>
       </div>
+      <div v-if="currentApp === 'signal' && activeVoiceTranslationStatus" class="signal-voice-status" role="status" aria-live="polite">
+        {{ activeVoiceTranslationStatus }}
+      </div>
       <div v-if="showDeveloperDiagnostics && currentApp !== 'signal'" class="signal-status-strip">
         <span>{{ activeComposerStatus || '输入翻译状态：等待输入' }}</span>
         <strong>{{ activeWebComposerDiagnosticStatus || 'Web 输入探针：等待结果' }}</strong>
@@ -12460,7 +12923,7 @@ onUnmounted(() => {
   <AssistantLibraryPanel v-if="signedIn && activePanel === 'session' && !lockScreenVisible && !hasBlockingModal"
     v-model:open="assistantOpen" :workspace="activePanel === 'session'" :collapsed="workspaceHeaderCollapsed" :class="themeClass"
     :used-ids="assistantUsedIds" :copy-busy="assistantCopyBusy" :copy-status="assistantCopyStatus" :contact-title="assistantContacts[activeProfileId||'']?.title"
-    @copy="copyAssistantMaterial" @changed="assistantLibraryChanged" :export-busy="conversationExportBusy" :export-status="conversationExportStatus"
+    @copy="copyAssistantMaterial($event.material,$event.cardTitle)" @changed="assistantLibraryChanged" :export-busy="conversationExportBusy" :export-status="conversationExportStatus"
     @export="exportCurrentConversation" @cancel-export="cancelConversationExport" />
 
   <div

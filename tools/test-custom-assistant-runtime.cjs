@@ -47,7 +47,7 @@ if (!process.versions.electron) {
       const contact=ref('wa:15550000001@c.us'),usages=ref([]),open=ref(true);window.setContact=async id=>{contact.value=id;document.querySelector('#main').setAttribute('data-jid',id.slice(3));usages.value=await window.chatTranslator.usageFixture();};
       document.querySelector('#input').addEventListener('paste',e=>{if(e.clipboardData?.files.length){e.preventDefault();const p=document.createElement('div');p.setAttribute('data-testid','media-editor');p.textContent='Accepted attachment';document.body.appendChild(p);}});
       const run=cmd=>(0,eval)(buildAssistantRuntimeScript(cmd));
-      async function send(m){window.copyDone=false;const pending=await window.chatTranslator.copyFixture(m);const css=getComputedStyle(document.documentElement),colors={};for(const key of ['--text','--muted','--muted-strong','--accent','--accent-bright','--bg','--bg-soft','--panel-strong','--panel-muted','--line','--line-strong'])colors[key]=css.getPropertyValue(key);run({command:'install',config:{platform:'whatsapp',catalog:await buildAssistantCatalog(await window.chatTranslator.getAssistantLibrary()),colors,icon:'',usages:usages.value,enabled:true,showButton:false}});run({command:'confirm',pending,contactId:contact.value});let r;do{await new Promise(r=>setTimeout(r,30));r=run({command:'confirmation-status',token:pending.token});}while(r.status==='pending');if(r.status==='inserted'){const usage=await window.chatTranslator.recordFixture(r);run({command:'result',token:pending.token,usage});}usages.value=await window.chatTranslator.usageFixture();window.copyDone=true;}
+      async function send(request){window.copyDone=false;const pending=await window.chatTranslator.copyFixture(request.material);const css=getComputedStyle(document.documentElement),colors={};for(const key of ['--text','--muted','--muted-strong','--accent','--accent-bright','--bg','--bg-soft','--panel-strong','--panel-muted','--line','--line-strong'])colors[key]=css.getPropertyValue(key);run({command:'install',config:{platform:'whatsapp',catalog:await buildAssistantCatalog(await window.chatTranslator.getAssistantLibrary()),colors,icon:'',usages:usages.value,enabled:true,showButton:false}});run({command:'confirm',pending,contactId:contact.value,cardTitle:request.cardTitle});let r;do{await new Promise(r=>setTimeout(r,30));r=run({command:'confirmation-status',token:pending.token});}while(r.status==='pending');if(r.status==='inserted'){const usage=await window.chatTranslator.recordFixture(r);run({command:'result',token:pending.token,usage});}usages.value=await window.chatTranslator.usageFixture();window.copyDone=true;}
       createApp({setup(){return()=>h(Panel,{open:open.value,workspace:true,collapsed:true,usedIds:usages.value.filter(u=>u.confirmation==='inserted'&&u.contactId===contact.value).map(u=>u.materialId),contactTitle:contact.value,'onUpdate:open':v=>open.value=v,onCopy:send});}}).mount('#fixture');
     </script></body></html>`;
     const {createServer}=await import('vite');
@@ -75,18 +75,44 @@ if (!process.versions.electron) {
       await wait(`Array.from(document.querySelectorAll('.assistant-image-preview img')).every(i=>i.complete&&i.naturalWidth>0)`);
       assert.equal(await execute(`document.querySelectorAll('.assistant-card-material').length`),2,'one whole text and one image');
       const send=async index=>{
-        await execute(`document.querySelectorAll('.assistant-material-actions button')[${index}].click()`);
+        await execute(`document.querySelectorAll('.assistant-card-send-actions button')[${index}].click()`);
         await wait(`!!document.querySelector('#df-material-root')?.shadowRoot.querySelector('.dialog')`);
+        assert.equal(await execute(`document.querySelector('#df-material-root').shadowRoot.querySelector('.card-title')?.textContent`),`卡片：${tab}测试卡`,'confirmation displays the card title');
         assert.equal(await execute('window.copyDone'),false,'opening confirmation does not mark usage');
         await execute(`document.querySelector('#df-material-root').shadowRoot.querySelector('.primary').click()`);
         try{await wait('window.copyDone===true');}catch(error){console.error(await execute(`JSON.stringify({confirmation:window.__dfMaterialRuntime?.confirmation,error:document.querySelector('#df-material-root')?.shadowRoot.querySelector('.error')?.textContent,input:document.querySelector('#input').innerText,html:document.querySelector('#input').innerHTML})`));throw error;}
       };
+      await click('收起');
+      assert.equal(await execute(`document.querySelectorAll('.assistant-card-material').length`),0,'collapsed card hides its material details');
+      assert.equal(await execute(`document.querySelectorAll('.assistant-card-send-actions button').length`),2,'collapsed card keeps its material send buttons available');
       await send(0);assert.equal(clipboardText,'First paragraph\n\nSecond paragraph');
+      assert.equal(clipboardText.includes(`${tab}测试卡`),false,'card title is display-only and is not sent');
+      await click('展开');
       assert.equal(await execute(`document.querySelectorAll('.assistant-material-actions .material-used').length`),tab==='一周行程'?1:2,'same photo remains used across cards');
-      await send(1);assert.ok(clipboardImage&&!clipboardImage.isEmpty());
+      await click('收起');await send(1);assert.ok(clipboardImage&&!clipboardImage.isEmpty());
+      await click('展开');
       assert.equal(await execute(`document.querySelectorAll('.assistant-material-actions .material-used').length`),2);
       await execute(`window.setContact('wa:15550000002@c.us')`);assert.equal(await execute(`document.querySelectorAll('.assistant-material-actions .material-used').length`),0);
       await execute(`window.setContact('wa:15550000001@c.us')`);assert.equal(await execute(`document.querySelectorAll('.assistant-material-actions .material-used').length`),2);
+      await click('编辑');await wait(`!!document.querySelector('.assistant-custom-editor')`);
+      assert.equal(await execute(`document.activeElement===document.querySelector('.assistant-custom-editor input')`),true,'editing focuses and selects the card name');
+      await execute(`(()=>{const e=document.querySelector('.assistant-custom-editor');const n=e.querySelector('input');n.value=${JSON.stringify(tab+'编辑已保存')};n.dispatchEvent(new Event('input',{bubbles:true}));const t=e.querySelector('textarea');t.value=${JSON.stringify('Edited text persisted')};t.dispatchEvent(new Event('input',{bubbles:true}));return true;})()`);
+      await click('保存卡片');await wait(`!document.querySelector('.assistant-custom-editor')&&document.querySelector('.assistant-custom-card h3')?.textContent===${JSON.stringify(tab+'编辑已保存')}`);
+      assert.equal(await service.readAssistantLibrary().then(value=>value.modules[tab==='一周行程'?'schedule':'quotes'].entries[0].text),'Edited text persisted','edited title and text persist to the encrypted library');
+      await click('删除');await wait(`document.querySelectorAll('.assistant-custom-card').length===0`);
+      await click('新建卡片');await wait(`!!document.querySelector('.assistant-custom-editor')&&document.activeElement===document.querySelector('.assistant-custom-editor input')`);
+      await execute(`(()=>{const e=document.querySelector('.assistant-custom-editor');const n=e.querySelector('input');n.value=${JSON.stringify(tab+'重建卡片')};n.dispatchEvent(new Event('input',{bubbles:true}));const t=e.querySelector('textarea');t.value=${JSON.stringify('Replacement card text')};t.dispatchEvent(new Event('input',{bubbles:true}));return true;})()`);
+      await click('上传图片');await wait(`document.querySelectorAll('.assistant-media-card img').length===1&&!document.querySelector('.assistant-library-tabs button').disabled`);
+      await click('保存卡片');await wait(`!document.querySelector('.assistant-custom-editor')&&document.querySelector('.assistant-custom-card h3')?.textContent===${JSON.stringify(tab+'重建卡片')}`);
+      assert.equal(await service.readAssistantLibrary().then(value=>value.modules[tab==='一周行程'?'schedule':'quotes'].entries[0].title),tab+'重建卡片','a card can be recreated immediately after deletion');
+      await click('新建卡片');await wait(`!!document.querySelector('.assistant-custom-editor')`);
+      await execute(`(()=>{const e=document.querySelector('.assistant-custom-editor');e.querySelector('input').value=${JSON.stringify(tab+'第二张')};e.querySelector('input').dispatchEvent(new Event('input',{bubbles:true}));e.querySelector('textarea').value='second card';e.querySelector('textarea').dispatchEvent(new Event('input',{bubbles:true}));return true;})()`);
+      await click('保存卡片');await wait(`document.querySelectorAll('.assistant-custom-card').length===2`);
+      await execute(`(()=>{const all=[...document.querySelectorAll('.assistant-custom-card')],source=all.find(card=>card.querySelector('h3').textContent===${JSON.stringify(tab+'第二张')}),target=all.find(card=>card!==source),handle=source.querySelector('.assistant-card-drag-handle'),data=new DataTransfer();handle.dispatchEvent(new DragEvent('dragstart',{bubbles:true,dataTransfer:data}));target.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:data}));return true;})()`);
+      await wait(`document.querySelector('.assistant-custom-card h3')?.textContent===${JSON.stringify(tab+'第二张')}`);
+      assert.deepEqual(await service.readAssistantLibrary().then(value=>value.modules[tab==='一周行程'?'schedule':'quotes'].entries.map(entry=>entry.title)),[tab+'第二张',tab+'重建卡片'],'manual card order persists locally');
+      await execute(`(()=>{const card=[...document.querySelectorAll('.assistant-custom-card')].find(item=>item.querySelector('h3').textContent===${JSON.stringify(tab+'第二张')});card.querySelector('footer button:last-child').click();return true;})()`);
+      await wait(`document.querySelectorAll('.assistant-custom-card').length===1`);
     }
     const library=await service.readAssistantLibrary();
     const catalog=await buildAssistantCatalog(library);assert.equal(catalog.persona.length,0);assert.equal(catalog.schedule.length,1);assert.equal(catalog.quotes.length,1);

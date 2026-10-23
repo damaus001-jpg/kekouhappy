@@ -86,8 +86,9 @@ async function main() {
     throw new Error('Signal runtime is missing the launcher credential guard.');
   }
 
-  fs.rmSync(stagingRoot, { recursive: true, force: true });
   fs.mkdirSync(stagingRoot, { recursive: true });
+  fs.rmSync(targetRoot, { recursive: true, force: true });
+  fs.rmSync(manifestPath, { force: true });
   fs.cpSync(sourceRoot, targetRoot, {
     recursive: true,
     filter(source) {

@@ -11,7 +11,7 @@ export type AssistantRuntimeSnapshot = { events: AssistantRuntimeEvent[]; contac
 type Command = {command:'install';config:AssistantRuntimeConfig} | {command:'stage';pending:AssistantStagedMaterial|null}
   | {command:'result';token:string;error?:string;usage?:AssistantUsage} | {command:'poll'}
   | {command:'contact'}
-  | {command:'confirm';pending:AssistantStagedMaterial;contactId:string}
+  | {command:'confirm';pending:AssistantStagedMaterial;contactId:string;cardTitle?:string}
   | {command:'confirmation-status';token:string}
   | {command:'cancel-confirmation'}
   | {command:'image-chunk';id:string;chunk:string;start:boolean;end:boolean};
@@ -74,7 +74,7 @@ function assistantRuntime(command: Command) {
       .float{position:fixed;right:12px;top:55%;width:64px;padding:0;border:0;background:transparent;z-index:2147483000;touch-action:none;cursor:grab}.float img{width:58px;height:76px;object-fit:contain;filter:drop-shadow(0 3px 5px #0005);pointer-events:none}.float span{display:block;background:var(--panel-strong);border:1px solid var(--line);border-radius:8px;padding:3px;color:var(--accent-bright);font-size:11px}
       .panel{position:fixed;right:8px;top:8px;bottom:8px;width:min(472px,calc(100vw - 24px));z-index:2147483001;border:1px solid var(--line-strong);border-radius:18px;background:var(--panel-strong);box-shadow:0 12px 40px #0004;display:flex;flex-direction:column;overflow:hidden}header{display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--line)}header img{width:40px;height:50px;object-fit:contain}header strong{color:var(--accent-bright);font-size:18px}header small{display:block;margin-top:5px;color:var(--muted)}header>div{flex:1}header button{font-size:22px}nav{display:flex;gap:6px;padding:10px 12px}nav button{flex:1}.active{border-color:var(--accent);color:var(--accent-bright)}.scroll{flex:1;min-height:0;overflow:auto;padding:24px 20px}.name{color:var(--muted);letter-spacing:1px;margin:0 0 26px 24px}
       ol{list-style:none;padding:0 0 0 10px;margin:0}li{position:relative;padding:0 0 22px 25px;border-left:1px solid var(--line-strong)}li:last-child{border-left-color:transparent}li:before{content:'';position:absolute;left:-5px;top:17px;width:9px;height:9px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 4px var(--panel-strong)}article{padding:15px 17px 17px;background:linear-gradient(135deg,var(--panel-muted),var(--bg-soft));border:1px solid var(--line);border-radius:14px}.date{margin:0 0 8px;font-size:11px;letter-spacing:1px;color:var(--accent-bright);font-weight:600}h3{margin:0 0 8px;font-size:15px;line-height:1.5}footer{display:flex;justify-content:flex-end;margin-top:12px}.materials{display:flex;flex-direction:column;gap:12px;margin-top:12px}.material{display:flex;flex-direction:column;gap:10px;align-items:flex-start;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--panel-strong)}.material p{margin:0;white-space:pre-wrap;font-size:12px;line-height:1.9;color:var(--muted-strong)}.material img{max-width:100%;max-height:240px;object-fit:contain;border-radius:8px}.material button{align-self:flex-end}.used{color:var(--muted)}.empty{color:var(--muted);line-height:1.8}.toast{position:fixed;bottom:24px;right:24px;max-width:400px;z-index:2147483005;background:var(--panel-strong);border:1px solid var(--accent);border-radius:12px;padding:14px;color:var(--text)}
-      .mask{position:fixed;inset:0;z-index:2147483003;background:#0008;display:grid;place-items:center;padding:20px;pointer-events:none}.dialog{pointer-events:auto;width:min(460px,100%);max-height:85vh;overflow:auto;border:1px solid var(--line-strong);border-radius:18px;padding:24px;background:var(--panel-strong);box-shadow:0 12px 60px #0005}.dialog h2{font-size:18px;margin:0 0 14px}.target{color:var(--accent-bright);line-height:1.7}.dialog textarea{width:100%;min-height:160px;max-height:45vh;resize:vertical;background:var(--bg-soft);border:1px solid var(--line);border-radius:10px;color:var(--text);font:inherit;font-size:14px;line-height:1.8;padding:12px}.dialog img{display:block;max-width:100%;max-height:40vh;object-fit:contain;margin:auto}.dialog .hint{color:var(--muted);line-height:1.7}.dialog .error{color:#e56565;line-height:1.6}.primary{background:var(--accent);color:var(--bg);font-weight:600}.actions{display:flex;justify-content:flex-end;gap:10px;margin-top:20px}
+      .mask{position:fixed;inset:0;z-index:2147483003;background:#0008;display:grid;place-items:center;padding:20px;pointer-events:none}.dialog{pointer-events:auto;width:min(460px,100%);max-height:85vh;overflow:auto;border:1px solid var(--line-strong);border-radius:18px;padding:24px;background:var(--panel-strong);box-shadow:0 12px 60px #0005}.dialog h2{font-size:18px;margin:0 0 14px}.target{color:var(--accent-bright);line-height:1.7}.dialog .card-title{color:var(--accent-bright);font-weight:600;line-height:1.6;overflow-wrap:anywhere}.dialog textarea{width:100%;min-height:160px;max-height:45vh;resize:vertical;background:var(--bg-soft);border:1px solid var(--line);border-radius:10px;color:var(--text);font:inherit;font-size:14px;line-height:1.8;padding:12px}.dialog img{display:block;max-width:100%;max-height:40vh;object-fit:contain;margin:auto}.dialog .hint{color:var(--muted);line-height:1.7}.dialog .error{color:#e56565;line-height:1.6}.primary{background:var(--accent);color:var(--bg);font-weight:600}.actions{display:flex;justify-content:flex-end;gap:10px;margin-top:20px}
     `;
     shadow.appendChild(style);
     const node = (tag:string,className='',text='') => {const el=document.createElement(tag);el.className=className;if(text)el.textContent=text;return el;};
@@ -169,12 +169,13 @@ function assistantRuntime(command: Command) {
       }
       return false;
     };
-    const showModal = (pending:AssistantStagedMaterial,expectedContactId?:string,complete?: (result:any)=>void) => {
+    const showModal = (pending:AssistantStagedMaterial,expectedContactId?:string,complete?: (result:any)=>void,cardTitle='') => {
       const contact=readContact();
       if(state.modal||!state.config?.enabled||!contact.id||(expectedContactId&&contact.id!==expectedContactId)){complete?.(null);return;}
       const duplicate=pending.type==='image'&&used(pending.id);
       const mask=node('div','mask'),dialog=node('section','dialog');dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','false');dialog.setAttribute('aria-label','确认使用素材');
       dialog.appendChild(node('h2','',duplicate?'此素材在当前联系人聊天里已使用':'确认使用素材'));const target=node('p','target',`用于：${contact.title}`);dialog.appendChild(target);
+      if(cardTitle)dialog.appendChild(node('p','card-title',`卡片：${cardTitle}`));
       let editor:HTMLTextAreaElement|null=null;
       if(pending.type==='text'){editor=node('textarea') as HTMLTextAreaElement;editor.value=pending.text||'';editor.maxLength=16000;editor.setAttribute('aria-label','修改素材文字');dialog.appendChild(editor);}
       else {const img=node('img') as HTMLImageElement;img.src=pending.imageData||'';img.alt=pending.name||'图片素材';dialog.appendChild(img);}
@@ -238,7 +239,7 @@ function assistantRuntime(command: Command) {
         state.confirmation={token:cmd.pending.token,result:{status:'pending'}};
         showModal({...cmd.pending,imageData:cmd.pending.imageData||state.images?.[cmd.pending.mediaId!]},cmd.contactId,result=>{
           if(state.confirmation?.token===cmd.pending.token)state.confirmation.result=result?{status:'inserted',...result}:{status:'cancelled'};
-        });return true;
+        },cmd.cardTitle||'');return true;
       }
       if(cmd.command==='install'){
         const previous=JSON.stringify(state.config?.catalog);state.config=cmd.config;

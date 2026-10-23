@@ -15,7 +15,7 @@ const supportedBaselines = Object.freeze({
   '8.18.0': Object.freeze({
     manifestFile: 'v8.18.0.json',
     archiveSha256: 'A1FE955608134DAA81FC4EDDBEA35F8BA57E4CA54B43391B845364965D6C1A66',
-    patchSetSha256: '38AF0DA1AEC1CEC40C44173F53DC68E6C835F0A94F974A8A8D2824B5FC3B43FE'
+    patchSetSha256: '95332C3BD5805BBEA5B3FEEEA656749364D2A5CB90A0DA76D28BA75929F0399E'
   })
 });
 
@@ -263,6 +263,7 @@ for (const markerText of [
     'resetRefreshState',
     '翻译超时，请点击重试',
     'module-message__maoyi-smart-reply',
+    'data-df-audio-url',
     '.webContents.invalidate()',
     'maoyi-translator://signal-notification/v1/',
     'notification.route.register'

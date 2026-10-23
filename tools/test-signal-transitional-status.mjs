@@ -88,7 +88,7 @@ assert.deepEqual(diagnostic, {
   schemaVersion: 1,
   type: 'source-only-acceptance-summary',
   baseline: '8.18.0',
-  patchSetSha256: '38AF0DA1AEC1CEC40C44173F53DC68E6C835F0A94F974A8A8D2824B5FC3B43FE',
+  patchSetSha256: '95332C3BD5805BBEA5B3FEEEA656749364D2A5CB90A0DA76D28BA75929F0399E',
   mode: 'source-only',
   legacyBubbleEnabled: false,
   composerEnabled: true,

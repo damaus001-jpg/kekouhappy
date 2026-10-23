@@ -93,6 +93,10 @@
     {
       "file": "0023-maoyi-translation-recovery.patch",
       "sha256": "53327F562599C71BF9A9616E733CEB1EB2529C647BFE1F94D74CAEE9169AC668"
+    },
+    {
+      "file": "0024-maoyi-voice-note-local-transcription.patch",
+      "sha256": "BD713F4A89EC0288CFD6F5882F50B54678489DF4F4526098FCE0247C8E455C18"
     }
   ]
 }
