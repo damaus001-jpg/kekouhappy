@@ -90,6 +90,7 @@ const issuerSource = fs.readFileSync(path.join(projectRoot, 'electron', 'license
 const promptGeneratorSource = fs.readFileSync(path.join(projectRoot, 'electron', 'prompt-generator.ts'), 'utf8');
 const suitePackagerSource = fs.readFileSync(path.join(projectRoot, 'tools', 'package-license-suite.cjs'), 'utf8');
 const packagedOutputVerifierSource = fs.readFileSync(path.join(projectRoot, 'tools', 'verify-packaged-output.cjs'), 'utf8');
+const clientMainBundlerSource = fs.readFileSync(path.join(projectRoot, 'tools', 'bundle-client-main.cjs'), 'utf8');
 const enterpriseIconPath = path.join(projectRoot, enterpriseIconSource);
 const enterpriseIcon = fs.readFileSync(enterpriseIconPath);
 if (
@@ -208,28 +209,29 @@ if (
 if (!/licenseFormatVersion\s*=\s*2/.test(licenseSource) || !/X25519-HKDF-SHA256\+A256GCM/.test(licenseSource)) {
   failures.push('device-bound license envelope v2 is not enabled');
 }
-if (!clientFiles.includes('dist-electron/payment-address.js')) failures.push('payment address validation module is missing from the client package');
-if (!clientFiles.includes('dist-electron/sensitive-send-authorization.js')) failures.push('sensitive send authorization module is missing from the client package');
-if (!clientFiles.includes('dist-electron/translation-sensitive-tokens.js')) failures.push('translation sensitive-token protection module is missing from the client package');
-if (!suiteBuilderSource.includes("'dist-electron/translation-sensitive-tokens.js'")) failures.push('translation sensitive-token protection module is missing from the client suite');
-if (!clientFiles.includes('dist-electron/translation-prompt-bundle.js')) failures.push('encrypted translation prompt loader is missing from the client package');
-if (!clientFiles.includes('dist-electron/smart-reply-core.js')) failures.push('smart reply validation core is missing from the client package');
-if (!clientFiles.includes('dist-electron/smart-reply-prompt-bundle.js')) failures.push('encrypted smart-reply prompt loader is missing from the client package');
-if (!clientFiles.includes('dist-electron/translation-english-style.js')) failures.push('English chat style enforcement is missing from the client package');
-if (!clientFiles.includes('dist-electron/storage-migration.js')) failures.push('storage migration runtime is missing from the client package');
-if (!suiteBuilderSource.includes("'dist-electron/storage-migration.js'")) failures.push('storage migration runtime is missing from the client suite');
-if (!clientFiles.includes('dist-electron/signal-notification-routing.js')) failures.push('Signal notification routing runtime is missing from the client package');
-if (!suiteBuilderSource.includes("'dist-electron/signal-notification-routing.js'")) failures.push('Signal notification routing runtime is missing from the client suite');
+if (!clientFiles.includes('dist-electron/main.js')) failures.push('single bundled main-process entry is missing from the client package');
+if (clientFiles.some(file => file.startsWith('dist-electron/') && file !== 'dist-electron/main.js')) failures.push('separate Electron main-process modules must not be included in the client package');
+if (!String(packageScripts['package:win'] || '').includes('bundle-client-main.cjs')) failures.push('package:win must bundle and minify the client main process');
+if (!suiteBuilderSource.includes("'dist-electron/main.js'")) failures.push('single bundled main-process entry is missing from the client suite');
+if (suiteBuilderSource.includes("'dist-electron/storage-migration.js'") || suiteBuilderSource.includes("'dist-electron/client-license.js'")) failures.push('client suite must not expose separate readable main-process modules');
+if (!suitePackagerSource.includes("['tools/bundle-client-main.cjs']")) failures.push('full-suite packaging must bundle and minify the client main process');
+if (!clientMainBundlerSource.includes('minify: true') || !clientMainBundlerSource.includes('sourcemap: false')) failures.push('client main-process bundler must minify output without source maps');
+for (const moduleName of [
+  'payment-address.js', 'sensitive-send-authorization.js', 'translation-sensitive-tokens.js',
+  'translation-prompt-bundle.js', 'smart-reply-core.js', 'smart-reply-prompt-bundle.js',
+  'translation-english-style.js', 'storage-migration.js', 'signal-notification-routing.js',
+  'remote-guard.js'
+]) {
+  if (!mainSource.includes(`'./${moduleName}'`) && !mainSource.includes(`"./${moduleName}"`)) {
+    failures.push(`client main process no longer imports required runtime module: ${moduleName}`);
+  }
+}
 if (!packageJson.build?.protocols?.some(entry => entry?.schemes?.includes('maoyi-translator'))) {
   failures.push('default client package does not register the Maoyi notification protocol');
 }
 if (!suiteBuilderSource.includes("schemes: ['maoyi-translator']")) {
   failures.push('suite client does not register the Maoyi notification protocol');
 }
-if (!clientFiles.includes('dist-electron/remote-guard.js')) failures.push('Windows remote-guard runtime is missing from the client package');
-if (!clientFiles.includes('dist-electron/remote-guard-core.js')) failures.push('Windows remote-guard policy is missing from the client package');
-if (!suiteBuilderSource.includes("'dist-electron/remote-guard.js'")) failures.push('Windows remote-guard runtime is missing from the client suite');
-if (!suiteBuilderSource.includes("'dist-electron/remote-guard-core.js'")) failures.push('Windows remote-guard policy is missing from the client suite');
 if (!suiteBuilderSource.includes("'.package-secrets/translation-prompts.dfp'")) failures.push('encrypted translation prompt file is missing from the client suite');
 if (!suiteBuilderSource.includes("'.package-secrets/smart-reply-prompt.dfp'")) failures.push('encrypted smart-reply prompt file is missing from the client suite');
 if (!extraResources.some((resource) => typeof resource === 'object' && resource?.from === '.package-secrets/smart-reply-prompt.dfp' && resource?.to === 'smart-reply-prompt.dfp')) {

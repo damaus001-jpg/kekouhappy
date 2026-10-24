@@ -134,7 +134,7 @@ assert.match(mainSource, /storage:change-location/);
 assert.match(preloadSource, /changeStorageLocation/);
 assert.match(appSource, /数据存储位置/);
 assert.match(appSource, /更改数据目录/);
-assert.ok(packageJson.build.files.includes('dist-electron/storage-migration.js'));
+assert.ok(packageJson.build.files.includes('dist-electron/main.js'));
 const pointerCommitIndex = migrationSource.indexOf('await writeAtomic(plan.bootstrapPath');
 const targetReleaseIndex = migrationSource.indexOf('targetCreated = false;', pointerCommitIndex);
 const bestEffortPlanCleanupIndex = migrationSource.indexOf(

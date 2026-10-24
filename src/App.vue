@@ -1446,7 +1446,7 @@ async function launchSignalProfile(profileId: string) {
     scheduleSignalWorkspaceSync();
     return true;
   } catch (error) {
-    setComposerStatus(profileId, error instanceof Error ? error.message : String(error));
+    setComposerStatus(profileId, runtimeFailureStatus(error, 'Signal 启动失败：', 'Signal 启动失败，请重试'));
     return false;
   }
 }
@@ -2349,6 +2349,12 @@ async function refreshActiveWindow() {
 
 function setComposerStatus(profileId: string, status: string) {
   composerStatus.value = { ...composerStatus.value, [profileId]: status };
+}
+
+function runtimeFailureStatus(error: unknown, detailPrefix: string, userMessage: string) {
+  if (!import.meta.env.DEV) return userMessage;
+  const detail = error instanceof Error ? error.message : String(error);
+  return `${detailPrefix}${detail}`;
 }
 
 function setVoiceTranslationStatus(profileId: string, status: string) {
@@ -9505,7 +9511,7 @@ function scanSignalVoiceMessages(profileId: string): Promise<void> {
     try {
       voiceCandidates = (await runtime.execute<MessageCandidate[]>(buildVoiceMessageScanScript('signal'))) ?? [];
     } catch (error) {
-      setVoiceTranslationStatus(profileId, `Signal 语音扫描失败：${(error instanceof Error ? error.message : String(error)).slice(0, 80)}`);
+      setVoiceTranslationStatus(profileId, runtimeFailureStatus(error, 'Signal 语音扫描失败：', 'Signal 语音扫描失败，请稍后重试'));
       return;
     }
     if (!voiceCandidates.length) {
@@ -9524,7 +9530,7 @@ function scanSignalVoiceMessages(profileId: string): Promise<void> {
       setVoiceTranslationStatus(profileId, `Signal 检测到 ${availableCount} 条语音，可在对应气泡下点击“翻译”`);
     }
   })().catch((error) => {
-    setVoiceTranslationStatus(profileId, `Signal 语音处理失败：${(error instanceof Error ? error.message : String(error)).slice(0, 80)}`);
+    setVoiceTranslationStatus(profileId, runtimeFailureStatus(error, 'Signal 语音处理失败：', 'Signal 语音处理失败，请稍后重试'));
   }).finally(() => {
     if (signalVoiceScansInFlight.get(profileId) === scan) signalVoiceScansInFlight.delete(profileId);
   });
@@ -9641,7 +9647,7 @@ async function processSelectedVoiceMessage(profileId: string, candidateKey = '')
     }
   } catch (error) {
     await setVoiceMessageButtonState(profileId, candidate.key, '重试', false);
-    setVoiceTranslationStatus(profileId, `语音下载或识别失败：${(error instanceof Error ? error.message : String(error)).slice(0, 100)}`);
+    setVoiceTranslationStatus(profileId, runtimeFailureStatus(error, '语音下载或识别失败：', '语音下载或识别失败，请重试'));
   } finally {
     voiceActionBusyByProfile.value = { ...voiceActionBusyByProfile.value, [profileId]: false };
   }
@@ -9763,7 +9769,7 @@ async function scanAndTranslateMessagesOnce(profileId: string, signal?: AbortSig
   } catch (error) {
     if (isTransientSignalScriptGateError(error)) return;
     diagnosticEvent('scan:failed', { profileId, platform: profile.platform });
-    setComposerStatus(profileId, `消息扫描失败：${error instanceof Error ? error.message : String(error)}`);
+    setComposerStatus(profileId, runtimeFailureStatus(error, '消息扫描失败：', '消息扫描失败，请稍后重试'));
     return;
   }
   if (signal?.aborted) return;
@@ -10223,7 +10229,8 @@ function buildUnreadScanScript(app: RuntimeApp) {
       count: 0,
       ready: false,
       archiveCount: 0,
-      nativeTitleReady: false
+      nativeTitleReady: false,
+      emptyTitlePolls: 0
     });
     const nativeTitleMatch = normalize(document.title || '').match(/^(?:\\((\\d[\\d, ]*)\\)\\s*Telegram|Telegram\\s*\\((\\d[\\d, ]*)\\))/i);
     const nativeTitleCount = nativeTitleMatch
@@ -10299,6 +10306,7 @@ function buildUnreadScanScript(app: RuntimeApp) {
     };
     if (!archiveViewActive && rows.length) {
       state.nativeTitleReady = false;
+      state.emptyTitlePolls = 0;
       if (archiveEntryPresent) state.archiveCount = rows.filter(isArchiveEntry).reduce((sum, row) => sum + readRowCount(row), 0);
       state.count = Math.max(
         0,
@@ -10309,9 +10317,29 @@ function buildUnreadScanScript(app: RuntimeApp) {
     // Telegram can unmount or hide its list in a narrow window or while navigating.
     // Missing DOM is not a confirmed zero. Its native title remains a usable
     // signal when no known archived unread total would contaminate that signal.
-    const nativeTitleCleared = state.nativeTitleReady && /^Telegram(?: Web)?$/i.test(normalize(document.title || ''));
+    const defaultTelegramTitle = /^Telegram(?: Web)?$/i.test(normalize(document.title || ''));
+    const nativeTitleCleared = state.nativeTitleReady
+      && defaultTelegramTitle
+      && Number(state.emptyTitlePolls) >= 2;
+    const listMissingWithClearedTitle = !archiveViewActive
+      && !rows.length
+      && !state.archiveCount
+      && state.ready
+      && defaultTelegramTitle;
+    if (listMissingWithClearedTitle) {
+      state.emptyTitlePolls = (Number(state.emptyTitlePolls) || 0) + 1;
+      if (state.emptyTitlePolls >= 2) {
+        state.count = 0;
+        state.ready = true;
+        state.nativeTitleReady = true;
+        return { count: 0, ready: true, titleCount: 0, badgeCount: 0, source: 'telegram-confirmed-cleared-title' };
+      }
+    } else {
+      state.emptyTitlePolls = 0;
+    }
     if (!archiveViewActive && !rows.length && !state.archiveCount && (nativeTitleCount > 0 || nativeTitleCleared)) {
       state.nativeTitleReady = true;
+      state.emptyTitlePolls = 0;
       return { count: nativeTitleCount, ready: true, titleCount: nativeTitleCount, badgeCount: 0, source: 'telegram-native-title' };
     }
     return {

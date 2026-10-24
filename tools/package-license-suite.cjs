@@ -206,6 +206,7 @@ function main() {
     run(process.execPath, ['tools/test-signal-control-channel.cjs'], {
       MAOYI_SIGNAL_RUNTIME_DIR: path.join(packageStagingRoot, 'signal')
     });
+    run(process.execPath, ['tools/bundle-client-main.cjs']);
     const builder = path.join(projectRoot, 'node_modules', 'electron-builder', 'out', 'cli', 'cli.js');
     run(process.execPath, [builder, '--win', 'nsis', '--config', 'electron-builder.client-suite.cjs'], {
       MAOYI_CLIENT_BUILD_OUTPUT: clientBuild

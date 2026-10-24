@@ -216,11 +216,18 @@ async function verifyClient(clientRoot) {
   for (const forbidden of [/license-issuer/i, /trial-config/i, /issuer-suite-key/i, /license-suite\.sealed/i]) {
     if (entries.some((entry) => forbidden.test(entry))) throw new Error(`Client app.asar contains forbidden entry matching ${forbidden}.`);
   }
-  if (!entries.some((entry) => /(?:^|[\\/])dist-electron[\\/]profile-data-cleanup\.js$/.test(entry))) {
-    throw new Error('Client app.asar is missing profile data cleanup used by the main process.');
+  const clientMainEntry = entries.find((entry) => /(?:^|[\\/])dist-electron[\\/]main\.js$/.test(entry));
+  if (!clientMainEntry) throw new Error('Client app.asar is missing the bundled main process.');
+  if (entries.some((entry) => /(?:^|[\\/])dist-electron[\\/].+\.map$/.test(entry))) {
+    throw new Error('Client app.asar contains Electron main-process source maps.');
   }
-  if (!entries.some((entry) => /(?:^|[\\/])dist-electron[\\/]signal-notification-routing\.js$/.test(entry))) {
-    throw new Error('Client app.asar is missing strict Signal notification routing.');
+  const unbundledMainModules = /(?:profile-data-cleanup|signal-notification-routing|client-license|license-core|assistant-library|translation-prompt-bundle|smart-reply-prompt-bundle|storage-migration)\.js$/i;
+  if (entries.some((entry) => /(?:^|[\\/])dist-electron[\\/]/.test(entry) && unbundledMainModules.test(entry))) {
+    throw new Error('Client app.asar contains separate readable main-process modules instead of the single bundle.');
+  }
+  const bundledMain = Buffer.from(await asar.extractFile(appAsar, clientMainEntry.replace(/^[/\\]/, ''))).toString('utf8');
+  if (/sourceMappingURL|from\s*["']\.\//.test(bundledMain)) {
+    throw new Error('Client main-process bundle exposes a source map or relative internal module imports.');
   }
   const signalExecutable = path.join(resources, 'signal', 'Signal.exe');
   await verifySignalFuses(signalExecutable);

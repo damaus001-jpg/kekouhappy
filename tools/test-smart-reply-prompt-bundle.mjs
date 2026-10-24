@@ -43,11 +43,11 @@ const promptGeneratorBuilder = fs.readFileSync(path.join(root, 'electron-builder
 const buildScript = fs.readFileSync(path.join(root, 'tools', 'build-smart-reply-prompt-bundle.mjs'), 'utf8');
 const approvedSourcePath = path.join(root, 'config', 'smart-reply-prompt.default.txt');
 
-assert.ok(packageJson.build.files.includes('dist-electron/smart-reply-prompt-bundle.js'));
-assert.ok(packageJson.build.files.includes('dist-electron/prompt-bundle-signing.js'));
+assert.ok(packageJson.build.files.includes('dist-electron/main.js'));
+assert.ok(!packageJson.build.files.includes('dist-electron/smart-reply-prompt-bundle.js'));
 assert.ok(packageJson.build.extraResources.some((entry) => entry.from === '.package-secrets/smart-reply-prompt.dfp' && entry.to === 'smart-reply-prompt.dfp'));
-assert.match(clientSuiteBuilder, /dist-electron\/smart-reply-prompt-bundle\.js/);
-assert.match(clientSuiteBuilder, /dist-electron\/prompt-bundle-signing\.js/);
+assert.match(clientSuiteBuilder, /dist-electron\/main\.js/);
+assert.doesNotMatch(clientSuiteBuilder, /dist-electron\/smart-reply-prompt-bundle\.js/);
 assert.match(clientSuiteBuilder, /\.package-secrets\/smart-reply-prompt\.dfp/);
 assert.doesNotMatch(promptGeneratorBuilder, /smart-reply-prompt/i);
 assert.match(buildScript, /config', 'smart-reply-prompt\.default\.txt/);
