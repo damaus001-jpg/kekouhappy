@@ -46,9 +46,88 @@ if(!process.versions.electron){
       return text;
     }
     async function send(text,signature){return execute(helpers.buildComposerScript('send',text,true,false,'default','',{platform:'opensms',conversationSignature:signature}));}
+    // Operation counts catch quadratic cache restoration without timing-sensitive thresholds.
+    await fixture(300);
+    const restored=await execute(`(()=>{
+      const box=document.querySelector('#message-box');box.style.overflowAnchor='none';box.scrollTop=box.scrollHeight/2;
+      const anchor=Array.from(box.querySelectorAll('li')).find(row=>row.getBoundingClientRect().bottom>=box.getBoundingClientRect().top);
+      const top=anchor.getBoundingClientRect().top;
+      const query=document.querySelectorAll;let scans=0;
+      document.querySelectorAll=function(selector){if(selector.startsWith('#message-box > ul > li'))scans++;return query.call(this,selector);};
+      try{
+        const entries=Array.from({length:300},(_,i)=>({sourceText:i===299?'Newest incoming message':'English message '+i,translatedText:'缓存译文 '+i}));
+        window.__dfOpenSms.apply({action:'cache',entries});
+        return {scans,count:box.querySelectorAll('.df-chat-translation').length,anchorShift:anchor.getBoundingClientRect().top-top};
+      }finally{document.querySelectorAll=query;}
+    })()`);
+    assert.equal(restored.scans,1,'restoring 300 cached translations must scan messages only once');
+    assert.equal(restored.count,300,'every cached translation must still be restored');
+    assert.ok(Math.abs(restored.anchorShift)<1,'batch restore must preserve the visible message position');
+    const bottomRestore=await execute(`(()=>{
+      const box=document.querySelector('#message-box');box.querySelectorAll('.df-chat-translation').forEach(node=>node.remove());box.scrollTop=box.scrollHeight;
+      window.__dfOpenSms.apply({action:'cache',entries:[]});
+      return {count:box.querySelectorAll('.df-chat-translation').length,bottomGap:box.scrollHeight-box.scrollTop-box.clientHeight};
+    })()`);
+    assert.equal(bottomRestore.count,300);
+    assert.ok(bottomRestore.bottomGap<2,'batch restore must keep a bottom-pinned conversation at the bottom');
+    const settled=await execute(`(()=>{
+      window.messageScanCount=0;window.originalQuerySelectorAll=document.querySelectorAll;
+      document.querySelectorAll=function(selector){if(selector.startsWith('#message-box > ul > li'))window.messageScanCount++;return window.originalQuerySelectorAll.call(this,selector);};
+      window.__dfOpenSms.apply({action:'inject',key:document.querySelector('#m-0').dataset.dfMsgKey,sourceText:'English message 0',translation:'更新后的译文'});
+      return true;
+    })()`);
+    assert.equal(settled,true);
+    await new Promise(r=>setTimeout(r,450));
+    assert.equal(await execute(`(()=>{document.querySelectorAll=window.originalQuerySelectorAll;return window.messageScanCount;})()`),1,'our own translation updates must not schedule another message scan');
+
+    await fixture(5);
+    const areaPerformance=await execute(`(()=>{
+      const original=Intl.DateTimeFormat;const originalParts=original.prototype.formatToParts;let formats=0,parts=0;
+      original.prototype.formatToParts=function(...args){parts++;return originalParts.apply(this,args);};
+      Intl.DateTimeFormat=new Proxy(original,{construct(target,args){formats++;return Reflect.construct(target,args);}});
+      try{
+        const numbers=['12125551212','12135551212','12145551212','13035551212'];
+        const fragment=document.createDocumentFragment();
+        for(let i=0;i<500;i++){
+          const card=document.createElement('div');card.className='chat-item';
+          card.innerHTML='<div><span class="tag-receiver">收信人</span><span class="address-name">'+numbers[i%4]+'</span></div>';fragment.append(card);
+        }
+        document.querySelector('.im-chat').before(fragment);
+        window.__dfOpenSms.apply({action:'bootstrap'});
+        const mutations=new MutationObserver(()=>{});mutations.observe(document.body,{subtree:true,childList:true,attributes:true,characterData:true});
+        const initialFormats=formats,initialParts=parts;
+        for(let i=0;i<5;i++)window.__dfOpenSms.apply({action:'bootstrap'});
+        const hintWrites=mutations.takeRecords().filter(record=>(record.target instanceof Element?record.target:record.target.parentElement)?.closest('.df-opensms-area-hint')).length;mutations.disconnect();
+        return {formats:initialFormats,parts:initialParts,extraFormats:formats-initialFormats,extraParts:parts-initialParts,hintWrites,count:document.querySelectorAll('.df-opensms-area-hint').length};
+      }finally{original.prototype.formatToParts=originalParts;Intl.DateTimeFormat=original;}
+    })()`);
+    assert.ok(areaPerformance.formats<=4,'500 contacts must share formatters by time zone');
+    assert.ok(areaPerformance.parts<=4,'500 contacts must calculate each time-zone offset at most once');
+    assert.equal(areaPerformance.extraFormats,0,'unchanged contacts must reuse time-zone calculations');
+    assert.equal(areaPerformance.extraParts,0,'unchanged contacts must not recompute time-zone offsets');
+    assert.equal(areaPerformance.hintWrites,0,'unchanged contacts must not rewrite hint DOM');
+    assert.equal(areaPerformance.count,502);
+    // The title may carry the complete number while displayed text is abbreviated.
+    await execute(`document.querySelector('.chat-item .address-name').title='12135551212';true`);
+    await new Promise(r=>setTimeout(r,180));
+    assert.match(await execute(`document.querySelector('.chat-item .df-opensms-area-hint').textContent`),/洛杉矶/,'a title-only number change must update the area hint');
+    const seasonalHints=await execute(`(()=>{
+      const RealDate=Date;let now=RealDate.parse('2026-01-15T12:00:00Z');
+      const number=document.querySelector('.chat-item .address-name');number.title='16025551212';
+      window.Date=class extends RealDate{constructor(...args){super(...(args.length?args:[now]));}static now(){return now;}};
+      try{
+        window.__dfOpenSms.apply({action:'bootstrap'});const winter=document.querySelector('.chat-item .df-opensms-area-hint').textContent;
+        now=RealDate.parse('2026-07-15T12:00:00Z');
+        // An ordinary sync must invalidate expired hints even with no DOM changes.
+        window.__dfOpenSms.apply({action:'contact'});return {winter,summer:document.querySelector('.chat-item .df-opensms-area-hint').textContent};
+      }finally{window.Date=RealDate;window.__dfOpenSms.apply({action:'bootstrap'});}
+    })()`);
+    assert.match(seasonalHints.winter,/时差\+1/,'Arizona is one hour ahead of Los Angeles in winter');
+    assert.match(seasonalHints.summer,/时差\+0/,'expired offsets must refresh across daylight-saving changes');
+    console.log('opensms-performance: 300 cached translations / 1 scan, viewport preserved; 500 contacts / <= 4 zone calculations, unchanged hints / 0 writes; seasonal refresh passed');
     await fixture(5);
     await execute(`(()=>{const chat=document.querySelector('.im-chat'),layout=document.createElement('div'),right=document.createElement('div'),toolbar=document.createElement('div');layout.className='main content';right.className='right';toolbar.className='im-top';toolbar.style.height='80px';right.append(toolbar,chat);layout.append(right);document.body.append(layout);document.body.insertAdjacentHTML('beforeend','<div class="ops-bell-root"></div><div class="sound-alert-toggle"></div>');window.foldMutationCount=0;window.foldObserver=new MutationObserver(records=>window.foldMutationCount+=records.length);window.foldObserver.observe(document.body,{childList:true,subtree:true,characterData:true});return true;})()`);
-    await new Promise(r=>setTimeout(r,100));
+    await new Promise(r=>setTimeout(r,200));
     assert.ok(await execute(`document.querySelector('.df-opensms-topbar-fold')`),'top toolbar fold control is installed');
     assert.ok(await execute(`window.foldMutationCount<12`),'top toolbar sync settles without a self-triggering DOM mutation loop');
     await execute(`window.__dfOpenSms.nightMode=false;localStorage.setItem('df-opensms-night-mode-v1','0');document.documentElement.classList.remove('df-opensms-night-mode');window.__dfOpenSms.apply({action:'bootstrap'});true`);

@@ -2,7 +2,7 @@
 export function openSmsRuntime(command: any) {
   const w = window as any;
   if (!['opensms.cc', 'www.opensms.cc'].includes(location.hostname)) return false;
-  const version = '2026-10-18-opensms-v9';
+  const version = '2026-10-24-opensms-v10';
   const startupGuardMarker = '2026-10-16-opensms-v1';
   if (w.__dfOpenSms?.version !== version) {
     w.__dfOpenSms?.dispose();
@@ -100,30 +100,48 @@ export function openSmsRuntime(command: any) {
       '983':['丹佛','科罗拉多州','America/Denver'],
       '986':['博伊西','爱达荷州','America/Boise']
     };
-    const timezoneOffsetMinutes=(zone:string,at:Date)=>{const parts=new Intl.DateTimeFormat('en-US',{timeZone:zone,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).formatToParts(at);const values:any={};for(const part of parts)if(part.type!=='literal')values[part.type]=Number(part.value);return Math.round((Date.UTC(values.year,values.month-1,values.day,values.hour,values.minute,values.second)-at.getTime())/60000);};
+    const timezoneFormatters=new Map<string,Intl.DateTimeFormat>();
+    const timezoneOffsets=new Map<string,number>();
+    let timezoneMinute=-1;
+    const timezoneOffsetMinutes=(zone:string,at:Date)=>{
+      const minute=Math.floor(at.getTime()/60000);
+      if(minute!==timezoneMinute){timezoneMinute=minute;timezoneOffsets.clear();}
+      const cached=timezoneOffsets.get(zone);if(cached!==undefined)return cached;
+      let formatter=timezoneFormatters.get(zone);
+      if(!formatter){formatter=new Intl.DateTimeFormat('en-US',{timeZone:zone,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'});timezoneFormatters.set(zone,formatter);}
+      const values:any={};for(const part of formatter.formatToParts(at))if(part.type!=='literal')values[part.type]=Number(part.value);
+      const offset=Math.round((Date.UTC(values.year,values.month-1,values.day,values.hour,values.minute,values.second)-at.getTime())/60000);
+      timezoneOffsets.set(zone,offset);return offset;
+    };
+    const areaHintStates=new WeakMap<HTMLElement,{areaCode:string,minute:number,hint:HTMLElement}>();
+    let areaHintMinute=-1;
     const phoneAreaCode=(text:string)=>{const digits=String(text||'').replace(/\D/g,'');if(digits.length===11&&digits[0]==='1')return digits.slice(1,4);if(digits.length===10)return digits.slice(0,3);return '';};
     const renderAreaCodeHint=()=>{
+      const now=new Date();const minute=Math.floor(now.getTime()/60000);areaHintMinute=minute;
       const rows=Array.from(document.querySelectorAll<HTMLElement>('.chat-item .tag-receiver')).map(tag=>({tag,card:tag.closest<HTMLElement>('.chat-item'),number:tag.parentElement?.querySelector<HTMLElement>('.address-name')||null}));
       for(const {card,number} of rows){
         if(!card||!number)continue;
         const row=number.parentElement;if(!row)continue;
-        const raw=number.getAttribute('title')||number.textContent||'';const info=areaCodeInfo[phoneAreaCode(raw)];
+        const raw=number.getAttribute('title')||number.textContent||'';const areaCode=phoneAreaCode(raw);const info=areaCodeInfo[areaCode];
         let hintNode=card.querySelector<HTMLElement>(':scope > .df-opensms-area-hint');
-        if(!info){hintNode?.remove();continue;}
+        if(!info){hintNode?.remove();areaHintStates.delete(card);continue;}
+        const previous=areaHintStates.get(card);
+        if(previous?.areaCode===areaCode&&previous.minute===minute&&previous.hint===hintNode&&row.nextElementSibling===hintNode)continue;
         if(!hintNode){
           hintNode=document.createElement('div');hintNode.className='df-opensms-area-hint';
           const label=document.createElement('span');label.className='df-opensms-area-hint-text';
           const tail=document.createElement('span');tail.setAttribute('aria-hidden','true');hintNode.append(label,tail);
         }
-        hintNode.style.cssText='position:relative;display:block;width:fit-content;max-width:calc(100% - 54px);min-width:0;box-sizing:border-box;margin:4px 0 5px 54px;padding:4px 9px;border:1px solid #7dbb91;border-radius:11px;background:#f0fff4;color:#245b37;font:600 11px/1.4 sans-serif;box-shadow:0 2px 7px #164a2820;white-space:normal;overflow-wrap:anywhere;word-break:normal;text-align:center';
+        if(!previous||previous.hint!==hintNode)hintNode.style.cssText='position:relative;display:block;width:fit-content;max-width:calc(100% - 54px);min-width:0;box-sizing:border-box;margin:4px 0 5px 54px;padding:4px 9px;border:1px solid #7dbb91;border-radius:11px;background:#f0fff4;color:#245b37;font:600 11px/1.4 sans-serif;box-shadow:0 2px 7px #164a2820;white-space:normal;overflow-wrap:anywhere;word-break:normal;text-align:center';
         const tailNode=hintNode.querySelector<HTMLElement>('[aria-hidden="true"]');
-        if(tailNode)tailNode.style.cssText='position:absolute;left:12px;top:-5px;width:8px;height:8px;background:#f0fff4;border-left:1px solid #7dbb91;border-top:1px solid #7dbb91;transform:rotate(45deg)';
+        if(tailNode&&(!previous||previous.hint!==hintNode))tailNode.style.cssText='position:absolute;left:12px;top:-5px;width:8px;height:8px;background:#f0fff4;border-left:1px solid #7dbb91;border-top:1px solid #7dbb91;transform:rotate(45deg)';
         if(hintNode.parentElement!==card||row.nextElementSibling!==hintNode)row.insertAdjacentElement('afterend',hintNode);
         const label=hintNode.querySelector<HTMLElement>('.df-opensms-area-hint-text')!;
-        const [city,stateName,zone]=info;const now=new Date();const delta=Math.round((timezoneOffsetMinutes(zone,now)-timezoneOffsetMinutes('America/Los_Angeles',now))/60);
+        const [city,stateName,zone]=info;const delta=Math.round((timezoneOffsetMinutes(zone,now)-timezoneOffsetMinutes('America/Los_Angeles',now))/60);
         const text=`${city}-${stateName}-时差${delta>=0?'+':''}${delta}`;if(label.textContent!==text)label.textContent=text;
         const sameTimeAsLosAngeles=delta===0;label.style.setProperty('color',sameTimeAsLosAngeles?'#dc2626':'#245b37','important');label.style.setProperty('font-weight',sameTimeAsLosAngeles?'700':'600','important');
         const hintTitle='按号码区号推测的代表区域；号码携转后实际所在地可能不同';if(hintNode.title!==hintTitle)hintNode.title=hintTitle;if(hintNode.getAttribute('aria-label')!==text)hintNode.setAttribute('aria-label',text);
+        areaHintStates.set(card,{areaCode,minute,hint:hintNode});
       }
     };
     const syncTopbarFold=()=>{
@@ -145,7 +163,7 @@ export function openSmsRuntime(command: any) {
       if(button.dataset.dfOpensmsFoldHandler!==version){button.onclick=()=>{state.topbarFolded=!state.topbarFolded;try{localStorage.setItem('df-opensms-topbar-folded-v1',state.topbarFolded?'1':'0');}catch{};syncTopbarFold();};button.dataset.dfOpensmsFoldHandler=version;}
       const toolbar=right.querySelector<HTMLElement>(':scope > .im-top');
       if(toolbar&&toolbar.id!=='opensms-top-toolbar')toolbar.id='opensms-top-toolbar';
-      right.classList.toggle('df-opensms-topbar-is-folded',Boolean(state.topbarFolded));
+      if(right.classList.contains('df-opensms-topbar-is-folded')!==Boolean(state.topbarFolded))right.classList.toggle('df-opensms-topbar-is-folded',Boolean(state.topbarFolded));
       document.documentElement.classList.toggle('df-opensms-topbar-folded',Boolean(state.topbarFolded));
       const label=state.topbarFolded?'展开顶部栏':'收起顶部栏';if(button.textContent!==label)button.textContent=label;
       const expanded=state.topbarFolded?'false':'true';if(button.getAttribute('aria-expanded')!==expanded)button.setAttribute('aria-expanded',expanded);
@@ -210,7 +228,7 @@ export function openSmsRuntime(command: any) {
     };
     const sync = (refreshAreaHints=false) => {
       const id=contact().id;const conversationChanged=id!==state.signature;if(conversationChanged){state.signature=id;reset();w.__dfConversationSignature=id;emit('conversation-change',id);hint('');}
-      if(conversationChanged||refreshAreaHints)renderAreaCodeHint();
+      if(conversationChanged||refreshAreaHints||areaHintMinute!==Math.floor(Date.now()/60000))renderAreaCodeHint();
       syncTopbarFold();
       syncNightMode();
       // The preload guard intentionally blocks Enter until this exact marker
@@ -234,31 +252,42 @@ export function openSmsRuntime(command: any) {
         return [{key,text,timestamp,dayKey:dayKey(timestamp),contactId:current.id,contactKey:current.id,contactIdType:'platform',contactTitle:current.title,direction:row.classList.contains('im-chat-mine')?'outgoing':'incoming',messagePart:'body',rectTop:rect.top,rectBottom:rect.bottom,viewportHeight:innerHeight,scanBand:rect.bottom<0?'above':rect.top>innerHeight?'below':'visible',nearConversationEnd:box.scrollHeight-box.scrollTop-box.clientHeight<180,nearConversationStart:box.scrollTop<180,row,body}];
       });
     };
-    const paint = (entry:any) => {
-      const item=rows().find(r=>r.key===entry.key&&(!entry.sourceText||r.text===normalize(entry.sourceText)));if(!item)return false;
-      const box=document.getElementById('message-box')!;const atBottom=box.scrollHeight-box.scrollTop-box.clientHeight<120;const beforeHeight=box.scrollHeight,beforeTop=box.scrollTop;const above=item.row.getBoundingClientRect().bottom<box.getBoundingClientRect().top;
+    const paint = (entry:any,knownItem?:ReturnType<typeof rows>[number],preserveScroll=true) => {
+      const item=knownItem||rows().find(r=>r.key===entry.key&&(!entry.sourceText||r.text===normalize(entry.sourceText)));if(!item||item.key!==entry.key||(entry.sourceText&&item.text!==normalize(entry.sourceText)))return false;
+      const box=document.getElementById('message-box')!;
+      const atBottom=preserveScroll&&box.scrollHeight-box.scrollTop-box.clientHeight<120;
+      const beforeHeight=preserveScroll?box.scrollHeight:0,beforeTop=preserveScroll?box.scrollTop:0;
+      const above=preserveScroll&&item.row.getBoundingClientRect().bottom<box.getBoundingClientRect().top;
       let translation=item.body.parentElement!.querySelector<HTMLElement>(':scope > .df-chat-translation');
       if(!translation){translation=document.createElement('div');translation.className='df-chat-translation';translation.style.cssText=`display:block;white-space:pre-wrap;font-size:13px;line-height:1.6;margin-top:7px;padding-top:6px;border-top:1px solid currentColor;color:${item.direction==='outgoing'?'#fff':'#247944'};overflow-wrap:anywhere`;item.body.after(translation);}
-      translation.textContent=entry.translation;translation.dataset.dfTranslationSource=item.text;
+      if(translation.textContent!==entry.translation)translation.textContent=entry.translation;
+      translation.dataset.dfTranslationSource=item.text;
       if(atBottom)box.scrollTop=box.scrollHeight;else if(above)box.scrollTop=beforeTop+box.scrollHeight-beforeHeight;
       return true;
     };
     const refresh = (key:string,processing:boolean) => {const item=rows().find(r=>r.key===key);const button=item?.row.querySelector<HTMLButtonElement>('.df-chat-refresh-translation');if(button){button.disabled=processing;button.textContent=processing?'…':'↻';}return !!button;};
     const decorate = () => {
       const items=rows();
+      // Reuse the scan for every cached translation, then restore the viewport once.
+      const box=document.getElementById('message-box');
+      const atBottom=!!box&&box.scrollHeight-box.scrollTop-box.clientHeight<120;
+      const boxTop=box?.getBoundingClientRect().top||0;
+      const anchor=items.find(item=>item.rectBottom>=boxTop)?.row;
+      const anchorTop=anchor?.getBoundingClientRect().top||0;
+      let layoutChanged=false;
       for(const item of items){
-        const old=item.row.querySelector<HTMLElement>('.df-chat-translation');if(old&&old.dataset.dfTranslationSource!==item.text)old.remove();
-        const oldRefresh=item.row.querySelector<HTMLElement>('.df-chat-refresh-translation');if(oldRefresh&&oldRefresh.dataset.dfRefreshKey!==item.key)oldRefresh.remove();
+        const old=item.row.querySelector<HTMLElement>('.df-chat-translation');if(old&&old.dataset.dfTranslationSource!==item.text){old.remove();layoutChanged=true;}
+        const oldRefresh=item.row.querySelector<HTMLElement>('.df-chat-refresh-translation');if(oldRefresh&&oldRefresh.dataset.dfRefreshKey!==item.key){oldRefresh.remove();layoutChanged=true;}
         const cached=state.cache.get(hash(item.text));
-        if(cached?.sourceText===item.text&&!item.row.querySelector('.df-chat-translation'))paint({key:item.key,translation:cached.translatedText,sourceText:item.text});
+        if(cached?.sourceText===item.text&&!item.row.querySelector('.df-chat-translation')){paint({key:item.key,translation:cached.translatedText,sourceText:item.text},item,false);layoutChanged=true;}
         if(!/[A-Za-z]{2,}/.test(item.text)||/[\u3400-\u9fff]/.test(item.text))continue;
         if(!item.row.querySelector('.df-chat-refresh-translation')){
           const button=document.createElement('button');button.type='button';button.className='df-chat-refresh-translation';button.dataset.dfRefreshKey=item.key;button.textContent='↻';button.title='刷新翻译';button.style.cssText='font:12px sans-serif;background:transparent;border:0;cursor:pointer;color:inherit';
-          button.onclick=()=>{if(contact().id!==item.contactId||source(item.body)!==item.text)return;button.disabled=true;emit('bubble-refresh',JSON.stringify({key:item.key,text:item.text,direction:item.direction,messagePart:'body'}));};item.body.parentElement!.appendChild(button);
+          button.onclick=()=>{if(contact().id!==item.contactId||source(item.body)!==item.text)return;button.disabled=true;emit('bubble-refresh',JSON.stringify({key:item.key,text:item.text,direction:item.direction,messagePart:'body'}));};item.body.parentElement!.appendChild(button);layoutChanged=true;
         }
       }
       const eligible=items.filter(i=>i.dayKey===todayKey()&&i.direction==='incoming'&&/[A-Za-z]{2,}/.test(i.text)&&!/[\u3400-\u9fff]/.test(i.text)).slice(-3);
-      document.querySelectorAll<HTMLElement>('#message-box .df-smart-reply-host').forEach(n=>{if(!eligible.some(i=>i.key===n.dataset.smsKey))n.remove();});
+      document.querySelectorAll<HTMLElement>('#message-box .df-smart-reply-host').forEach(n=>{if(!eligible.some(i=>i.key===n.dataset.smsKey)){n.remove();layoutChanged=true;}});
       for(const item of eligible){
         if(item.row.querySelector('.df-smart-reply-host'))continue;
         const button=document.createElement('button');button.type='button';button.className='df-smart-reply-host';button.dataset.smsKey=item.key;button.textContent='去GPT';button.style.cssText='display:block;margin:5px 0;font:12px sans-serif;border:1px solid #80c79a;border-radius:6px;padding:3px 8px;background:#effbf3;color:#197745;cursor:pointer';
@@ -272,7 +301,11 @@ export function openSmsRuntime(command: any) {
           const areaCode=phoneAreaCode(rawNumber);const area=areaCode?areaCodeInfo[areaCode]:undefined;
           const openSmsAreaContext=area?{areaCode,state:area[1],city:area[0]}:undefined;
           if(messages.length&&new TextEncoder().encode(JSON.stringify(messages)).length<=80_000)emit('smart-reply-request',JSON.stringify({latestMessageKey:`smart-${hash(item.key)}-${hash(item.text)}`,messages,...(openSmsAreaContext?{openSmsAreaContext}:{})}),`sms-gpt-${Date.now().toString(36)}`);
-        };item.body.parentElement!.appendChild(button);
+        };item.body.parentElement!.appendChild(button);layoutChanged=true;
+      }
+      if(box&&layoutChanged){
+        if(atBottom)box.scrollTop=box.scrollHeight;
+        else if(anchor?.isConnected)box.scrollTop+=anchor.getBoundingClientRect().top-anchorTop;
       }
       return items;
     };
@@ -406,10 +439,13 @@ export function openSmsRuntime(command: any) {
       let needsSync=false;let needsDecorate=false;
       for(const record of records){
         const target=record.target instanceof Element?record.target:record.target.parentElement;
+        const ownUi='.df-chat-translation,.df-chat-refresh-translation,.df-smart-reply-host,.df-opensms-area-hint';
+        if(target?.closest(ownUi))continue;
+        if(record.type==='childList'&&[...Array.from(record.addedNodes),...Array.from(record.removedNodes)].every(node=>node instanceof Element&&node.matches(ownUi)))continue;
         if(target?.closest('#message-box'))needsDecorate=true;else needsSync=true;
       }
       if(needsSync)scheduleSync();if(needsDecorate)scheduleDecorate();
-    });observer.observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['class','data-id']});
+    });observer.observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['class','data-id','title']});
     state.dispose=()=>{observer.disconnect();clearInterval(timer);if(syncTimer!==undefined)clearTimeout(syncTimer);if(decorateTimer!==undefined)clearTimeout(decorateTimer);document.removeEventListener('keydown',onKey,true);document.removeEventListener('click',onPointer,true);document.removeEventListener('input',onInput,true);delete document.documentElement.dataset.dfOpenSmsGuard;};
     state.editor=editor;w.__dfOpenSms=state;
   }

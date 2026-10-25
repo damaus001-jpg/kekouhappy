@@ -29,3 +29,9 @@ reference-sources/*.zip
 /近七天10人的接口消耗.png
 /白底logo-透明.png
 /白底logo.jpg
+
+# Local account credentials and chat-derived reports must never enter source backups.
+/打新增10账号统计/
+/打新增*统计*.txt
+/打新增账号密码.txt
+/打新增高频首条消息*.txt
