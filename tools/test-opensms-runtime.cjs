@@ -13,7 +13,8 @@ if(!process.versions.electron){
   app.setPath('userData',path.join(root,'.tmp','opensms-runtime-test'));
   const loadTs=(file,dependencies={})=>{const code=ts.transpileModule(fs.readFileSync(path.join(root,file),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;return new Function('exports','require',code+';return exports;')({},name=>{if(dependencies[name])return dependencies[name];throw new Error('Unexpected dependency '+name);});};
   app.whenReady().then(async()=>{
-    const {buildOpenSmsScript}=loadTs('src/opensms-runtime.ts');
+    const materialIdentity=await import('../dist-electron/assistant-material-identity.js');
+    const {buildOpenSmsScript}=loadTs('src/opensms-runtime.ts',{'../electron/assistant-material-identity':materialIdentity});
     const shared=await import('../dist-electron/shared.js');
     const {buildGptClipboardText}=await import('../dist-electron/gpt-handoff.js');
     const source=fs.readFileSync(path.join(root,'src/App.vue'),'utf8');
@@ -272,7 +273,7 @@ if(!process.versions.electron){
     const module=emptyAssistantLibrary().modules.quotes;module.entries=[{id:'sms-image',title:'Photo',text:'',date:'',timeZone:'America/Los_Angeles',status:'planned',tags:[],media:[]}];await library.saveAssistantModule('quotes',module);
     dialog.showOpenDialog=async()=>({canceled:false,filePaths:[path.join(root,'src/assets/xiaozhi-assistant-transparent.png')]});
     const media=(await library.attachAssistantMedia('quotes','sms-image')).modules.quotes.entries[0].media[0];
-    const {buildAssistantRuntimeScript}=loadTs('src/assistant-material-runtime.ts');
+    const {buildAssistantRuntimeScript}=loadTs('src/assistant-material-runtime.ts',{'../electron/assistant-material-identity':materialIdentity});
     const material=c=>execute(buildAssistantRuntimeScript(c));
     const colors={'--text':'#eee','--muted':'#aaa','--muted-strong':'#ccc','--accent':'#dca749','--accent-bright':'#ffd68f','--bg':'#111','--bg-soft':'#191919','--panel-strong':'#222','--panel-muted':'#292929','--line':'#555','--line-strong':'#666'};
     const materialConfig={platform:'opensms',catalog:{persona:[],schedule:[],quotes:[]},colors,icon:'',usages:[],enabled:true,showButton:false};
@@ -282,15 +283,44 @@ if(!process.versions.electron){
     await material({command:'confirm',pending:staged,contactId:materialScope});
     const dialogAction=selector=>execute(`document.querySelector('#df-material-root').shadowRoot.querySelector(${JSON.stringify(selector)}).click()`);
     await dialogAction('.dialog .primary');let inserted=await material({command:'confirmation-status',token:staged.token});assert.equal(inserted.status,'inserted');assert.equal(await cmd({action:'text'}),'Card material');
-    const textUsage=await store.recordAssistantUse({profileId,platform:'opensms',token:staged.token,contactId:materialScope,contactTitle:'Contact A',actualText:inserted.actualText});
+    const textUsage=await store.recordAssistantUse({profileId,platform:'opensms',token:staged.token,contactId:materialScope,contactTitle:'Contact A',phone:inserted.phone,actualText:inserted.actualText});
+    assert.equal(textUsage.phone,'+14234631871');
     staged=await store.stageAssistantMaterial({id:'first-card-photo',type:'image',mediaId:media.id});
     await execute(`document.querySelector('#messageTextArea').addEventListener('paste',event=>{if(!event.clipboardData?.files.length)return;event.preventDefault();const bar=document.createElement('div');bar.className='mms-preview-bar';const image=document.createElement('img');image.style.cssText='width:80px;height:80px';image.src=${JSON.stringify(staged.imageData)};bar.appendChild(image);const field=document.createElement('span');field.className='mms-title-input';field.appendChild(document.createElement('input'));bar.appendChild(field);document.querySelector('.im-chat-footer').before(bar);});true`);
     await material({command:'confirm',pending:staged,contactId:materialScope});await dialogAction('.dialog .primary');await new Promise(r=>setTimeout(r,200));inserted=await material({command:'confirmation-status',token:staged.token});assert.equal(inserted.status,'inserted');
-    const imageUsage=await store.recordAssistantUse({profileId,platform:'opensms',token:staged.token,contactId:materialScope,contactTitle:'Contact A'});
+    const imageUsage=await store.recordAssistantUse({profileId,platform:'opensms',token:staged.token,contactId:materialScope,contactTitle:'Contact A',phone:inserted.phone});
     materialConfig.usages=[textUsage,imageUsage];await material({command:'install',config:materialConfig});
     staged=await store.stageAssistantMaterial({id:'second-card-same-photo',type:'image',mediaId:media.id});assert.equal(staged.id,imageUsage.materialId);
     await material({command:'confirm',pending:staged,contactId:materialScope});assert.equal(await execute(`document.querySelector('#df-material-root').shadowRoot.querySelector('h2').textContent`),'此素材在当前联系人聊天里已使用');await dialogAction('.dialog .actions button');
     staged=await store.stageAssistantMaterial({id:'caption-material',type:'text',text:'Material MMS caption'});await material({command:'confirm',pending:staged,contactId:materialScope});await dialogAction('.dialog .primary');inserted=await material({command:'confirmation-status',token:staged.token});assert.equal(inserted.status,'inserted');assert.equal(await cmd({action:'text'}),'Material MMS caption');assert.equal((await execute('window.nativeSends')).length,0,'material insertion never sends a message');
+    // The receiver number, rather than the account, row ID, or display name, owns usage.
+    for(const number of ['4234631871','+1 (423) 463-1871','0014234631871']){
+      await execute(`(()=>{document.querySelector('.left-bar .avatar-name').textContent='ACCOUNT_B';document.querySelector('.chat-item.active').dataset.id='recreated-chat';const number=document.querySelector('.chat-item.active .address-name');number.removeAttribute('title');number.textContent=${JSON.stringify(number)};document.querySelector('.info-value').textContent='Renamed contact';return true;})()`);
+      const current=await target();assert.notEqual(current.id,materialScope);assert.equal(current.phone,textUsage.phone);
+      const usages=await store.readAssistantUsage('another-sms-profile',current);
+      assert.ok(usages.some(u=>materialIdentity.assistantUsageMatchesContact(u,'opensms',current)&&u.materialId===textUsage.materialId),'text is shared across accounts and recreated chats');
+      materialConfig.usages=usages;await material({command:'install',config:materialConfig});
+      staged=await store.stageAssistantMaterial({id:'repeat-photo',type:'image',mediaId:media.id});
+      await material({command:'confirm',pending:staged,contactId:current.id});
+      assert.equal(await execute(`document.querySelector('#df-material-root').shadowRoot.querySelector('h2').textContent`),'此素材在当前联系人聊天里已使用');await dialogAction('.dialog .actions button');
+    }
+    await store.removeAssistantUsageForProfile(profileId);
+    assert.ok((await store.readAssistantUsage('new-profile-after-removal')).some(u=>u.materialId===textUsage.materialId&&u.phone===textUsage.phone),'removing the original account retains number history');
+    await execute(`document.querySelector('.chat-item.active .address-name').textContent='14235551212';true`);
+    assert.equal(materialIdentity.assistantUsageMatchesContact(textUsage,'opensms',await target()),false,'same display name with a different number is unused');
+    await execute(`document.querySelector('.chat-item.active .address-name').textContent='Unknown';true`);
+    await material({command:'confirm',pending:staged,contactId:(await target()).id});
+    assert.equal((await material({command:'confirmation-status',token:staged.token})).status,'cancelled','missing receiver number prevents untracked use');
+    await assert.rejects(store.recordAssistantUse({profileId,platform:'opensms',token:staged.token,contactId:materialScope,contactTitle:'Contact A'}),/手机号/);
+
+    const usageFile=path.join(app.getPath('userData'),'assistant-library','usage.enc');
+    const {safeStorage}=require('electron');
+    const usageData=JSON.parse(safeStorage.decryptString(fs.readFileSync(usageFile)));
+    const legacy={...textUsage,profileId:'legacy-sms-profile',contactId:'sms:OLD_ACCOUNT:old-row',materialId:`legacy-material-${profileId}`,phone:undefined};
+    usageData.records.push(legacy);fs.writeFileSync(usageFile,safeStorage.encryptString(JSON.stringify(usageData)));
+    assert.equal((await store.readAssistantUsage('other-profile')).some(u=>u.materialId===legacy.materialId),false,'unmapped legacy sessions are not guessed');
+    await store.readAssistantUsage('legacy-sms-profile',{id:legacy.contactId,title:'A remark',phone:'4234631871'});
+    assert.ok((await store.readAssistantUsage('other-profile')).some(u=>u.materialId===legacy.materialId&&u.phone===textUsage.phone),'opening an old session migrates its number association');
     await fixture();await cmd({action:'enabled',enabled:false});await type('锁屏时禁止发送');await enter();assert.equal((await events()).filter(e=>e.action==='translate').length,0);assert.equal((await execute('window.nativeSends')).length,0);
     // Execute the actual startup preload with an IPC stub; no real SMS traffic.
     await fixture();await execute(`window.__dfOpenSms.dispose();delete window.__dfOpenSms`);

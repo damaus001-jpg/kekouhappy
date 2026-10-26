@@ -1,8 +1,9 @@
+import { normalizeAssistantPhone } from '../electron/assistant-material-identity';
 // Serialized into the isolated platform page. No backend access or site credentials.
-export function openSmsRuntime(command: any) {
+export function openSmsRuntime(command: any, normalizePhone: typeof normalizeAssistantPhone) {
   const w = window as any;
   if (!['opensms.cc', 'www.opensms.cc'].includes(location.hostname)) return false;
-  const version = '2026-10-24-opensms-v10';
+  const version = '2026-10-25-opensms-v11';
   const startupGuardMarker = '2026-10-16-opensms-v1';
   if (w.__dfOpenSms?.version !== version) {
     w.__dfOpenSms?.dispose();
@@ -195,7 +196,9 @@ export function openSmsRuntime(command: any) {
       const open=location.hash.startsWith('#/index/chat')&&visible(document.querySelector('.im-chat #message-box'));
       const title=normalize(document.querySelector('.im-chat-top .info-other .info-value')?.textContent || '当前联系人').slice(0,200);
       const signature=`sms:${encodeURIComponent(account)}:${encodeURIComponent(id)}`;
-      return {id:open&&account&&/^[\w.-]{1,128}$/.test(id)&&signature.length<=240?signature:'',title};
+      const number=selected.length===1?selected[0].querySelector('.tag-receiver')?.parentElement?.querySelector('.address-name'):null;
+      const phone=normalizePhone(number?.getAttribute('title')||number?.textContent||'');
+      return {id:open&&account&&/^[\w.-]{1,128}$/.test(id)&&signature.length<=240?signature:'',title,phone:open?phone:''};
     };
     const editor = () => {
       const caption=document.querySelector<HTMLElement>('.im-chat .mms-preview-bar .mms-title-input input');
@@ -451,4 +454,4 @@ export function openSmsRuntime(command: any) {
   }
   return w.__dfOpenSms.apply(command);
 }
-export function buildOpenSmsScript(command:any) {return `(${openSmsRuntime.toString()})(${JSON.stringify(command)})`;}
+export function buildOpenSmsScript(command:any) {return `(${openSmsRuntime.toString()})(${JSON.stringify(command)},${normalizeAssistantPhone.toString()})`;}

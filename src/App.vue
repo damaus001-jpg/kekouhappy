@@ -5,7 +5,8 @@ import AssistantLibraryPanel from './components/CustomAssistantPanel.vue';
 import { buildAssistantCatalog } from './assistant-material-catalog';
 import { buildAssistantRuntimeScript } from './assistant-material-runtime';
 import type { AssistantRuntimeSnapshot } from './assistant-material-runtime';
-import type { AssistantCatalog, AssistantMaterial, AssistantUsage, AssistantStagedMaterial } from '../electron/assistant-material-types';
+import type { AssistantCatalog, AssistantContact, AssistantMaterial, AssistantUsage, AssistantStagedMaterial } from '../electron/assistant-material-types';
+import { assistantUsageMatchesContact } from '../electron/assistant-material-identity';
 import assistantFloatIcon from './assets/xiaozhi-assistant-transparent.png';
 import { buildConversationExportScript,mergeConversationExportRows,unwrapConversationExportResult } from './conversation-export-runtime';
 import { buildSignalGptButtonScript } from './gpt-handoff-runtime';
@@ -9511,26 +9512,19 @@ function scanSignalVoiceMessages(profileId: string): Promise<void> {
     try {
       voiceCandidates = (await runtime.execute<MessageCandidate[]>(buildVoiceMessageScanScript('signal'))) ?? [];
     } catch (error) {
-      setVoiceTranslationStatus(profileId, runtimeFailureStatus(error, 'Signal 语音扫描失败：', 'Signal 语音扫描失败，请稍后重试'));
+      // Background discovery retries on the next scan without replacing user action status.
+      diagnosticEvent('speech:scan-failed', { profileId, platform: 'signal', error: String(error) });
       return;
     }
     if (!voiceCandidates.length) {
       updateVoiceCandidates(profileId, []);
-      const previousStatus = voiceTranslationStatus.value[profileId] || '';
-      if (!previousStatus.includes('失败') && !previousStatus.includes('已保存') && !previousStatus.includes('译文已显示')) {
-        setVoiceTranslationStatus(profileId, '当前 Signal 会话未检测到可识别的可见语音条');
-      }
       return;
     }
     await restoreSignalVoiceTranscripts(profile, voiceCandidates, runtime);
     updateVoiceCandidates(profileId, voiceCandidates);
     diagnosticEvent('speech:scan', { profileId, platform: 'signal', candidates: voiceCandidates.length });
-    const availableCount = voiceCandidatesByProfile.value[profileId]?.length || 0;
-    if (availableCount) {
-      setVoiceTranslationStatus(profileId, `Signal 检测到 ${availableCount} 条语音，可在对应气泡下点击“翻译”`);
-    }
   })().catch((error) => {
-    setVoiceTranslationStatus(profileId, runtimeFailureStatus(error, 'Signal 语音处理失败：', 'Signal 语音处理失败，请稍后重试'));
+    diagnosticEvent('speech:scan-processing-failed', { profileId, platform: 'signal', error: String(error) });
   }).finally(() => {
     if (signalVoiceScansInFlight.get(profileId) === scan) signalVoiceScansInFlight.delete(profileId);
   });
@@ -10049,13 +10043,13 @@ async function exportCurrentConversation(mode:ConversationExportMode){
 function cancelConversationExport(){conversationExportCancelled=true;conversationExportStatus.value='正在取消导出…';}
 watch([activeProfileId,lockScreenVisible,activePanel],()=>{if(conversationExportBusy.value)cancelConversationExport();});
 
-const assistantContacts=ref<Record<string,{id:string;title:string}>>({});
+const assistantContacts=ref<Record<string,AssistantContact>>({});
 const assistantUsages=ref<Record<string,AssistantUsage[]>>({});
 const assistantCopyBusy=ref(false);
 const assistantCopyStatus=ref('');
 const assistantUsedIds=computed(()=>{
-  const profile=activeProfileId.value;if(!profile)return [];const contact=assistantContacts.value[profile]?.id;
-  return (assistantUsages.value[profile]||[]).filter(u=>u.contactId===contact&&u.confirmation==='inserted').map(u=>u.materialId);
+  const profile=profiles.value.find(p=>p.id===activeProfileId.value);if(!profile)return [];const contact=assistantContacts.value[profile.id];if(!contact)return [];
+  return (assistantUsages.value[profile.id]||[]).filter(u=>assistantUsageMatchesContact(u,appForPlatform(profile.platform),contact)).map(u=>u.materialId);
 });
 let assistantCatalogPromise:Promise<AssistantCatalog>|null=null;
 let assistantCatalogAt=0;
@@ -10086,7 +10080,9 @@ async function installAssistantMaterialRuntime(profile:ChatProfile){
   const enabled=signedIn.value&&!lockScreenVisible.value&&!hasBlockingModal.value&&activePanel.value==='session'&&activeProfileId.value===profile.id;
   if(profile.platform==='opensms')await executeProfileScript(profile.id,buildOpenSmsScript({action:'enabled',enabled}));
   const catalog=await readAssistantCatalog();
-  const usages=await window.chatTranslator.getAssistantUsage(profile.id);assistantUsages.value[profile.id]=usages;
+  const contact=profile.platform==='opensms'?await executeProfileScript<AssistantContact>(profile.id,buildOpenSmsScript({action:'contact'})):undefined;
+  const usages=await window.chatTranslator.getAssistantUsage(profile.id,contact);assistantUsages.value[profile.id]=usages;
+  if(contact)assistantContacts.value[profile.id]=contact;
   const themeNode=document.querySelector('.workspace-page')||document.querySelector('.app-page')||document.documentElement;
   const css=getComputedStyle(themeNode),colors:Record<string,string>={};
   for(const key of ['--text','--muted','--muted-strong','--accent','--accent-bright','--bg','--bg-soft','--panel-strong','--panel-muted','--line','--line-strong'])colors[key]=css.getPropertyValue(key).trim();
@@ -10103,8 +10099,9 @@ async function copyAssistantMaterial(material:AssistantMaterial,cardTitle=''){
     const known=[...catalog.schedule,...catalog.quotes].flatMap(c=>c.materials).find(m=>m.id===material.id);
     if(!known)throw new Error('素材已变更，请保存并重新展开卡片');
     await installAssistantMaterialRuntime(profile);
-    const contact=await executeProfileScript<{id:string;title:string}>(profile.id,buildAssistantRuntimeScript({command:'contact'}));
+    const contact=await executeProfileScript<AssistantContact>(profile.id,buildAssistantRuntimeScript({command:'contact'}));
     if(!contact?.id)throw new Error('无法识别当前联系人，请先打开一个会话');
+    if(profile.platform==='opensms'&&!contact.phone)throw new Error('无法识别对方手机号，请先打开号码完整的会话');
     if(!signedIn.value||activeProfileId.value!==profile.id||lockScreenVisible.value||hasBlockingModal.value||activePanel.value!=='session')throw new Error('当前会话已变化，请重新操作');
     const pending=await window.chatTranslator.stageAssistantMaterial(known);
     if(pending.type==='image'&&pending.mediaId)await transferAssistantImage(profile.id,pending.mediaId,pending.imageData||'');
@@ -10119,9 +10116,9 @@ async function copyAssistantMaterial(material:AssistantMaterial,cardTitle=''){
     }
     if(confirmed?.status!=='inserted'){assistantCopyStatus.value='已取消，未记录使用';return;}
     inserted=true;
-    const current=await executeProfileScript<{id:string;title:string}>(profile.id,buildAssistantRuntimeScript({command:'contact'}));
-    if(!signedIn.value||lockScreenVisible.value||hasBlockingModal.value||activePanel.value!=='session'||activeProfileId.value!==profile.id||current?.id!==contact.id||confirmed.contactId!==contact.id)throw new Error('粘贴期间会话已变化，请检查草稿');
-    const usage=await window.chatTranslator.recordAssistantUse({profileId:profile.id,platform:appForPlatform(profile.platform),token:pending.token,contactId:contact.id,contactTitle:contact.title||'当前联系人',...(confirmed.actualText!==undefined?{actualText:confirmed.actualText}:{})});
+    const current=await executeProfileScript<AssistantContact>(profile.id,buildAssistantRuntimeScript({command:'contact'}));
+    if(!signedIn.value||lockScreenVisible.value||hasBlockingModal.value||activePanel.value!=='session'||activeProfileId.value!==profile.id||current?.id!==contact.id||current.phone!==contact.phone||confirmed.contactId!==contact.id)throw new Error('粘贴期间会话已变化，请检查草稿');
+    const usage=await window.chatTranslator.recordAssistantUse({profileId:profile.id,platform:appForPlatform(profile.platform),token:pending.token,contactId:contact.id,contactTitle:contact.title||'当前联系人',...(contact.phone?{phone:contact.phone}:{}),...(confirmed.actualText!==undefined?{actualText:confirmed.actualText}:{})});
     assistantContacts.value[profile.id]=current;
     assistantUsages.value[profile.id]=(assistantUsages.value[profile.id]||[]).filter(u=>!(u.platform===usage.platform&&u.contactId===usage.contactId&&u.materialId===usage.materialId)).concat(usage);
     await executeProfileScript(profile.id,buildAssistantRuntimeScript({command:'result',token:pending.token,usage})).catch(()=>undefined);
@@ -10142,8 +10139,15 @@ async function pollAssistantMaterialEvents(profileId:string){
   try{
     const snapshot=await executeProfileScript<AssistantRuntimeSnapshot>(profileId,buildAssistantRuntimeScript({command:'poll'}));
     if(!snapshot)return;
-    if(assistantContacts.value[profileId]?.id!==snapshot.contact.id&&!assistantCopyBusy.value)assistantCopyStatus.value='';
+    const previousContact=assistantContacts.value[profileId];
+    const contactChanged=previousContact?.id!==snapshot.contact.id||previousContact?.phone!==snapshot.contact.phone;
+    if(contactChanged&&!assistantCopyBusy.value)assistantCopyStatus.value='';
     assistantContacts.value[profileId]=snapshot.contact;
+    if(contactChanged&&profile.platform==='opensms'){
+      const usages=await window.chatTranslator.getAssistantUsage(profileId,snapshot.contact);
+      assistantUsages.value[profileId]=usages;
+      await executeProfileScript(profileId,buildAssistantRuntimeScript({command:'usages',usages}));
+    }
     for(const event of snapshot.events||[]){
       try{
         if(event.action==='copy'&&event.material&&activeProfileId.value===profileId)await copyAssistantMaterial(event.material);
@@ -10151,7 +10155,7 @@ async function pollAssistantMaterialEvents(profileId:string){
           const catalog=await readAssistantCatalog();if(![...catalog.schedule,...catalog.quotes].some(c=>c.materials.some(m=>m.mediaId===event.mediaId)))throw new Error('未知图片素材');
           await transferAssistantImage(profileId,event.mediaId,await window.chatTranslator.getAssistantImage(event.mediaId));
         } else if(event.action==='used'&&event.token&&event.contactId){
-          const usage=await window.chatTranslator.recordAssistantUse({profileId,platform:appForPlatform(profile.platform),token:event.token,contactId:event.contactId,contactTitle:event.contactTitle||'当前联系人',...(event.actualText!==undefined?{actualText:event.actualText}:{})});
+          const usage=await window.chatTranslator.recordAssistantUse({profileId,platform:appForPlatform(profile.platform),token:event.token,contactId:event.contactId,contactTitle:event.contactTitle||'当前联系人',...(event.phone?{phone:event.phone}:{}),...(event.actualText!==undefined?{actualText:event.actualText}:{})});
           assistantUsages.value[profileId]=(assistantUsages.value[profileId]||[]).filter(u=>!(u.contactId===usage.contactId&&u.materialId===usage.materialId)).concat(usage);
           await executeProfileScript(profileId,buildAssistantRuntimeScript({command:'result',token:event.token,usage}));
         }

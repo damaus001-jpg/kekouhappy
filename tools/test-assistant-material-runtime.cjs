@@ -5,6 +5,7 @@ const http=require('node:http');
 const assert=require('node:assert/strict');
 const {randomUUID,createHash}=require('node:crypto');
 const ts=require('typescript');
+const {pathToFileURL}=require('node:url');
 const root=path.resolve(__dirname,'..');
 const directory=path.join(root,'.tmp',`assistant-material-test-${randomUUID()}`);
 app.setPath('userData',directory);
@@ -21,7 +22,7 @@ app.whenReady().then(async()=>{
   dialog.showOpenDialog=async()=>({canceled:false,filePaths:[path.join(root,'src/assets/xiaozhi-assistant-transparent.png')]});
   const media=(await service.attachAssistantMedia('quotes','image-fixture')).modules.quotes.entries[0].media[0];
   const source=await fs.readFile(path.join(root,'src/assistant-material-runtime.ts'),'utf8');
-  const js=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022}}).outputText;
+  const js=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022}}).outputText.replace('../electron/assistant-material-identity',pathToFileURL(path.join(root,'dist-electron/assistant-material-identity.js')).href);
   const {buildAssistantRuntimeScript}=await import(`data:text/javascript;base64,${Buffer.from(js).toString('base64')}`);
   const server=http.createServer((_req,res)=>{res.setHeader('Content-Type','text/html; charset=utf-8');res.end('<!doctype html><html><body></body></html>');});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));

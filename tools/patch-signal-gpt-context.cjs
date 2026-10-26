@@ -8,6 +8,17 @@ const workRoot = path.join(projectRoot, '.tmp', 'signal-gpt-context-patch');
 const oldFunctions = 'function d(e,t,n){let r=new Set;for(let n of t){let t=n.messageId.toLowerCase();if(n.conversationId!==e||r.has(t))return[];r.add(t)}let i=f(e,t),a=n??t.at(-1);if(!a||!i.includes(a.messageId))return[];let o=t.findIndex(e=>u(e,a));return o<0?[]:t.slice(Math.max(0,o-8+1),o+1)}function f(e,t){let n=new Set;for(let r of t){let t=r.messageId.toLowerCase();if(r.conversationId!==e||n.has(t))return[];n.add(t)}return t.filter(e=>e.direction===`incoming`).slice(-3).map(e=>e.messageId)}';
 const newFunctions = 'function isCurrentLocalCalendarDay(e){let t=new Date(e),n=new Date;return Number.isFinite(t.getTime())&&t.getFullYear()===n.getFullYear()&&t.getMonth()===n.getMonth()&&t.getDate()===n.getDate()}function d(e,t,n){let r=new Set;for(let n of t){let t=n.messageId.toLowerCase();if(n.conversationId!==e||r.has(t))return[];r.add(t)}let i=f(e,t),a=n??t.at(-1);if(!a||!i.includes(a.messageId))return[];let o=t.findIndex(e=>u(e,a));return o<0?[]:t.slice(0,o+1).filter(e=>isCurrentLocalCalendarDay(e.timestamp)).slice(-18)}function f(e,t){let n=new Set;for(let r of t){let t=r.messageId.toLowerCase();if(r.conversationId!==e||n.has(t))return[];n.add(t)}return t.filter(e=>e.direction===`incoming`&&isCurrentLocalCalendarDay(e.timestamp)).slice(-3).map(e=>e.messageId)}';
 
+function patchSmartReplyRequestLimit(source) {
+  const start = source.indexOf('case`smartReply.request`:');
+  const end = source.indexOf('case`message.visibleBatch`:', start);
+  if (start < 0 || end <= start) throw new Error('Signal smart reply request parser was not found.');
+  const parser = source.slice(start, end);
+  const bounds = [...parser.matchAll(/\b([\w$]+)\.messages\.length>(8|18)\b/g)];
+  if (bounds.length !== 1) throw new Error('Signal smart reply request limit is missing or ambiguous.');
+  const updated = parser.replace(bounds[0][0], `${bounds[0][1]}.messages.length>18`);
+  return source.slice(0, start) + updated + source.slice(end);
+}
+
 function assertInsideProject(target) {
   const relative = path.relative(projectRoot, target);
   if (!relative || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
@@ -40,6 +51,7 @@ async function patchExecutableAsarHash(executablePath, oldHash, newHash) {
 async function patchSignalGptContext(archivePath) {
   const targetArchive = path.resolve(archivePath);
   assertInsideProject(targetArchive);
+  asar.uncache(targetArchive);
   await fs.rm(workRoot, { recursive: true, force: true });
   const extracted = path.join(workRoot, 'extracted');
   const packed = path.join(workRoot, 'patched.asar');
@@ -53,13 +65,19 @@ async function patchSignalGptContext(archivePath) {
   if (candidates.length !== 1) throw new Error(`Expected one Signal message bridge projection bundle, found ${candidates.length}.`);
   const bridgePath = path.join(chunks, candidates[0]);
   const source = await fs.readFile(bridgePath, 'utf8');
-  if (source.includes(newFunctions)) {
-    console.log('Signal GPT context already supports recent incoming anchors and up to 18 messages today.');
-    return false;
-  }
+  const contextPatched = source.includes(newFunctions);
   const firstIndex = source.indexOf(oldFunctions);
-  if (firstIndex < 0 || source.indexOf(oldFunctions, firstIndex + oldFunctions.length) >= 0) {
+  if (!contextPatched && (firstIndex < 0 || source.indexOf(oldFunctions, firstIndex + oldFunctions.length) >= 0)) {
     throw new Error('Signal message bridge context selector does not match the expected 8-message source.');
+  }
+  const requestCandidates = (await fs.readdir(chunks)).filter(name => /^messageBridge\.main-.+\.js$/.test(name));
+  if (requestCandidates.length !== 1) throw new Error('Expected one Signal main message bridge bundle.');
+  const requestPath = path.join(chunks, requestCandidates[0]);
+  const requestSource = await fs.readFile(requestPath, 'utf8');
+  const patchedRequestSource = patchSmartReplyRequestLimit(requestSource);
+  if (contextPatched && requestSource === patchedRequestSource) {
+    console.log('Signal GPT context and request parser already support up to 18 messages today.');
+    return false;
   }
   const oldHeaderHash = asarHeaderHash(targetArchive);
   const executablePath = path.resolve(path.dirname(path.dirname(targetArchive)), 'Signal.exe');
@@ -70,7 +88,8 @@ async function patchSignalGptContext(archivePath) {
       throw new Error('Signal.exe and app.asar were already out of sync before the GPT context patch.');
     }
   }
-  await fs.writeFile(bridgePath, source.replace(oldFunctions, newFunctions), 'utf8');
+  if (!contextPatched) await fs.writeFile(bridgePath, source.replace(oldFunctions, newFunctions), 'utf8');
+  await fs.writeFile(requestPath, patchedRequestSource, 'utf8');
   await asar.createPackageWithOptions(extracted, packed, {
     unpack: '*.node',
     unpackDir: 'build/icons/win'
@@ -83,6 +102,7 @@ async function patchSignalGptContext(archivePath) {
   try {
     await fs.rm(targetArchive, { force: true });
     await fs.rename(packed, targetArchive);
+    asar.uncache(targetArchive);
     await fs.rm(targetUnpacked, { recursive: true, force: true });
     const packedUnpacked = `${packed}.unpacked`;
     if (await fs.stat(packedUnpacked).then(() => true, () => false)) {
@@ -94,6 +114,7 @@ async function patchSignalGptContext(archivePath) {
   } catch (error) {
     await fs.rm(targetArchive, { force: true });
     await fs.copyFile(backupArchive, targetArchive);
+    asar.uncache(targetArchive);
     await fs.rm(targetUnpacked, { recursive: true, force: true });
     if (targetUnpackedExists) await fs.cp(backupUnpacked, targetUnpacked, { recursive: true });
     throw error;
@@ -111,4 +132,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { patchSignalGptContext, oldFunctions, newFunctions, asarHeaderHash };
+module.exports = { patchSignalGptContext, patchSmartReplyRequestLimit, oldFunctions, newFunctions, asarHeaderHash };

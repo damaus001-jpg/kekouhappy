@@ -1,16 +1,18 @@
-import type { AssistantCatalog, AssistantMaterial, AssistantStagedMaterial, AssistantUsage } from '../electron/assistant-material-types';
+import type { AssistantCatalog, AssistantContact, AssistantMaterial, AssistantStagedMaterial, AssistantUsage } from '../electron/assistant-material-types';
+import { assistantUsageMatchesContact } from '../electron/assistant-material-identity';
 export type AssistantRuntimeConfig = {
   platform: 'whatsapp'|'telegram'|'signal'|'opensms'; catalog: AssistantCatalog;
   colors: Record<string,string>; icon: string; usages: AssistantUsage[]; enabled: boolean; showButton?:boolean;
 };
 export type AssistantRuntimeEvent = {
   action: 'copy'|'used'|'preview'; material?: AssistantMaterial; token?: string; mediaId?:string;
-  contactId?: string; contactTitle?: string; actualText?: string;
+  contactId?: string; contactTitle?: string; phone?: string; actualText?: string;
 };
-export type AssistantRuntimeSnapshot = { events: AssistantRuntimeEvent[]; contact: {id:string;title:string} };
+export type AssistantRuntimeSnapshot = { events: AssistantRuntimeEvent[]; contact: AssistantContact };
 type Command = {command:'install';config:AssistantRuntimeConfig} | {command:'stage';pending:AssistantStagedMaterial|null}
   | {command:'result';token:string;error?:string;usage?:AssistantUsage} | {command:'poll'}
   | {command:'contact'}
+  | {command:'usages';usages:AssistantUsage[]}
   | {command:'confirm';pending:AssistantStagedMaterial;contactId:string;cardTitle?:string}
   | {command:'confirmation-status';token:string}
   | {command:'cancel-confirmation'}
@@ -18,7 +20,7 @@ type Command = {command:'install';config:AssistantRuntimeConfig} | {command:'sta
 
 // This function is serialized and executed inside the platform window. Keep all
 // DOM helpers inside it; no renderer imports or platform internals are required.
-function assistantRuntime(command: Command) {
+function assistantRuntime(command: Command, usageMatches: typeof assistantUsageMatchesContact) {
   const w = window as any;
   if (!w.__dfMaterialRuntime) {
     const state: any = {config:null,queue:[],pending:null,tab:'persona',expanded:new Set(),modal:null,consumed:new Set(),lastContact:''};
@@ -80,7 +82,7 @@ function assistantRuntime(command: Command) {
     const node = (tag:string,className='',text='') => {const el=document.createElement(tag);el.className=className;if(text)el.textContent=text;return el;};
     const button = (label:string,click:()=>void) => {const el=node('button','',label) as HTMLButtonElement;el.type='button';el.onclick=click;return el;};
     const toast = (message:string) => {shadow.querySelector('.toast')?.remove();const el=node('div','toast',message);el.setAttribute('role','status');shadow.appendChild(el);setTimeout(()=>el.remove(),4000);};
-    const used = (id:string) => state.config.usages.some((u:AssistantUsage)=>u.confirmation==='inserted'&&u.contactId===readContact().id&&u.materialId===id);
+    const used = (id:string) => state.config.usages.some((u:AssistantUsage)=>u.materialId===id&&usageMatches(u,state.config.platform,readContact()));
     const renderPanel = () => {
       const old=shadow.querySelector('.panel');const scrollTop=old?.querySelector('.scroll')?.scrollTop||0;old?.remove();
       if(!state.open || !state.config.enabled)return;
@@ -129,8 +131,9 @@ function assistantRuntime(command: Command) {
     const closeModal = () => {const modal=state.modal;state.modal=null;modal?.mask.remove();modal?.complete?.(null);};
     const updateTarget = () => {
       const contact=readContact();
-      if(state.modal&&contact.id!==state.modal.contact.id){closeModal();toast('会话已切换，本次操作已取消；请检查聊天草稿');}
-      if(contact.id!==state.lastContact){state.lastContact=contact.id;renderPanel();}
+      if(state.modal&&(contact.id!==state.modal.contact.id||contact.phone!==state.modal.contact.phone)){closeModal();toast('会话已切换，本次操作已取消；请检查聊天草稿');}
+      const key=`${contact.id}|${contact.phone||''}`;
+      if(key!==state.lastContact){state.lastContact=key;renderPanel();}
       floating.hidden=state.config?.showButton===false || !state.config?.enabled || !visible(composer());
     };
     const insertText = (text:string,contactId:string) => {
@@ -171,6 +174,7 @@ function assistantRuntime(command: Command) {
     };
     const showModal = (pending:AssistantStagedMaterial,expectedContactId?:string,complete?: (result:any)=>void,cardTitle='') => {
       const contact=readContact();
+      if(state.config?.platform==='opensms'&&!contact.phone){toast('无法识别对方手机号，请先打开号码完整的会话');complete?.(null);return;}
       if(state.modal||!state.config?.enabled||!contact.id||(expectedContactId&&contact.id!==expectedContactId)){complete?.(null);return;}
       const duplicate=pending.type==='image'&&used(pending.id);
       const mask=node('div','mask'),dialog=node('section','dialog');dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','false');dialog.setAttribute('aria-label','确认使用素材');
@@ -184,7 +188,7 @@ function assistantRuntime(command: Command) {
       const actions=node('div','actions');const cancel=button('取消',()=>{if(!state.modal.busy)closeModal();});
       const confirm=button(duplicate?'仍然使用':'确认粘贴',()=>{void (async()=>{
         const modal=state.modal;if(!modal||modal.busy)return;
-        if(!state.config?.enabled||readContact().id!==contact.id){closeModal();return;}
+        if(!state.config?.enabled||readContact().id!==contact.id||readContact().phone!==contact.phone){closeModal();return;}
         const text=editor?.value||'';if(pending.type==='text'&&!text.trim()){error.textContent='请填写文字';return;}
         modal.busy=true;confirm.disabled=true;cancel.disabled=true;error.textContent='';
         try {
@@ -192,9 +196,9 @@ function assistantRuntime(command: Command) {
           const inserted=pending.type==='text'?insertText(text,contact.id):await insertImage(pending,contact.id);
           if(!inserted)throw new Error('未确认素材已进入输入框，请检查聊天草稿后重试；未记录使用');
           // Keep the target captured at successful insertion, even if the UI changes while persistence finishes.
-          if(state.modal!==modal||!state.config?.enabled||readContact().id!==contact.id)throw new Error('会话已变化；请检查草稿，未记录使用');
+          if(state.modal!==modal||!state.config?.enabled||readContact().id!==contact.id||readContact().phone!==contact.phone)throw new Error('会话已变化；请检查草稿，未记录使用');
           modal.inserted=true;modal.token=pending.token;
-          const result={action:'used',token:pending.token,contactId:contact.id,contactTitle:contact.title,...(pending.type==='text'?{actualText:text}:{})};
+          const result={action:'used',token:pending.token,contactId:contact.id,contactTitle:contact.title,...(contact.phone?{phone:contact.phone}:{}),...(pending.type==='text'?{actualText:text}:{})};
           if(complete){modal.complete=null;complete(result);closeModal();return;}
           state.queue.push(result);
           confirm.textContent='保存使用记录…';
@@ -232,6 +236,7 @@ function assistantRuntime(command: Command) {
     const timer=setInterval(updateTarget,200);
     state.apply = (cmd:Command) => {
       if(cmd.command==='contact')return readContact();
+      if(cmd.command==='usages'){state.config.usages=cmd.usages;renderPanel();return true;}
       if(cmd.command==='cancel-confirmation'){closeModal();return true;}
       if(cmd.command==='confirmation-status')return state.confirmation?.token===cmd.token?state.confirmation.result:{status:'cancelled'};
       if(cmd.command==='confirm'){
@@ -283,5 +288,5 @@ export function buildAssistantRuntimeScript(command:Command) {
   if(command.command!=='install')return `window.__dfMaterialRuntime?.apply(${JSON.stringify(command)})`;
   const source=assistantRuntime.toString();let version=2166136261;
   for(let i=0;i<source.length;i++)version=Math.imul(version^source.charCodeAt(i),16777619);
-  return `(()=>{const fresh=window.__dfMaterialRuntime?.version!==${version};if(fresh){window.__dfMaterialRuntime?.dispose();delete window.__dfMaterialRuntime;}(${source})(${JSON.stringify(command)});window.__dfMaterialRuntime.version=${version};return {fresh};})()`;
+  return `(()=>{const fresh=window.__dfMaterialRuntime?.version!==${version};if(fresh){window.__dfMaterialRuntime?.dispose();delete window.__dfMaterialRuntime;}(${source})(${JSON.stringify(command)},${assistantUsageMatchesContact.toString()});window.__dfMaterialRuntime.version=${version};return {fresh};})()`;
 }

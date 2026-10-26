@@ -15,6 +15,8 @@ async function main() {
   await fs.mkdir(path.dirname(archive), { recursive: true });
   const bridge = path.join(sourceRoot, 'bundles', 'chunks', 'messageBridgeChannels.std-test.js');
   await fs.writeFile(bridge, `const selector=${oldFunctions};`);
+  const requestBridge = path.join(sourceRoot, 'bundles', 'chunks', 'messageBridge.main-test.js');
+  await fs.writeFile(requestBridge, 'function parse(t){switch(t.type){case`smartReply.request`:if(t.messages.length>8)return;return t;case`message.visibleBatch`:return t;}}');
   await asar.createPackage(sourceRoot, archive);
 
   const initialHash = asarHeaderHash(archive);
@@ -25,6 +27,18 @@ async function main() {
   const executableBytes = await fs.readFile(executable);
   assert.ok(executableBytes.includes(Buffer.from(updatedHash, 'utf8')), 'Signal.exe receives the rebuilt app.asar header hash');
   assert.ok(!executableBytes.includes(Buffer.from(initialHash, 'utf8')), 'the stale app.asar header hash is removed');
+  const parserEntry = path.join('bundles', 'chunks', 'messageBridge.main-test.js');
+  const parser = asar.extractFile(archive, parserEntry).toString();
+  assert.ok(parser.includes('t.messages.length>18'), 'request parser matches the context size');
+  assert.equal(await patchSignalGptContext(archive), false, 'patching both chunks is idempotent');
+
+  // Upgrade an archive produced by the older context-only patch as well.
+  await fs.writeFile(bridge, require('./patch-signal-gpt-context.cjs').newFunctions);
+  await asar.createPackage(sourceRoot, archive);
+  await fs.writeFile(executable, Buffer.from(asarHeaderHash(archive), 'utf8'));
+  assert.equal(await patchSignalGptContext(archive), true);
+  assert.ok(asar.extractFile(archive, parserEntry).toString().includes('t.messages.length>18'));
+  assert.ok((await fs.readFile(executable)).includes(Buffer.from(asarHeaderHash(archive), 'utf8')));
   console.log('signal-gpt-context-asar-integrity: rebuilt Signal app.asar and executable hashes stay paired');
   await fs.rm(root, { recursive: true, force: true });
 }

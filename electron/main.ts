@@ -7994,8 +7994,14 @@ function registerIpc() {
   });
   trustedHandle('assistant:pending', true, () => { assertAssistantUnlocked(); return currentAssistantMaterial(); });
   trustedHandle('assistant:image', true, (_event,id:string) => { assertAssistantUnlocked();return readAssistantImage(id); });
-  trustedHandle('assistant:usage', true, (_event, profileId: string) => {
-    assertAssistantUnlocked(); return readAssistantUsage(assertProfileId(profileId));
+  trustedHandle('assistant:usage', true, async (_event, profileId: string, contact?: import('./assistant-material-types.js').AssistantContact) => {
+    assertAssistantUnlocked(); assertProfileId(profileId);
+    if (contact) {
+      assertSerializedSize(contact, 'Assistant contact', 4096);
+      const profile = (await readProfileBackup()).find(p => p.id === profileId);
+      if (profile?.platform !== 'opensms') throw new Error('仅打新增可关联手机号素材记录');
+    }
+    return readAssistantUsage(profileId, contact);
   });
   trustedHandle('assistant:use', true, async (_event, value: AssistantUseRequest) => {
     assertAssistantUnlocked(); assertSerializedSize(value, 'Assistant use', 100 * 1024); assertProfileId(value.profileId);

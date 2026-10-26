@@ -77,6 +77,24 @@ if (!process.versions.electron) {
       assert.equal(fewerPayload.messages.length,9,'fewer than eighteen messages today includes all of today');
       assert.equal(fewerPayload.messages[0].text,'Recent 4, how was your day?');
     }
+    // Native bubble hit testing must survive the large-to-compact layout transition.
+    const asar = require('@electron/asar');
+    const signalArchive = path.join(root,'.package-staging/signal/resources/app.asar');
+    const nativeCss = asar.extractFile(signalArchive,path.join('stylesheets','manifest.css')).toString();
+    const bubbleCss = Array.from(nativeCss.matchAll(/([^{}]+)\{([^{}]*)\}/g)).filter(m=>/\.module-message__(?:container|maoyi-smart-reply|metadata|text)/.test(m[1])).map(m=>m[0]).join('\n');
+    for(const size of [[1600,1000],[1100,720],[1600,1000],[1100,720]]){
+      win.setSize(...size);
+      for(const width of [80,100,180,300]){
+        await execute(`document.body.innerHTML=${JSON.stringify(`<style>${bubbleCss}</style><div class="module-message module-message--incoming"><div class="module-message__container module-message__container-incoming" style="width:${width}px"><div class="module-message__text module-message__text--incoming">OK</div><button class="module-message__maoyi-smart-reply">去GPT</button><div class="module-message__metadata module-message__metadata--inline"><span>11:59 PM</span></div></div></div>`)};window.nativeGptClicks=0;document.querySelector('button').addEventListener('click',()=>window.nativeGptClicks++);true`);
+        await execute(signal.buildSignalGptButtonScript());
+        const hit=await execute(`(()=>{const b=document.querySelector('.module-message__maoyi-smart-reply'),r=b.getBoundingClientRect();return {targets:[.25,.5,.75].map(t=>document.elementFromPoint(r.x+r.width/2,r.y+r.height*t)===b),x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)};})()`);
+        assert.ok(hit.targets.every(Boolean),`native GPT button remains clickable at ${size} / bubble ${width}`);
+        win.webContents.sendInputEvent({type:'mouseDown',x:hit.x,y:hit.y,button:'left',clickCount:1});
+        win.webContents.sendInputEvent({type:'mouseUp',x:hit.x,y:hit.y,button:'left',clickCount:1});
+        await new Promise(resolve=>setTimeout(resolve,20));
+        assert.equal(await execute('window.nativeGptClicks'),1,'real mouse input reaches the Signal GPT button once');
+      }
+    }
     await execute(`document.body.innerHTML='<button class="module-message__maoyi-smart-reply">去GPT</button>';`);
     await execute(signal.buildSignalGptButtonScript());
     assert.equal(await execute(`document.querySelector('button').textContent`),'去GPT');
@@ -94,8 +112,9 @@ if (!process.versions.electron) {
     const primaryColors=new Set(),panelColors=new Set();
     for(const theme of ['theme-black-gold','theme-pink','theme-black-gold theme-murong-purple','theme-black-gold theme-clear-water-blue']){
       await execute(`window.dialogTest.themeClass.value=${JSON.stringify(theme)};window.dialogTest.activeSensitiveDialog.value={id:'gpt-theme',title:'去GPT',message:'已复制 18 条聊天记录',detail:'点击打开GPT，然后粘贴并发送。',buttons:['打开GPT','稍后粘贴'],cancelId:1};true`);
-      const appearance=await execute(`new Promise(resolve=>requestAnimationFrame(()=>{const card=document.querySelector('.sensitive-dialog-card'),buttons=Array.from(card.querySelectorAll('button'));resolve({primary:getComputedStyle(buttons[0]).backgroundColor,panel:getComputedStyle(card).background,labels:buttons.map(b=>b.textContent),visible:card.getBoundingClientRect().height>0});}))`);
+      const appearance=await execute(`new Promise(resolve=>requestAnimationFrame(()=>{const card=document.querySelector('.sensitive-dialog-card'),buttons=Array.from(card.querySelectorAll('button'));resolve({primary:getComputedStyle(buttons[0]).backgroundColor,panel:getComputedStyle(card).background,labels:buttons.map(b=>b.textContent),visible:card.getBoundingClientRect().height>0,reachable:buttons.every(button=>{const r=button.getBoundingClientRect();return r.top>=0&&r.bottom<=innerHeight&&r.left>=0&&r.right<=innerWidth;})});}))`);
       assert.deepEqual(appearance.labels,['打开GPT','稍后粘贴']);assert.equal(appearance.visible,true);primaryColors.add(appearance.primary);panelColors.add(appearance.panel);
+      assert.equal(appearance.reachable,true,'both GPT dialog buttons fit in the compact window');
       await execute(`document.querySelector('.sensitive-dialog-card button').click();true`);
       assert.equal(await execute(`window.dialogTest.responses.at(-1)`),0);
     }

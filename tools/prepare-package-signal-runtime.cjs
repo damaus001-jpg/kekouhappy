@@ -118,6 +118,11 @@ async function main() {
   if (!stagedProjection.includes('isCurrentLocalCalendarDay') || !stagedProjection.includes('.slice(-18)')) {
     throw new Error('Staged Signal GPT context is missing the current-day 18-message selector.');
   }
+  const stagedBridge = asar.extractFile(stagedAsar, bridgeEntry.replace(/^[/\\]/, '')).toString('utf8');
+  const { patchSmartReplyRequestLimit } = require('./patch-signal-gpt-context.cjs');
+  if (patchSmartReplyRequestLimit(stagedBridge) !== stagedBridge) {
+    throw new Error('Staged Signal GPT request parser must accept up to 18 messages.');
+  }
   const stagedAsarHeaderHash = crypto.createHash('sha256')
     .update(asar.getRawHeader(stagedAsar).headerString)
     .digest('hex');
