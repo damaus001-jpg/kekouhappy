@@ -78,6 +78,13 @@ function assistantRuntime(command: Command, usageMatches: typeof assistantUsageM
       ol{list-style:none;padding:0 0 0 10px;margin:0}li{position:relative;padding:0 0 22px 25px;border-left:1px solid var(--line-strong)}li:last-child{border-left-color:transparent}li:before{content:'';position:absolute;left:-5px;top:17px;width:9px;height:9px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 4px var(--panel-strong)}article{padding:15px 17px 17px;background:linear-gradient(135deg,var(--panel-muted),var(--bg-soft));border:1px solid var(--line);border-radius:14px}.date{margin:0 0 8px;font-size:11px;letter-spacing:1px;color:var(--accent-bright);font-weight:600}h3{margin:0 0 8px;font-size:15px;line-height:1.5}footer{display:flex;justify-content:flex-end;margin-top:12px}.materials{display:flex;flex-direction:column;gap:12px;margin-top:12px}.material{display:flex;flex-direction:column;gap:10px;align-items:flex-start;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--panel-strong)}.material p{margin:0;white-space:pre-wrap;font-size:12px;line-height:1.9;color:var(--muted-strong)}.material img{max-width:100%;max-height:240px;object-fit:contain;border-radius:8px}.material button{align-self:flex-end}.used{color:var(--muted)}.empty{color:var(--muted);line-height:1.8}.toast{position:fixed;bottom:24px;right:24px;max-width:400px;z-index:2147483005;background:var(--panel-strong);border:1px solid var(--accent);border-radius:12px;padding:14px;color:var(--text)}
       .mask{position:fixed;inset:0;z-index:2147483003;background:#0008;display:grid;place-items:center;padding:20px;pointer-events:none}.dialog{pointer-events:auto;width:min(460px,100%);max-height:85vh;overflow:auto;border:1px solid var(--line-strong);border-radius:18px;padding:24px;background:var(--panel-strong);box-shadow:0 12px 60px #0005}.dialog h2{font-size:18px;margin:0 0 14px}.target{color:var(--accent-bright);line-height:1.7}.dialog .card-title{color:var(--accent-bright);font-weight:600;line-height:1.6;overflow-wrap:anywhere}.dialog textarea{width:100%;min-height:160px;max-height:45vh;resize:vertical;background:var(--bg-soft);border:1px solid var(--line);border-radius:10px;color:var(--text);font:inherit;font-size:14px;line-height:1.8;padding:12px}.dialog img{display:block;max-width:100%;max-height:40vh;object-fit:contain;margin:auto}.dialog .hint{color:var(--muted);line-height:1.7}.dialog .error{color:#e56565;line-height:1.6}.primary{background:var(--accent);color:var(--bg);font-weight:600}.actions{display:flex;justify-content:flex-end;gap:10px;margin-top:20px}
     `;
+    style.textContent+=`
+      .duplicate-warning{display:block;background:#b42332;color:#fff;border-radius:6px;padding:10px 12px;font-size:14px;font-weight:700;line-height:1.6;animation:duplicate-warning-pulse 1.2s ease-in-out infinite}
+      .dialog.duplicate{border:3px solid #b42332;animation:duplicate-dialog-pulse 1.2s ease-in-out infinite}.dialog.duplicate .primary{background:#b42332;color:#fff}
+      @keyframes duplicate-warning-pulse{0%,100%{background:#b42332}50%{background:#801725}}
+      @keyframes duplicate-dialog-pulse{0%,100%{border-color:#b42332;box-shadow:0 0 0 0 #e5485866,0 12px 60px #0005}50%{border-color:#ff8b96;box-shadow:0 0 0 7px #e5485840,0 12px 60px #0005}}
+      @media(prefers-reduced-motion:reduce){.dialog.duplicate,.duplicate-warning{animation:none}}
+    `;
     shadow.appendChild(style);
     const node = (tag:string,className='',text='') => {const el=document.createElement(tag);el.className=className;if(text)el.textContent=text;return el;};
     const button = (label:string,click:()=>void) => {const el=node('button','',label) as HTMLButtonElement;el.type='button';el.onclick=click;return el;};
@@ -176,14 +183,15 @@ function assistantRuntime(command: Command, usageMatches: typeof assistantUsageM
       const contact=readContact();
       if(state.config?.platform==='opensms'&&!contact.phone){toast('无法识别对方手机号，请先打开号码完整的会话');complete?.(null);return;}
       if(state.modal||!state.config?.enabled||!contact.id||(expectedContactId&&contact.id!==expectedContactId)){complete?.(null);return;}
-      const duplicate=pending.type==='image'&&used(pending.id);
+      const duplicate=used(pending.id);
       const mask=node('div','mask'),dialog=node('section','dialog');dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','false');dialog.setAttribute('aria-label','确认使用素材');
       dialog.appendChild(node('h2','',duplicate?'此素材在当前联系人聊天里已使用':'确认使用素材'));const target=node('p','target',`用于：${contact.title}`);dialog.appendChild(target);
+      if(duplicate){dialog.classList.add('duplicate');const warning=node('p','duplicate-warning',`⚠ 此素材已对当前${state.config.platform==='opensms'?'手机号':'联系人'}使用过！`);warning.setAttribute('role','alert');dialog.appendChild(warning);}
       if(cardTitle)dialog.appendChild(node('p','card-title',`卡片：${cardTitle}`));
       let editor:HTMLTextAreaElement|null=null;
       if(pending.type==='text'){editor=node('textarea') as HTMLTextAreaElement;editor.value=pending.text||'';editor.maxLength=16000;editor.setAttribute('aria-label','修改素材文字');dialog.appendChild(editor);}
       else {const img=node('img') as HTMLImageElement;img.src=pending.imageData||'';img.alt=pending.name||'图片素材';dialog.appendChild(img);}
-      dialog.appendChild(node('p','hint',`${duplicate?'再次确认将重复使用这张照片。':''}确认后粘贴至聊天输入框或图片预览区，并记录使用；由你自行发送。切换会话将取消本次操作。`));
+      dialog.appendChild(node('p','hint',`${duplicate?'继续使用会重复填入，请确认是否再次使用。':''}确认后粘贴至聊天输入框或图片预览区，并记录使用；由你自行发送。切换会话将取消本次操作。`));
       const error=node('p','error');error.setAttribute('role','alert');dialog.appendChild(error);
       const actions=node('div','actions');const cancel=button('取消',()=>{if(!state.modal.busy)closeModal();});
       const confirm=button(duplicate?'仍然使用':'确认粘贴',()=>{void (async()=>{

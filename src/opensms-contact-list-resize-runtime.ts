@@ -102,7 +102,7 @@ export function buildOpenSmsContactListResizeScript() {
       if (!style) {
         style = document.createElement('style');
         style.id = 'df-opensms-contact-resizer-style';
-        style.textContent = '#df-opensms-contact-resizer{position:fixed;z-index:2147483000;width:10px;cursor:col-resize;touch-action:none;user-select:none;display:none;background:transparent!important;border:0!important;box-shadow:none!important;outline:none!important}body.df-opensms-contact-resizing,body.df-opensms-contact-resizing *{cursor:col-resize!important;user-select:none!important}';
+        style.textContent = '#df-opensms-contact-resizer{position:fixed;z-index:2147483000;width:10px;cursor:col-resize;touch-action:none;user-select:none;display:none;background:transparent!important;border:0!important;box-shadow:none!important;outline:none!important}';
         (document.head || document.documentElement).appendChild(style);
       }
       const handle = document.createElement('div');
@@ -122,7 +122,6 @@ export function buildOpenSmsContactListResizeScript() {
         state.dragStartX = event.clientX;
         state.dragStartWidth = rect.width;
         handle.classList.add('df-dragging');
-        document.body?.classList.add('df-opensms-contact-resizing');
         handle.setPointerCapture?.(event.pointerId);
       });
       document.addEventListener('pointermove', event => {
@@ -134,7 +133,6 @@ export function buildOpenSmsContactListResizeScript() {
         if (!state.dragging) return;
         state.dragging = false;
         handle.classList.remove('df-dragging');
-        document.body?.classList.remove('df-opensms-contact-resizing');
         if (state.column) applyWidth(state.column, state.storedWidth, true);
       };
       document.addEventListener('pointerup', stopDragging, true);
