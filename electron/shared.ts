@@ -777,6 +777,12 @@ export type StorageLocationActionResult = {
 
 export type ElectronApi = {
   getAssistantLibrary: () => Promise<import('./assistant-library-types.js').AssistantLibrary>;
+  getCustomer: (target:import('./customer-follow-up-types.js').CustomerTarget) => Promise<import('./customer-follow-up-types.js').CustomerSnapshot>;
+  saveCustomer: (target:import('./customer-follow-up-types.js').CustomerTarget,value:import('./customer-follow-up-types.js').CustomerRecord) => Promise<import('./customer-follow-up-types.js').CustomerRecord>;
+  saveCustomerSettings: (value:import('./customer-follow-up-types.js').CustomerSettings) => Promise<import('./customer-follow-up-types.js').CustomerSettings>;
+  exportCustomer: (target:import('./customer-follow-up-types.js').CustomerTarget) => Promise<boolean>;
+  previewCustomerImport: (target:import('./customer-follow-up-types.js').CustomerTarget) => Promise<import('./customer-follow-up-types.js').CustomerImportPreview|null>;
+  importCustomer: (target:import('./customer-follow-up-types.js').CustomerTarget,token:string,selectedStage?:string) => Promise<import('./customer-follow-up-types.js').CustomerSnapshot>;
   exportConversation: (request:import('./conversation-export-types.js').ConversationExportRequest) => Promise<import('./conversation-export-types.js').ConversationExportResult>;
   stageAssistantMaterial: (material: import('./assistant-material-types.js').AssistantMaterial) => Promise<import('./assistant-material-types.js').AssistantStagedMaterial>;
   getPendingAssistantMaterial: () => Promise<import('./assistant-material-types.js').AssistantStagedMaterial | null>;

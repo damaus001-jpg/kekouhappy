@@ -35,6 +35,9 @@ import { installOpenSmsLoginPersistence, removeOpenSmsLogin } from './opensms-lo
 import { stageAssistantMaterial, currentAssistantMaterial, readAssistantUsage, recordAssistantUse, readAssistantImage, removeAssistantUsageForProfile } from './assistant-material-store.js';
 import { filterProfileScopedJsonl, profileLogIdentityHash } from './profile-data-cleanup.js';
 import type { AssistantMaterial, AssistantUseRequest } from './assistant-material-types.js';
+import { readCustomer, saveCustomer, saveCustomerSettings } from './customer-follow-up-store.js';
+import { exportCustomerFile, previewCustomerFile, importCustomerFile } from './customer-follow-up-transfer.js';
+import type { CustomerTarget, CustomerRecord, CustomerSettings } from './customer-follow-up-types.js';
 import { exportConversationFile } from './conversation-export.js';
 import type { ConversationExportRequest } from './conversation-export-types.js';
 import { decodeLocalSpeechAudio } from './local-speech-core.js';
@@ -7976,6 +7979,19 @@ function registerIpc() {
   const assertAssistantUnlocked = () => {
     if (workspaceVisibilityGate.locked) throw new Error('请先解锁工作区');
   };
+  const validateCustomerTarget = async (target:CustomerTarget) => {
+    assertAssistantUnlocked();assertSerializedSize(target,'Customer target',4096);assertProfileId(target.profileId);
+    const profile=(await readProfileBackup()).find(p=>p.id===target.profileId);
+    const platform=profile?.platform==='telegram-a'||profile?.platform==='telegram-k'?'telegram':profile?.platform;
+    if(!profile||platform!==target.platform||profilesBeingRemoved.has(target.profileId))throw new Error('客户账号或平台不匹配');
+    assertAssistantUnlocked();
+  };
+  trustedHandle('customer:get',true,async (_event,target:CustomerTarget)=>{await validateCustomerTarget(target);return readCustomer(target);});
+  trustedHandle('customer:save',true,async (_event,target:CustomerTarget,value:CustomerRecord)=>{await validateCustomerTarget(target);assertSerializedSize(value,'Customer record',4*1024*1024);return saveCustomer(target,value);});
+  trustedHandle('customer:settings',true,(_event,value:CustomerSettings)=>{assertAssistantUnlocked();assertSerializedSize(value,'Customer settings',16384);return saveCustomerSettings(value);});
+  trustedHandle('customer:export',true,async (_event,target:CustomerTarget)=>{await validateCustomerTarget(target);return exportCustomerFile(target,()=>validateCustomerTarget(target));});
+  trustedHandle('customer:preview-import',true,async (_event,target:CustomerTarget)=>{await validateCustomerTarget(target);return previewCustomerFile(target,()=>validateCustomerTarget(target));});
+  trustedHandle('customer:import',true,async (_event,target:CustomerTarget,token:string,selectedStage?:string)=>{await validateCustomerTarget(target);assertText(token,'Customer import token',80);if(selectedStage!==undefined)assertText(selectedStage,'Customer stage',40);return importCustomerFile(target,token,selectedStage);});
   trustedHandle('assistant:get', true, () => { assertAssistantUnlocked(); return readAssistantLibrary(); });
   trustedHandle('conversation:export', true, async (_event,request:ConversationExportRequest) => {
     assertAssistantUnlocked();assertSerializedSize(request,'Conversation export',32*1024*1024);assertProfileId(request.profileId);

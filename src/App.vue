@@ -8,6 +8,8 @@ import type { AssistantRuntimeSnapshot } from './assistant-material-runtime';
 import type { AssistantCatalog, AssistantContact, AssistantMaterial, AssistantUsage, AssistantStagedMaterial } from '../electron/assistant-material-types';
 import { assistantUsageMatchesContact } from '../electron/assistant-material-identity';
 import assistantFloatIcon from './assets/xiaozhi-assistant-transparent.png';
+import type { CustomerTarget } from '../electron/customer-follow-up-types';
+import { conversationExportDay, localConversationExportDate } from '../electron/conversation-export-dates';
 import { buildConversationExportScript,mergeConversationExportRows,unwrapConversationExportResult } from './conversation-export-runtime';
 import { buildSignalGptButtonScript } from './gpt-handoff-runtime';
 import { buildSignalEmojiPickerScript } from './signal-emoji-picker-runtime';
@@ -18,8 +20,9 @@ import { buildVoiceConversationSignatureScript, buildVoiceMessageActionButtonSta
 import opensmsIcon from './assets/opensms-bubble.svg';
 import { installTranslationLayoutWatchersFromDom } from './translation-layout-runtime';
 import type { ExportSnapshot } from './conversation-export-runtime';
-import type { ConversationExportMode,ConversationExportRow } from '../electron/conversation-export-types';
+import type { ConversationExportSelection,ConversationExportRow } from '../electron/conversation-export-types';
 const assistantOpen = ref(false);
+const conversationExportMenuOpen = ref(false);
 import { withTranslationDeadline } from './translation-recovery';
 import { clientVersion } from './client-version';
 let diagnosticMonitoringEnabled = false;
@@ -626,7 +629,7 @@ const hasBlockingModal = computed(() => Boolean(
   translationCustomizationOpen.value ||
   eyeCareTranslationDialogOpen.value
 ));
-watch(assistantOpen, async () => { await nextTick(); scheduleSignalWorkspaceSyncBurst(); });
+watch([assistantOpen,conversationExportMenuOpen], async () => { await nextTick(); scheduleSignalWorkspaceSyncBurst(); });
 watch([signedIn, lockScreenVisible, activePanel], () => { assistantOpen.value = false; });
 const translationCustomizationDirty = computed(() => (
   translationCustomizationDraft.value.trim() !== translationCustomizationSaved.value.trim()
@@ -9985,14 +9988,29 @@ function getRuntimeScriptExecutorById(profileId: string) {
   return profile ? getRuntimeScriptExecutor(profile) : null;
 }
 
+async function resolveCustomerTarget():Promise<CustomerTarget> {
+  const profile=profiles.value.find(p=>p.id===activeProfileId.value);
+  if(!profile||activePanel.value!=='session'||lockScreenVisible.value)throw new Error('请先打开一个联系人会话');
+  const platform=appForPlatform(profile.platform);
+  if(platform==='opensms'){
+    const contact=await executeProfileScript<AssistantContact>(profile.id,buildOpenSmsScript({action:'contact'}));
+    if(activeProfileId.value!==profile.id)throw new Error('正在切换账号');
+    if(!contact?.phone)throw new Error('无法识别实际收信手机号，请打开联系人会话');
+    return {profileId:profile.id,platform,contactId:contact.id,contactTitle:contact.title,phone:contact.phone};
+  }
+  const contact=unwrapConversationExportResult<{contactId:string;contactTitle:string}>(await executeProfileScript(profile.id,buildConversationExportScript({action:'contact',platform})));
+  if(activeProfileId.value!==profile.id)throw new Error('正在切换账号');
+  return {profileId:profile.id,platform,contactId:contact.contactId,contactTitle:contact.contactTitle};
+}
 const conversationExportBusy=ref(false),conversationExportStatus=ref(''),conversationExportProfileId=ref('');
 let conversationExportCancelled=false;
-async function exportCurrentConversation(mode:ConversationExportMode){
+async function exportCurrentConversation({mode,scope}:ConversationExportSelection){
   if(conversationExportBusy.value)return;
   const profile=profiles.value.find(p=>p.id===activeProfileId.value);if(!profile){conversationExportStatus.value='请先打开一个联系人会话';return;}
   if(!window.chatTranslator.exportConversation){conversationExportStatus.value='请重新启动开发版，加载导出功能';return;}
   conversationExportBusy.value=true;conversationExportCancelled=false;conversationExportProfileId.value=profile.id;
   conversationExportStatus.value='正在读取当前会话…';
+  const exportDate=localConversationExportDate();
   let contactId='';
   const pause=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
   const platform=appForPlatform(profile.platform);
@@ -10009,7 +10027,8 @@ async function exportCurrentConversation(mode:ConversationExportMode){
       const snapshot=unwrapConversationExportResult<ExportSnapshot>(await executeProfileScript(profile.id,buildConversationExportScript({action:'snapshot',platform,expectedId:contactId})));
       if(!snapshot)throw new Error('无法读取会话');
       const previous=rows.length;rows=mergeConversationExportRows(rows,snapshot.rows);
-      if(rows.length>20000){rows=rows.slice(0,20000);note='记录超过20000条，导出为部分历史';break;}
+      if(rows.length>20000){rows=rows.slice(-20000);note='记录超过20000条，导出为部分历史';break;}
+      if(scope==='today'&&!snapshot.loading&&!snapshot.expandPending&&snapshot.rows.some(row=>{const day=conversationExportDay(row.timestamp,exportDate,row.dateOrder);return day&&day<exportDate;})){coverage='history-top';note='已读取至当天以前的会话';break;}
       conversationExportStatus.value=`已读取 ${rows.length} 条，正在加载更早记录…`;
       if(snapshot.top&&!snapshot.loading&&!snapshot.expandPending){
         const first=snapshot.rows[0]?.id||'';
@@ -10029,7 +10048,7 @@ async function exportCurrentConversation(mode:ConversationExportMode){
     if(conversationExportCancelled||activeProfileId.value!==profile.id||lockScreenVisible.value||activePanel.value!=='session')throw new Error('导出已取消');
     conversationExportStatus.value=coverage==='partial'?`历史未完全加载，正在保存 ${rows.length} 条…`:`已读取 ${rows.length} 条，请选择保存位置…`;
     exportStage='save';
-    const result=await window.chatTranslator.exportConversation({profileId:profile.id,platform:profile.platform,contactId,contactTitle:current.contactTitle,mode,coverage,coverageNote:note,rows});
+    const result=await window.chatTranslator.exportConversation({profileId:profile.id,platform:profile.platform,contactId,contactTitle:current.contactTitle,mode,scope,exportDate,coverage,coverageNote:note,rows});
     conversationExportStatus.value=result.saved?`已导出 ${result.count} 条${result.missing?`，${result.missing} 条暂无译文`:''}${result.redacted?`，${result.redacted} 条收款信息已排除`:''}${coverage==='partial'?'（部分历史）':''}`:'已取消保存';
   }catch(e){
     conversationExportStatus.value=e instanceof Error?e.message:String(e);
@@ -12689,7 +12708,7 @@ onUnmounted(() => {
   <main
     v-show="signedIn && activePanel === 'session'"
     class="page workspace-page"
-    :class="[themeClass, { 'workspace-header-collapsed': workspaceHeaderCollapsed, 'assistant-library-enabled': !lockScreenVisible, 'assistant-library-open': assistantOpen }]"
+    :class="[themeClass, { 'workspace-header-collapsed': workspaceHeaderCollapsed, 'assistant-library-enabled': !lockScreenVisible, 'assistant-library-open': assistantOpen, 'conversation-export-menu-open': conversationExportMenuOpen }]"
   >
     <header v-show="!workspaceHeaderCollapsed" class="runtime-header">
       <div class="runtime-brand">
@@ -12954,9 +12973,9 @@ onUnmounted(() => {
 
   <AssistantLibraryPanel v-if="signedIn && activePanel === 'session' && !lockScreenVisible && !hasBlockingModal"
     v-model:open="assistantOpen" :workspace="activePanel === 'session'" :collapsed="workspaceHeaderCollapsed" :class="themeClass"
-    :used-ids="assistantUsedIds" :copy-busy="assistantCopyBusy" :copy-status="assistantCopyStatus" :contact-title="assistantContacts[activeProfileId||'']?.title"
+    :customer-profile-id="activeProfileId||''" :resolve-customer="resolveCustomerTarget" :used-ids="assistantUsedIds" :copy-busy="assistantCopyBusy" :copy-status="assistantCopyStatus" :contact-title="assistantContacts[activeProfileId||'']?.title"
     @copy="copyAssistantMaterial($event.material,$event.cardTitle)" @changed="assistantLibraryChanged" :export-busy="conversationExportBusy" :export-status="conversationExportStatus"
-    @export="exportCurrentConversation" @cancel-export="cancelConversationExport" />
+    @export="exportCurrentConversation" @cancel-export="cancelConversationExport" @export-menu-open="conversationExportMenuOpen=$event" />
 
   <div
     v-if="activeSensitiveDialog"

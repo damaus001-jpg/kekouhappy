@@ -11,6 +11,12 @@ const initialTheme = (
 
 const api = {
   getAssistantLibrary: () => ipcRenderer.invoke('assistant:get'),
+  getCustomer: (target) => ipcRenderer.invoke('customer:get',target),
+  saveCustomer: (target,value) => ipcRenderer.invoke('customer:save',target,value),
+  saveCustomerSettings: (value) => ipcRenderer.invoke('customer:settings',value),
+  exportCustomer: (target) => ipcRenderer.invoke('customer:export',target),
+  previewCustomerImport: (target) => ipcRenderer.invoke('customer:preview-import',target),
+  importCustomer: (target,token,selectedStage) => ipcRenderer.invoke('customer:import',target,token,selectedStage),
   exportConversation: (request) => ipcRenderer.invoke('conversation:export',request),
   stageAssistantMaterial: (value) => ipcRenderer.invoke('assistant:stage', value),
   getPendingAssistantMaterial: () => ipcRenderer.invoke('assistant:pending'),

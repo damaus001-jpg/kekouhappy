@@ -5,14 +5,19 @@ import { assistantLabels, emptyAssistantLibrary } from '../../electron/assistant
 import type { AssistantCard, AssistantCatalog, AssistantMaterial } from '../../electron/assistant-material-types';
 import { buildAssistantCard, buildAssistantCatalog } from '../assistant-material-catalog';
 import icon from '../assets/xiaozhi-assistant-transparent.png';
+import CustomerFollowUp from './CustomerFollowUp.vue';
+import type { CustomerTarget } from '../../electron/customer-follow-up-types';
 import ConversationExportControl from './ConversationExportControl.vue';
-import type { ConversationExportMode } from '../../electron/conversation-export-types';
+import type { ConversationExportSelection } from '../../electron/conversation-export-types';
 
-const props = defineProps<{open:boolean;workspace:boolean;collapsed:boolean;usedIds?:string[];copyBusy?:boolean;copyStatus?:string;contactTitle?:string;exportBusy?:boolean;exportStatus?:string}>();
-const emit = defineEmits<{'update:open':[value:boolean];copy:[request:{material:AssistantMaterial;cardTitle:string}];changed:[];export:[mode:ConversationExportMode];cancelExport:[]}>();
+const props = defineProps<{open:boolean;workspace:boolean;collapsed:boolean;usedIds?:string[];copyBusy?:boolean;copyStatus?:string;contactTitle?:string;exportBusy?:boolean;exportStatus?:string;customerProfileId?:string;resolveCustomer?:()=>Promise<CustomerTarget>}>();
+const emit = defineEmits<{'update:open':[value:boolean];copy:[request:{material:AssistantMaterial;cardTitle:string}];changed:[];export:[selection:ConversationExportSelection];cancelExport:[];exportMenuOpen:[open:boolean]}>();
 const library=ref<AssistantLibrary>(emptyAssistantLibrary());
 const catalog=ref<AssistantCatalog>({persona:[],schedule:[],quotes:[]});
 const kind=ref<AssistantKind>('persona');
+const following=ref(false);
+function openFollowUp(){if(busy.value||!canLeave())return;draft.value=null;personaDraft.value=library.value.modules.persona.text;error.value='';notice.value='';following.value=true;}
+
 const busy=ref(false),error=ref(''),notice=ref(''),search=ref('');
 const personaDraft=ref(''),personaEditing=ref(true);
 const draft=ref<AssistantEntry|null>(null);
@@ -48,7 +53,7 @@ async function run(task:()=>Promise<void>){if(busy.value)return;busy.value=true;
 async function load(){await run(async()=>{await replace(await window.chatTranslator.getAssistantLibrary());personaEditing.value=!personaDraft.value.trim();});}
 function changed(){emit('changed');}
 function canLeave(){return !(draft.value||(personaEditing.value&&personaDraft.value!==library.value.modules.persona.text))||window.confirm('有未保存的修改，是否放弃这些修改？');}
-function switchKind(next:AssistantKind){if(next===kind.value||busy.value||!canLeave())return;draft.value=null;personaDraft.value=library.value.modules.persona.text;kind.value=next;if(next!=='persona')restoreExpanded(next);search.value='';error.value='';notice.value='';preview.value=null;}
+function switchKind(next:AssistantKind){if((!following.value&&next===kind.value)||busy.value||!canLeave())return;following.value=false;draft.value=null;personaDraft.value=library.value.modules.persona.text;kind.value=next;if(next!=='persona')restoreExpanded(next);search.value='';error.value='';notice.value='';preview.value=null;}
 function close(){if(!busy.value&&canLeave()){draft.value=null;personaDraft.value=library.value.modules.persona.text;emit('update:open',false);}}
 async function focusTitle(select=false){await nextTick();titleInput.value?.focus();if(select)titleInput.value?.select();}
 function newCard(){if(!canLeave())return;draft.value={id:crypto.randomUUID(),title:'',text:'',date:'',timeZone:'America/Los_Angeles',status:'planned',tags:[],media:[]};void focusTitle();}
@@ -106,18 +111,19 @@ onMounted(load);
       @pointerdown="pointerDown" @pointermove="pointerMove" @pointerup="pointerUp" @pointercancel="drag=null" @keydown.enter.prevent="emit('update:open',true)" @keydown.space.prevent="emit('update:open',true)">
       <img :src="icon" alt="" draggable="false"><span>小智加持</span>
     </button>
-    <ConversationExportControl v-if="workspace&&!open" floating :top="exportButtonTop" :busy="!!exportBusy" :status="exportStatus||''" @export="emit('export',$event)" @cancel="emit('cancelExport')" />
+    <ConversationExportControl v-if="workspace&&!open" floating :top="exportButtonTop" :busy="!!exportBusy" :status="exportStatus||''" @export="emit('export',$event)" @cancel="emit('cancelExport')" @menu-open="emit('exportMenuOpen',$event)" />
     <aside v-if="open" class="assistant-library-panel" :style="{top:panelTop}" aria-label="小智加持资料助手">
       <header class="assistant-library-heading"><img :src="icon" alt=""><div><strong>小智加持</strong><small>自定义资料 · {{contactTitle||'当前会话'}}</small></div>
-        <ConversationExportControl v-if="workspace" :busy="!!exportBusy" :status="exportStatus||''" @export="emit('export',$event)" @cancel="emit('cancelExport')" />
+        <ConversationExportControl v-if="workspace" :busy="!!exportBusy" :status="exportStatus||''" @export="emit('export',$event)" @cancel="emit('cancelExport')" @menu-open="emit('exportMenuOpen',$event)" />
         <button type="button" :disabled="busy" aria-label="关闭资料助手" @click="close">×</button>
       </header>
-      <nav class="assistant-library-tabs" aria-label="资料模块"><button v-for="(label,key) in assistantLabels" :key="key" type="button" :disabled="busy" :class="{active:kind===key}" @click="switchKind(key)">{{label}}</button></nav>
+      <nav class="assistant-library-tabs" aria-label="资料模块"><button v-for="(label,key) in assistantLabels" :key="key" type="button" :disabled="busy" :class="{active:!following&&kind===key}" @click="switchKind(key)">{{label}}</button><button type="button" :disabled="busy" :class="{active:following}" @click="openFollowUp">客户跟进</button></nav>
       <p v-if="error" class="assistant-feedback error" role="alert">{{error}}</p>
       <p v-if="notice" class="assistant-feedback" role="status">{{notice}}</p>
-      <p v-if="copyStatus&&kind!=='persona'" class="assistant-feedback" role="status">{{copyStatus}}</p>
+      <p v-if="!following&&copyStatus&&kind!=='persona'" class="assistant-feedback" role="status">{{copyStatus}}</p>
       <div class="assistant-library-scroll">
-        <section v-if="kind==='persona'" class="assistant-persona-custom">
+        <CustomerFollowUp v-if="following&&resolveCustomer" :profile-id="customerProfileId||''" :resolve-target="resolveCustomer" />
+        <section v-else-if="kind==='persona'" class="assistant-persona-custom">
           <p class="assistant-hint">粘贴完整人物资料并保存。查看时可选中文字自行复制。</p>
           <template v-if="personaEditing"><label class="assistant-field">人物资料<textarea v-model="personaDraft" rows="20" maxlength="256000" placeholder="在这里粘贴你的人物资料…" :disabled="busy"></textarea></label>
             <button class="primary" :disabled="busy" @click="savePersona">保存资料</button></template>
@@ -162,4 +168,7 @@ onMounted(load);
 .assistant-feedback{font-size:12px;margin:0 12px 8px;padding:8px;background:var(--panel-muted);border-radius:6px;color:var(--accent-bright);overflow-wrap:anywhere}.assistant-feedback.error{color:#ff8b8b}.assistant-entry-actions{display:flex;gap:6px;margin:12px 0}.assistant-entry-actions input{flex:1;min-width:0}.assistant-entry-actions button{white-space:nowrap}.assistant-custom-editor{padding:12px;border:1px solid var(--accent);border-radius:12px;background:var(--panel-muted);margin-bottom:16px}.assistant-media-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.assistant-media-card{display:flex;flex-direction:column;gap:6px;background:var(--bg-soft);padding:8px;border-radius:10px;min-width:0}.assistant-media-card img{width:100%;height:110px;object-fit:contain}.assistant-media-card small{overflow-wrap:anywhere;font-size:10px;color:var(--muted)}
 .assistant-custom-card{padding:13px;margin-bottom:12px;border:1px solid var(--line);border-radius:12px;background:var(--panel-muted)}.assistant-custom-card>.assistant-card-header{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}.assistant-card-heading{display:flex;align-items:center;gap:8px;min-width:0;flex:1 1 130px}.assistant-card-controls,.assistant-card-send-actions{display:flex;align-items:center;justify-content:flex-end;gap:5px;flex-wrap:wrap}.assistant-card-send-actions button{padding:5px 8px;font-size:11px}.assistant-card-drag-handle{flex:0 0 auto;cursor:grab;font-size:18px;padding:3px 8px!important;touch-action:none}.assistant-card-drag-handle:active{cursor:grabbing}.assistant-custom-card.assistant-card-dragging{opacity:.55;border-color:var(--accent)}.assistant-custom-card h3{margin:0;font-size:14px;overflow-wrap:anywhere}.assistant-custom-card small,.assistant-custom-card footer span{font-size:11px;color:var(--muted)}.assistant-custom-card footer{display:flex;align-items:center;gap:6px;margin-top:12px}.assistant-custom-card footer span{margin-right:auto}.assistant-card-materials{display:flex;flex-direction:column;gap:12px;margin-top:12px}.assistant-card-material{padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--panel-strong)}.assistant-card-text{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.8;user-select:text}.assistant-material-actions{display:flex;justify-content:flex-start;align-items:center;gap:8px;margin-top:8px}.assistant-material-actions small.material-used{color:var(--accent-bright)}.assistant-library-panel button.assistant-image-preview{width:100%;padding:0;border:0;background:transparent}.assistant-image-preview img{width:100%;max-height:220px;object-fit:contain;border-radius:8px}.assistant-media-viewer{position:absolute;inset:0;background:var(--panel-strong);z-index:2;padding:14px;display:flex;flex-direction:column;gap:10px;overflow:auto}.assistant-media-viewer>button{align-self:flex-end}.assistant-media-viewer img{width:100%;max-height:80%;object-fit:contain}.assistant-media-viewer p{font-size:12px;overflow-wrap:anywhere}
 .workspace-page.assistant-library-enabled .runtime-web-main{margin-right:84px}.workspace-page.assistant-library-open .runtime-web-main{margin-right:488px}@media(max-width:850px){.workspace-page.assistant-library-open .runtime-web-main{margin-right:0}.assistant-library-panel{width:calc(100vw - 136px)}}
+</style>
+<style>
+.workspace-page.conversation-export-menu-open:not(.assistant-library-open) .runtime-web-main.signal-workspace-main{margin-right:232px}
 </style>

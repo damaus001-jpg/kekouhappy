@@ -8,10 +8,10 @@ import WeeklyScheduleTimeline from './WeeklyScheduleTimeline.vue';
 import { buildAssistantCatalog } from '../assistant-material-catalog';
 import type { AssistantCatalog, AssistantMaterial } from '../../electron/assistant-material-types';
 import ConversationExportControl from './ConversationExportControl.vue';
-import type {ConversationExportMode} from '../../electron/conversation-export-types';
+import type {ConversationExportSelection} from '../../electron/conversation-export-types';
 
 const props = defineProps<{ open: boolean; workspace: boolean; collapsed: boolean; usedIds?:string[]; exportBusy?:boolean; exportStatus?:string }>();
-const emit = defineEmits<{ 'update:open': [value: boolean]; copy:[material:AssistantMaterial]; export:[mode:ConversationExportMode]; cancelExport:[] }>();
+const emit = defineEmits<{ 'update:open': [value: boolean]; copy:[material:AssistantMaterial]; export:[selection:ConversationExportSelection]; cancelExport:[];exportMenuOpen:[open:boolean] }>();
 const catalog=ref<AssistantCatalog>({persona:[],schedule:[],quotes:[]});
 void buildAssistantCatalog(emptyAssistantLibrary()).then(value=>catalog.value=value);
 const library = ref<AssistantLibrary>(emptyAssistantLibrary());
@@ -97,10 +97,10 @@ onMounted(load);
       @keydown.enter.prevent="emit('update:open',true)" @keydown.space.prevent="emit('update:open',true)">
       <img :src="icon" alt="" draggable="false"><span>小智加持</span>
     </button>
-    <ConversationExportControl v-if="workspace&&!open" floating :top="exportButtonTop" :busy="!!exportBusy" :status="exportStatus||''" @export="emit('export',$event)" @cancel="emit('cancelExport')" />
+    <ConversationExportControl v-if="workspace&&!open" floating :top="exportButtonTop" :busy="!!exportBusy" :status="exportStatus||''" @export="emit('export',$event)" @cancel="emit('cancelExport')" @menu-open="emit('exportMenuOpen',$event)" />
     <aside v-if="open" class="assistant-library-panel" :style="{ top: panelTop }" aria-label="小智加持资料助手">
       <header class="assistant-library-heading"><img :src="icon" alt=""><div><strong>小智加持</strong><small>{{kind==='persona'?'人物历程':kind==='schedule'?'一周行程':'本机资料'}}</small></div>
-        <ConversationExportControl v-if="workspace" :busy="!!exportBusy" :status="exportStatus||''" @export="emit('export',$event)" @cancel="emit('cancelExport')" />
+        <ConversationExportControl v-if="workspace" :busy="!!exportBusy" :status="exportStatus||''" @export="emit('export',$event)" @cancel="emit('cancelExport')" @menu-open="emit('exportMenuOpen',$event)" />
         <button type="button" aria-label="关闭资料助手" @click="emit('update:open',false)">×</button></header>
       <nav class="assistant-library-tabs" aria-label="资料模块"><button v-for="(label,key) in assistantLabels" :key="key" type="button" :disabled="busy" :class="{active:kind===key}" @click="switchKind(key)">{{label}}</button></nav>
       <div v-if="kind==='quotes'" class="assistant-library-toolbar"><button :disabled="busy" @click="importFile">导入</button><button :disabled="busy" @click="template">模板</button><button :disabled="busy" @click="exportFile">导出资料包</button><button class="primary" :disabled="busy" @click="save">{{busy?'处理中…':'保存修改'}}</button></div>

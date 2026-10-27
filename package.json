@@ -10,6 +10,8 @@
   "scripts": {
     "dev:assistant": "npm run build && node tools/start-assistant-development.cjs",
     "test:assistant-library": "node tools/test-assistant-library.mjs",
+    "test:customer-follow-up": "node tools/test-customer-follow-up.cjs",
+    "test:customer-follow-up-runtime": "node tools/test-customer-follow-up-runtime.cjs",
     "test:gpt-handoff": "node tools/test-gpt-handoff.mjs",
     "test:gpt-handoff-runtime": "node tools/test-gpt-handoff-runtime.cjs",
     "test:custom-assistant-runtime": "node tools/test-custom-assistant-runtime.cjs",
