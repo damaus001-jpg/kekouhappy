@@ -3,6 +3,8 @@ import type {
   RemoteGuardFinding,
   RemoteGuardState
 } from './shared.js';
+import { isIP } from 'node:net';
+import { createHash } from 'node:crypto';
 
 export type WindowsProcessRow = {
   imageName: string;
@@ -15,6 +17,7 @@ export type WindowsSessionRow = {
   sessionName: string;
   current: boolean;
   active: boolean;
+  sessionId?:number; userName?:string;
 };
 
 export type RemoteGuardScanInput = {
@@ -25,6 +28,8 @@ export type RemoteGuardScanInput = {
   processesAvailable: boolean;
   windowsSessionsAvailable: boolean;
   connections: RemoteGuardCoverage['connections'];
+  rdpPort?:number;
+  trustedSources?:import('./shared.js').RemoteGuardTrustedSource[];
 };
 
 export type RemoteGuardScanEvaluation = {
@@ -34,6 +39,30 @@ export type RemoteGuardScanEvaluation = {
   coverage: RemoteGuardCoverage;
   reason?: string;
 };
+
+export function normalizeRemoteAddress(value:string):string {
+  if(typeof value!=='string')return '';
+  let address=value.trim().replace(/^\[|\]$/g,'').toLowerCase();
+  if(address.startsWith('::ffff:')&&isIP(address.slice(7))===4)address=address.slice(7);
+  if(!isIP(address)||address==='0.0.0.0'||address==='::')return '';
+  if(isIP(address)===6){
+    const [host,scope]=address.split('%');
+    try{address=new URL(`http://[${host}]/`).hostname.slice(1,-1);}catch{return '';}
+    const mapped=address.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+    if(mapped){const a=parseInt(mapped[1],16),b=parseInt(mapped[2],16);return [a>>>8,a&255,b>>>8,b&255].join('.');}
+    if(scope)address+=`%${scope}`;
+  }
+  return address;
+}
+export function remoteSourceKey(kind:string,address:string,port?:number):string {
+  const source=normalizeRemoteAddress(address);
+  if(!['rdp','vnc'].includes(kind)||!source||typeof port!=='number'||!Number.isInteger(port)||port<1||port>65535)return '';
+  return createHash('sha256').update(JSON.stringify([kind,source,port])).digest('hex');
+}
+export function parseRdpListenerPort(output:string):number {
+  const match=output.match(/\bPortNumber\s+REG_DWORD\s+(0x[\da-f]+|\d+)/i);const port=match?Number(match[1]):0;
+  return Number.isInteger(port)&&port>0&&port<=65535?port:0;
+}
 
 const remoteHostProcesses: Readonly<Record<string, string>> = Object.freeze({
   'anydesk.exe': 'AnyDesk 远控程序正在运行',
@@ -118,10 +147,12 @@ export function parseWindowsSessions(output: string): WindowsSessionRow[] {
     if (!sessionName) continue;
     const disconnected = /\s(?:disc|down|listen|idle|断开|侦听|空闲)\s/i.test(` ${line} `);
     const explicitActive = /\s(?:active|运行中)\s/i.test(` ${line} `);
+    const fields=line.split(/\s+/);const idIndex=fields.findIndex((v,index)=>index>0&&/^\d+$/.test(v));
     rows.push({
       sessionName,
       current,
       active: current || (explicitActive && !disconnected)
+      ,sessionId:idIndex>=0?Number(fields[idIndex]):undefined,userName:idIndex>1?fields.slice(1,idIndex).join(' '):undefined
     });
   }
   return rows;
@@ -133,7 +164,7 @@ function portFromEndpoint(endpoint: string) {
 }
 
 export function parseEstablishedTcpConnections(output: string) {
-  const connections: Array<{ localPort: number | null; remotePort: number | null; processId: number }> = [];
+  const connections: Array<{ localAddress:string;remoteAddress:string;localPort: number | null; remotePort: number | null; processId: number }> = [];
   for (const line of output.split(/\r?\n/)) {
     const columns = line.trim().split(/\s+/);
     if (columns.length < 5 || columns[0]?.toUpperCase() !== 'TCP') continue;
@@ -141,6 +172,7 @@ export function parseEstablishedTcpConnections(output: string) {
     const processId = Number.parseInt(columns[4], 10);
     if (state !== 'ESTABLISHED' || !Number.isSafeInteger(processId) || processId <= 0) continue;
     connections.push({
+      localAddress:normalizeRemoteAddress((columns[1]||'').replace(/:\d+$/,'')),remoteAddress:normalizeRemoteAddress((columns[2]||'').replace(/:\d+$/,'')),
       localPort: portFromEndpoint(columns[1] || ''),
       remotePort: portFromEndpoint(columns[2] || ''),
       processId
@@ -166,20 +198,21 @@ export function evaluateRemoteGuardScan(input: RemoteGuardScanInput): RemoteGuar
   };
 
   const currentProcess = processes.find((row) => row.processId === input.currentProcessId);
-  if (currentProcess && isRdpSessionName(currentProcess.sessionName)) {
-    addFinding({
-      code: 'windows-rdp-current-session',
-      label: '当前工作区正在 Windows 远程桌面会话中运行',
-      severity: 'confirmed'
-    });
-  }
-
-  if (sessions.some((row) => row.active && isRdpSessionName(row.sessionName))) {
-    addFinding({
-      code: 'windows-rdp-active-session',
-      label: '检测到活动的 Windows 远程桌面会话',
-      severity: 'confirmed'
-    });
+  const activeRdp=sessions.filter(row=>row.active&&isRdpSessionName(row.sessionName));
+  const currentRdp=Boolean(currentProcess&&isRdpSessionName(currentProcess.sessionName)&&!sessions.some(row=>row.current&&!isRdpSessionName(row.sessionName)));
+  const rdpPort=input.rdpPort===undefined?3389:input.rdpPort;
+  const rdpConnections=connections.filter(c=>c.localPort===rdpPort);
+  const addConnection=(kind:'rdp'|'vnc',c:typeof connections[number],session?:WindowsSessionRow)=>{
+    const key=remoteSourceKey(kind,c.remoteAddress,c.localPort??undefined);
+    const id=createHash('sha256').update(JSON.stringify([kind,c.localAddress,c.localPort,c.remoteAddress,c.remotePort,c.processId])).digest('hex');
+    addFinding({code:`${kind}-connection:${id}`,label:kind==='rdp'?'活动的 Windows 远程桌面连接':'活动的 VNC 连接',severity:'confirmed',trusted:!!key&&!!input.trustedSources?.some(s=>s.key===key&&remoteSourceKey(s.kind,s.sourceAddress,s.servicePort)===key),
+      connection:{id,kind,sourceAddress:c.remoteAddress,localAddress:c.localAddress,localPort:c.localPort??undefined,remotePort:c.remotePort??undefined,processId:c.processId,sessionId:session?.sessionId,sessionName:session?.sessionName,userName:session?.userName,trustKey:key||undefined}});
+  };
+  if(activeRdp.length||currentRdp){
+    if(rdpConnections.length){for(const c of rdpConnections)addConnection('rdp',c,activeRdp.length===1?activeRdp[0]:undefined);}
+    else for(const row of activeRdp.length?activeRdp:[{sessionName:currentProcess!.sessionName,current:true,active:true,sessionId:currentProcess!.sessionId??undefined}]){
+      const id=`rdp-session:${row.sessionId??row.sessionName}`;addFinding({code:id,label:'活动的 Windows 远程桌面会话，实际来源暂不可读',severity:'confirmed',connection:{id,kind:'rdp',sourceAddress:'',sessionId:row.sessionId,sessionName:row.sessionName,userName:'userName' in row?row.userName:undefined}});
+    }
   }
 
   const uniqueRemoteProcesses = new Map<string, WindowsProcessRow>();
@@ -200,20 +233,11 @@ export function evaluateRemoteGuardScan(input: RemoteGuardScanInput): RemoteGuar
   }
 
   if (input.connections === 'available') {
-    const activeVnc = connections.some((connection) =>
-      connection.localPort !== null && connection.localPort >= 5800 && connection.localPort <= 5999
-    );
-    if (activeVnc) {
-      addFinding({
-        code: 'vnc-established-session',
-        label: '检测到 VNC 远控服务的活动连接',
-        severity: 'confirmed'
-      });
-    }
+    for(const connection of connections)if(connection.localPort!==null&&connection.localPort>=5800&&connection.localPort<=5999)addConnection('vnc',connection);
   }
 
   const result = Array.from(findings.values());
-  const threatActive = result.some((finding) => finding.severity === 'confirmed');
+  const threatActive = result.some((finding) => finding.severity === 'confirmed'&&!finding.trusted);
   const suspicious = result.some((finding) => finding.severity === 'suspicious');
   const degraded = !input.processesAvailable || !input.windowsSessionsAvailable || input.connections === 'unavailable';
   const state: RemoteGuardState = threatActive

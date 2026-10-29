@@ -6,7 +6,7 @@ import {
   evaluateRemoteGuardScan,
   parseEstablishedTcpConnections,
   parseWindowsSessions,
-  parseWindowsTasklist
+  parseWindowsTasklist,remoteSourceKey,normalizeRemoteAddress,parseRdpListenerPort
 } from '../dist-electron/remote-guard-core.js';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -48,7 +48,7 @@ const activeRdp = evaluateRemoteGuardScan({
 });
 assert.equal(activeRdp.state, 'alarm');
 assert.equal(activeRdp.threatActive, true);
-assert.ok(activeRdp.findings.some((finding) => finding.code === 'windows-rdp-active-session'));
+assert.ok(activeRdp.findings.some((finding) => finding.connection?.kind === 'rdp'));
 
 const disconnectedRdp = evaluateRemoteGuardScan({
   ...base,
@@ -73,7 +73,20 @@ const activeVnc = evaluateRemoteGuardScan({
   netstatOutput: 'TCP    0.0.0.0:5900    10.0.0.2:50123    ESTABLISHED    7000'
 });
 assert.equal(activeVnc.state, 'alarm');
-assert.ok(activeVnc.findings.some((finding) => finding.code === 'vnc-established-session'));
+assert.ok(activeVnc.findings.some((finding) => finding.connection?.kind === 'vnc'));
+const vnc=activeVnc.findings.find(f=>f.connection)?.connection;
+assert.equal(vnc.sourceAddress,'10.0.0.2');assert.equal(vnc.remotePort,50123);assert.equal(vnc.localPort,5900);assert.ok(vnc.trustKey);
+const remembered=[{key:vnc.trustKey,kind:'vnc',sourceAddress:'10.0.0.2',servicePort:5900,createdAt:1}];
+const trustedVnc=evaluateRemoteGuardScan({...base,tasklistOutput:consoleTasklist,qwinstaOutput:consoleSessions,connections:'available',netstatOutput:'TCP 10.0.0.5:5900 10.0.0.2:59999 ESTABLISHED 8000',trustedSources:remembered});assert.equal(trustedVnc.threatActive,false,'remembered peer remains trusted after PID/client port changes');
+const mixed=evaluateRemoteGuardScan({...base,tasklistOutput:consoleTasklist,qwinstaOutput:consoleSessions,connections:'available',netstatOutput:'TCP 10.0.0.5:5900 10.0.0.2:59999 ESTABLISHED 8000\nTCP 10.0.0.5:5900 10.0.0.3:51111 ESTABLISHED 8000',trustedSources:remembered});assert.equal(mixed.threatActive,true);assert.equal(mixed.findings.filter(f=>f.trusted).length,1,'trust never covers a different source');
+const rdpPeer=evaluateRemoteGuardScan({...base,tasklistOutput:rdpTasklist,qwinstaOutput:activeRdpSessions,connections:'available',rdpPort:3390,netstatOutput:'TCP 10.0.0.5:3390 10.0.0.9:50123 ESTABLISHED 7000'}).findings.find(f=>f.connection)?.connection;
+assert.equal(rdpPeer.sourceAddress,'10.0.0.9');assert.equal(rdpPeer.userName,'admin');assert.equal(rdpPeer.sessionId,2);
+assert.equal(remoteSourceKey('rdp','10.0.0.9',3390),rdpPeer.trustKey);assert.notEqual(remoteSourceKey('vnc','10.0.0.9',3390),rdpPeer.trustKey);
+assert.equal(parseRdpListenerPort('PortNumber REG_DWORD 0xd3d'),3389);assert.equal(parseRdpListenerPort('bad'),0);
+assert.equal(normalizeRemoteAddress('[::FFFF:10.0.0.2]'),'10.0.0.2');assert.equal(normalizeRemoteAddress('2001:0db8::1'),'2001:db8::1');assert.equal(remoteSourceKey('vnc','not-an-ip',5900),'');
+assert.equal(normalizeRemoteAddress('[fe80:0000::1%12]'),'fe80::1%12','Windows scoped IPv6 addresses remain readable without throwing');
+assert.equal(evaluateRemoteGuardScan({...base,tasklistOutput:rdpTasklist,qwinstaOutput:consoleSessions}).threatActive,false,'stale process cache cannot turn a current console session into RDP');
+assert.equal(activeRdp.findings.find(f=>f.connection)?.connection.trustKey,undefined,'a session number alone cannot become a persistent trusted source');
 
 const outboundVncViewer = evaluateRemoteGuardScan({
   ...base,
@@ -98,7 +111,7 @@ const rendererSource = fs.readFileSync(path.join(projectRoot, 'src', 'App.vue'),
 const preloadSource = fs.readFileSync(path.join(projectRoot, 'electron', 'preload.cjs'), 'utf8');
 assert.match(mainSource, /const remoteGuardScanIntervalMs = 8_000;/, 'guard must scan every 8 seconds');
 assert.match(mainSource, /processScanIntervalMs: remoteGuardProcessScanIntervalMs/, 'slow process scan interval must be visible and packaged');
-assert.match(mainSource, /const remoteGuardWindowsLockDelayMs = 3_000;/, 'Windows lock delay must be 3 seconds');
+assert.match(mainSource, /const remoteGuardWindowsLockDelayMs = 5 \* 60_000;/, 'every new connection must allow five minutes');
 assert.match(mainSource, /scheduleRemoteGuardWindowsLock\(\)[\s\S]*requestWindowsWorkstationLock/, 'main process must own the lock countdown');
 assert.match(mainSource, /remoteGuardIncidentLatched[\s\S]*releaseWorkspaceVisibilityLock/, 'incident must gate workspace release');
 assert.match(

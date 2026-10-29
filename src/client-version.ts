@@ -1,2 +1,2 @@
-// Four-part client release version; package.json keeps the required SemVer version.
-export const clientVersion = '1.6.16';
+// Client release version shared with the application and installer.
+export const clientVersion = '1.16.18';

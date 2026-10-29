@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import DevelopmentDiagnostics from './DevelopmentDiagnostics.vue';
+import RemoteGuardConnections from './components/RemoteGuardConnections.vue';
 import AssistantLibraryPanel from './components/CustomAssistantPanel.vue';
 import { buildAssistantCatalog } from './assistant-material-catalog';
 import { buildAssistantRuntimeScript } from './assistant-material-runtime';
@@ -420,6 +421,7 @@ const remoteGuardPanelVisible = ref(false);
 const remoteGuardScanning = ref(false);
 const remoteGuardRecoveryPrompt = ref(false);
 const remoteGuardMessage = ref('');
+const remoteGuardActionBusy=ref(false);
 const lockScreenMode = ref<'setup' | 'unlock' | 'reset'>('setup');
 const lockKeypadVisible = ref(false);
 const lockPinDraft = ref('');
@@ -1719,23 +1721,51 @@ async function scanRemoteGuardNow() {
   }
 }
 
+async function performRemoteGuardAction(action:()=>Promise<import('../electron/shared').RemoteGuardActionResult>){
+  if(remoteGuardActionBusy.value)return;remoteGuardActionBusy.value=true;remoteGuardMessage.value='';
+  try{const result=await action();applyRemoteGuardStatus(result.status);if(!result.ok)remoteGuardMessage.value=result.reason||'操作未完成，请重新巡检';return result;}catch(e){remoteGuardMessage.value=e instanceof Error?e.message:'操作未完成，请重试';}finally{remoteGuardActionBusy.value=false;}
+}
+async function trustRemoteConnection(id:string){
+  const finding=remoteGuardStatus.value?.findings.find(f=>f.connection?.id===id);
+  if(!finding?.connection?.trustKey)return;
+  if(!window.confirm(`记住并信任这个来源？\n${finding.connection.kind==='rdp'?'Windows 远程桌面':'VNC'} · ${finding.connection.sourceAddress} · 本机端口 ${finding.connection.localPort}\n以后相同 IP、类型和服务端口会自动信任。`))return;
+  const result=await performRemoteGuardAction(()=>window.chatTranslator.trustRemoteGuardConnection(id));
+  if(result?.ok&&!result.status.threatActive&&result.status.incidentLatched)await beginRemoteGuardRecovery();
+}
+async function forgetRemoteSource(key:string){if(window.confirm('取消这个来源的自动信任？它当前仍在连接时会重新提示，并预留5分钟选择。'))await performRemoteGuardAction(()=>window.chatTranslator.forgetRemoteGuardSource(key));}
+async function extendRemoteDecision(){await performRemoteGuardAction(()=>window.chatTranslator.extendRemoteGuardDecision());}
+async function lockRemoteNow(){await performRemoteGuardAction(()=>window.chatTranslator.lockRemoteGuardNow());}
+function remoteDecisionKey(event:KeyboardEvent){
+  if(event.key==='Escape'){event.preventDefault();return;}
+  if(event.key!=='Tab')return;
+  const controls=Array.from((event.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>('button:not(:disabled)'));
+  const first=controls[0],last=controls[controls.length-1];
+  if(!controls.some(c=>c===document.activeElement)||event.shiftKey&&document.activeElement===first){event.preventDefault();(event.shiftKey?last:first)?.focus();}
+  else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus();}
+}
+
 async function beginRemoteGuardRecovery() {
   const status = remoteGuardStatus.value;
   if (!status?.incidentLatched || status.threatActive) return;
-  if (!lockScreenStatus.value) await initializeLockScreen();
-  if (lockScreenStatus.value?.enabled) {
-    remoteGuardRecoveryPrompt.value = true;
-    await showLockScreen('unlock');
-    return;
+  try {
+    if (!lockScreenStatus.value) await initializeLockScreen();
+    if (lockScreenStatus.value?.enabled) {
+      remoteGuardRecoveryPrompt.value = true;
+      await showLockScreen('unlock');
+      return;
+    }
+    const result = await window.chatTranslator?.acknowledgeRemoteGuardIncident?.();
+    if (!result?.ok) {
+      remoteGuardMessage.value = result?.reason || '工作区暂时不能恢复';
+      applyRemoteGuardStatus(result?.status);
+      return;
+    }
+    applyRemoteGuardStatus(result.status);
+    scheduleSignalWorkspaceSyncBurst();
+  } catch (error) {
+    remoteGuardRecoveryPrompt.value = false;
+    remoteGuardMessage.value = error instanceof Error ? error.message : '恢复失败，请重试';
   }
-  const result = await window.chatTranslator?.acknowledgeRemoteGuardIncident?.();
-  if (!result?.ok) {
-    remoteGuardMessage.value = result?.reason || '工作区暂时不能恢复';
-    applyRemoteGuardStatus(result?.status);
-    return;
-  }
-  applyRemoteGuardStatus(result.status);
-  scheduleSignalWorkspaceSyncBurst();
 }
 
 function dismissLockGuide() {
@@ -13126,6 +13156,7 @@ onUnmounted(() => {
         </li>
       </ul>
       <p v-else class="remote-guard-empty">本轮没有发现已知远控迹象。</p>
+      <RemoteGuardConnections :findings="remoteGuardStatus?.findings||[]" :sources="remoteGuardStatus?.trustedSources||[]" :busy="remoteGuardActionBusy" manage @trust="trustRemoteConnection" @forget="forgetRemoteSource" />
       <p v-if="remoteGuardStatus?.reason || remoteGuardMessage" class="remote-guard-reason">
         {{ remoteGuardMessage || remoteGuardStatus?.reason }}
       </p>
@@ -13283,22 +13314,24 @@ onUnmounted(() => {
     v-if="remoteGuardStatus?.incidentLatched && !remoteGuardRecoveryPrompt"
     class="remote-guard-alarm-screen"
     :class="themeClass"
-    @keydown.capture.prevent.stop
-    @keyup.capture.prevent.stop
+    @keydown.stop="remoteDecisionKey"
+    @keyup.stop
     @pointerdown.self.prevent.stop
     @click.stop
   >
     <section class="remote-guard-alarm-card">
       <div class="remote-guard-alarm-crest">⚡️</div>
       <span>WINDOWS SECURITY ALERT</span>
-      <h1>{{ remoteGuardStatus.threatActive ? '发现远程连接' : '远控迹象已消失' }}</h1>
+      <h1>{{ remoteGuardStatus.threatActive ? '发现未信任连接' : '未信任连接已解除' }}</h1>
       <p v-if="remoteGuardStatus.threatActive">
-        Signal、WhatsApp、Telegram 已被遮罩并锁定。
-        <template v-if="remoteGuardLockCountdown">Windows 将在 {{ remoteGuardLockCountdown }} 秒后锁定。</template>
+        聊天窗口已遮罩，每个新连接预留5分钟选择，也可以继续延长。
+        <template v-if="remoteGuardLockCountdown">本轮剩余 {{ remoteGuardLockCountdown }} 秒，超时将锁定 Windows。</template>
         <template v-else-if="remoteGuardStatus.windowsLockState === 'requested'">正在请求 Windows 锁屏。</template>
         <template v-else-if="remoteGuardStatus.windowsLockState === 'confirmed'">Windows 已进入锁定状态。</template>
       </p>
-      <p v-else>聊天内容仍保持锁定。请确认远控来源已经断开，再进行本机安全验证。</p>
+      <p v-else>连接已断开或设为可信。请按现有锁屏验证流程恢复工作区。</p>
+      <RemoteGuardConnections :findings="remoteGuardStatus.findings" :busy="remoteGuardActionBusy" @trust="trustRemoteConnection" />
+      <div v-if="remoteGuardStatus.threatActive" class="remote-guard-decision-actions"><button type="button" :disabled="remoteGuardActionBusy" @click="extendRemoteDecision">再给5分钟</button><button type="button" :disabled="remoteGuardActionBusy" @click="lockRemoteNow">立即锁定 Windows</button><button type="button" :disabled="remoteGuardScanning||remoteGuardActionBusy" @click="scanRemoteGuardNow">重新巡检</button></div>
       <ul v-if="remoteGuardStatus.findings.length">
         <li v-for="finding in remoteGuardStatus.findings" :key="finding.code">{{ finding.label }}</li>
       </ul>

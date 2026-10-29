@@ -637,7 +637,15 @@ export type RemoteGuardFinding = {
   label: string;
   severity: 'suspicious' | 'confirmed';
   processName?: string;
+  trusted?: boolean;
+  connection?: RemoteGuardConnection;
 };
+export type RemoteGuardConnection = {
+  id:string; kind:'rdp'|'vnc'; sourceAddress:string; localAddress?:string;
+  localPort?:number; remotePort?:number; processId?:number;
+  sessionId?:number; sessionName?:string; userName?:string; trustKey?:string;
+};
+export type RemoteGuardTrustedSource = {key:string;kind:'rdp'|'vnc';sourceAddress:string;servicePort:number;createdAt:number};
 
 export type RemoteGuardCoverage = {
   windowsSessions: boolean;
@@ -661,6 +669,7 @@ export type RemoteGuardStatus = {
   windowsLockScheduledAt?: number;
   windowsLockAttemptedAt?: number;
   findings: RemoteGuardFinding[];
+  trustedSources?:RemoteGuardTrustedSource[];
   coverage: RemoteGuardCoverage;
   reason?: string;
 };
@@ -859,6 +868,10 @@ export type ElectronApi = {
   getRemoteGuardStatus: () => Promise<RemoteGuardStatus>;
   scanRemoteGuardNow: () => Promise<RemoteGuardStatus>;
   acknowledgeRemoteGuardIncident: () => Promise<RemoteGuardActionResult>;
+  trustRemoteGuardConnection:(id:string)=>Promise<RemoteGuardActionResult>;
+  forgetRemoteGuardSource:(key:string)=>Promise<RemoteGuardActionResult>;
+  extendRemoteGuardDecision:()=>Promise<RemoteGuardActionResult>;
+  lockRemoteGuardNow:()=>Promise<RemoteGuardActionResult>;
   setWindowTheme: (theme: AppTheme) => Promise<void>;
   readClipboardText: () => Promise<string>;
   writeClipboardText: (text: string) => Promise<void>;

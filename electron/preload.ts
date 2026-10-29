@@ -130,6 +130,10 @@ const api: ElectronApi = {
   getRemoteGuardStatus: () => ipcRenderer.invoke('remote-guard:status'),
   scanRemoteGuardNow: () => ipcRenderer.invoke('remote-guard:scan-now'),
   acknowledgeRemoteGuardIncident: () => ipcRenderer.invoke('remote-guard:acknowledge'),
+  trustRemoteGuardConnection: id => ipcRenderer.invoke('remote-guard:trust',id),
+  forgetRemoteGuardSource: key => ipcRenderer.invoke('remote-guard:forget',key),
+  extendRemoteGuardDecision: () => ipcRenderer.invoke('remote-guard:extend'),
+  lockRemoteGuardNow: () => ipcRenderer.invoke('remote-guard:lock-now'),
   setWindowTheme: (theme: 'blackGold' | 'pink' | 'murongPurple' | 'clearWaterBlue') =>
     ipcRenderer.invoke('window:set-theme', theme),
   readClipboardText: () => ipcRenderer.invoke('clipboard:read-text'),

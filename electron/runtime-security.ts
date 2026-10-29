@@ -76,12 +76,15 @@ export async function inspectRuntimeBinding(
   }
 
   let file: ProtectedRuntimeBindingFile | undefined;
+  let failureReason = '绑定文件无法解析或格式不完整。';
   try {
     file = validateProtectedFile(JSON.parse(raw) as ProtectedRuntimeBindingFile);
+    failureReason = '绑定文件签名校验失败，文件可能损坏或内容不完整。';
     const signedPayload = verifySignedRuntimeBinding(file);
     if (!safeStorage.isEncryptionAvailable()) {
       return { state: 'foreign', file, reason: 'Windows DPAPI is unavailable.' };
     }
+    failureReason = 'Windows 无法解密绑定文件，请核对原 Windows 用户、系统加密环境和文件完整性。';
     const protectedPayload = validateRuntimeBindingPayload(JSON.parse(
       safeStorage.decryptString(Buffer.from(file.protectedPayload, 'base64'))
     ) as RuntimeBindingPayload);
@@ -105,7 +108,7 @@ export async function inspectRuntimeBinding(
     }
     return { state: 'local', file, payload: signedPayload };
   } catch {
-    return { state: 'foreign', file, reason: 'Runtime binding cannot be verified on this machine.' };
+    return { state: 'foreign', file, reason: failureReason };
   }
 }
 

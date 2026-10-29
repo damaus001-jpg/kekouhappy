@@ -167,6 +167,8 @@ import {
   remoteGuardProcessScanIntervalMs,
   requestWindowsWorkstationLock
 } from './remote-guard.js';
+import { RemoteGuardDecisionWindow } from './remote-guard-decision.js';
+import { readRemoteGuardTrustedSources, rememberRemoteGuardSource, forgetRemoteGuardSource } from './remote-guard-trust.js';
 import { TranslationDiagnostics } from './translation-diagnostics.js';
 import { transcribeLocalSpeechAudio, transcribeLocalSpeechFile } from './local-speech-recognition.js';
 
@@ -468,7 +470,8 @@ function setTaskbarUnreadCount(value: unknown) {
   applyTaskbarUnreadAttention();
 }
 const remoteGuardScanIntervalMs = 8_000;
-const remoteGuardWindowsLockDelayMs = 3_000;
+const remoteGuardWindowsLockDelayMs = 5 * 60_000;
+const remoteGuardDecision=new RemoteGuardDecisionWindow();
 let remoteGuardStatus: RemoteGuardStatus = {
   enabled: process.platform === 'win32',
   state: 'starting',
@@ -2264,6 +2267,13 @@ function assertClientRuntimeAllowed() {
   clientLicenseManager.assertRuntimeAllowed();
 }
 
+function assertLockScreenRecoveryAllowed() {
+  // A cleared remote incident must be recoverable before license activation.
+  // Normal lock operations still require runtime authorization.
+  if (remoteGuardIncidentLatched && !remoteGuardThreatActive) return;
+  assertClientRuntimeAllowed();
+}
+
 process.on('uncaughtException', showFatalStartupError);
 process.on('unhandledRejection', showFatalStartupError);
 
@@ -2325,21 +2335,36 @@ async function initializeUserDataPath() {
     return true;
   }
 
+  let savedDataPath = '';
+  let selectReplacementLocation = false;
   try {
     const raw = (await readFile(storageBootstrapPath(), 'utf8')).replace(/^\uFEFF/, '');
     const parsed = JSON.parse(raw) as { dataPath?: unknown };
-    if (typeof parsed.dataPath === 'string' && parsed.dataPath.trim()) {
-      const dataPath = parsed.dataPath.trim();
-      await mkdir(dataPath, { recursive: true });
-      applyUserDataPath(dataPath);
-      return true;
-    }
+    if (typeof parsed.dataPath === 'string') savedDataPath = parsed.dataPath.trim();
   } catch {
-    // First launch continues to existing-data detection or storage selection.
+    // A fresh installation continues to existing-data detection below.
+  }
+  while (savedDataPath) {
+    try {
+      await mkdir(savedDataPath, { recursive: true });
+      applyUserDataPath(savedDataPath);
+      return true;
+    } catch (error) {
+      const choice = await dialog.showMessageBox({
+        type: 'warning', title: appDisplayName,
+        message: '原数据保存位置无法访问',
+        detail: `数据目录：${savedDataPath}\n${error instanceof Error ? error.message : String(error)}\n\n安装程序的位置与数据目录独立。请恢复磁盘或远程映射后重试；选择其他位置不会自动迁移原目录的数据，原账号和聊天记录仍保留在原目录。`,
+        buttons: ['恢复连接后重试', '选择其他数据位置', '退出'], defaultId: 0, cancelId: 2
+      });
+      if (choice.response === 0) continue;
+      if (choice.response !== 1) return false;
+      selectReplacementLocation = true;
+      break;
+    }
   }
 
   const existingDataMarkers = ['config.json', 'profiles.json', 'Partitions', 'SignalInstances'];
-  for (const marker of existingDataMarkers) {
+  for (const marker of selectReplacementLocation ? [] : existingDataMarkers) {
     if (await pathExists(join(defaultUserDataPath, marker))) {
       await saveStorageBootstrap(defaultUserDataPath);
       applyUserDataPath(defaultUserDataPath);
@@ -3966,6 +3991,24 @@ function buildFingerprint(index: number): FingerprintProfile {
 }
 
 let creatingOpenSms: Promise<ChatProfile> | null = null;
+function profileStorageError(error: unknown, targetPath: string): Error {
+  const code = (error as NodeJS.ErrnoException)?.code;
+  const reason = code === 'ENOSPC' ? '磁盘空间不足'
+    : code === 'EACCES' || code === 'EPERM' || code === 'EROFS' ? '目录没有写入权限或磁盘为只读'
+    : code === 'ENOENT' || code === 'ENOTDIR' || code === 'ENODEV' ? '目录、盘符或映射目标当前不可用'
+    : '目录无法访问';
+  return new Error(`创建账号失败：${reason}${code ? `（${code}）` : ''}。\n当前数据目录：${app.getPath('userData')}\n访问路径：${targetPath}\n请先恢复原磁盘或网络映射，再重试；如需迁移，请恢复原目录后通过“设置 → 更改数据目录”操作。`);
+}
+
+async function assertProfileStorageAvailable() {
+  const dataPath = app.getPath('userData');
+  try {
+    if (!(await stat(dataPath)).isDirectory()) throw Object.assign(new Error('Data root is not a directory'), { code: 'ENOTDIR' });
+  } catch (error) {
+    throw profileStorageError(error, dataPath);
+  }
+}
+
 async function createProfile(platform: Platform, name: string, group: string): Promise<ChatProfile> {
   if(platform!=='opensms')return createProfileRecord(platform,name,group);
   if(creatingOpenSms)return creatingOpenSms;
@@ -3973,6 +4016,8 @@ async function createProfile(platform: Platform, name: string, group: string): P
   try{return await creatingOpenSms;}finally{creatingOpenSms=null;}
 }
 async function createProfileRecord(platform: Platform, name: string, group: string): Promise<ChatProfile> {
+  // A disconnected data drive must not be mistaken for a fresh empty config.
+  await assertProfileStorageAvailable();
   const config = await readConfig();
   const nextName = name.trim();
   const nextGroup = group.trim();
@@ -3993,7 +4038,11 @@ async function createProfileRecord(platform: Platform, name: string, group: stri
   };
 
   if (profile.signalDataDir) {
-    await mkdir(profile.signalDataDir, { recursive: true });
+    try {
+      await mkdir(profile.signalDataDir, { recursive: true });
+    } catch (error) {
+      throw profileStorageError(error, profile.signalDataDir);
+    }
     if (activeRuntimeSecurity) {
       await ensureSignalInstanceBinding(
         profile.signalDataDir,
@@ -4199,20 +4248,42 @@ async function beginStorageLocationChange() {
   }
 }
 
-async function beginForeignCloneReset(bindingFile?: { dataRootId?: string; suiteId?: string }) {
+async function runtimeRecoveryDiagnostic(reason: string) {
+  const files = await Promise.all(['device-identity.dat', 'runtime-binding.dat', 'license.dat', 'client-account.json'].map(async name => {
+    try {
+      const info = await stat(join(app.getPath('userData'), name));
+      return `${name}：${info.isFile() ? `${info.size} 字节，修改时间 ${info.mtime.toISOString()}` : '路径不是文件'}`;
+    } catch (error) {
+      return `${name}：${(error as NodeJS.ErrnoException).code === 'ENOENT' ? '不存在' : `无法访问（${(error as NodeJS.ErrnoException).code || '未知错误'}）`}`;
+    }
+  }));
+  return `客户端版本：${app.getVersion()}\n数据目录：${app.getPath('userData')}\n校验原因：${reason}\n${files.join('\n')}\n\n诊断信息不包含密钥或授权文件内容。请先备份现有数据，不要反复初始化。`;
+}
+
+async function beginForeignCloneReset(bindingFile?: { dataRootId?: string; suiteId?: string }, diagnosticReason = '设备身份或运行绑定校验失败') {
   if (userDataOverride && process.env.MAOYI_ALLOW_CLONE_RESET_FOR_OVERRIDE !== '1') {
     throw new Error('隔离数据目录被识别为外来克隆；开发环境未启用自动初始化');
   }
   if (!(runtimeLoggingEnabled && process.env.MAOYI_CLONE_RESET_TEST_AUTOCONFIRM === '1')) {
-    dialog.showMessageBoxSync({
-      type: 'warning',
-      title: appDisplayName,
-      message: '缺少启动器，正在初始化',
-      detail: '检测到来自其他电脑的应用数据。本机复制数据将被清除，程序随后退出。',
-      buttons: ['确定'],
-      defaultId: 0,
-      noLink: true
+    const detail = await runtimeRecoveryDiagnostic(diagnosticReason);
+    let choice: number;
+    do {
+      choice = dialog.showMessageBoxSync({
+        type: 'warning', title: appDisplayName,
+        message: '数据安全校验未通过，已停止启动', detail,
+        buttons: ['复制诊断信息', '退出并保留数据', '清空数据并初始化'],
+        defaultId: 1, cancelId: 1, noLink: true
+      });
+      if (choice === 0) clipboard.writeText(detail);
+    } while (choice === 0);
+    if (choice !== 2) { app.quit(); return; }
+    const confirmation = dialog.showMessageBoxSync({
+      type: 'warning', title: appDisplayName,
+      message: '确定清空当前数据目录？',
+      detail: `将删除 ${app.getPath('userData')} 中的账号、聊天、客户资料和配置。此操作不能撤销。恢复误删数据时，请取消并先备份。`,
+      buttons: ['确认清空', '取消并保留数据'], defaultId: 1, cancelId: 1, noLink: true
     });
+    if (confirmation !== 0) { app.quit(); return; }
   }
   const { planPath } = await createCloneResetPlan({
     targetRoot: app.getPath('userData'),
@@ -4285,7 +4356,7 @@ async function verifyRuntimeCloneState() {
         return true;
       }
     }
-    await beginForeignCloneReset(inspection.file);
+    await beginForeignCloneReset(inspection.file, inspection.reason);
     return false;
   }
   const authorization = clientLicenseManager.getStatus();
@@ -4294,7 +4365,7 @@ async function verifyRuntimeCloneState() {
     containsExistingData &&
     (authorization.state === 'device-error' || clientLicenseManager.wasDeviceIdentityCreatedThisRun())
   ) {
-    await beginForeignCloneReset();
+    await beginForeignCloneReset(undefined, `运行绑定文件缺失；${authorization.reason || (clientLicenseManager.wasDeviceIdentityCreatedThisRun() ? '本次启动重新生成了设备身份' : '设备身份不可用')}`);
     return false;
   }
   return true;
@@ -4922,7 +4993,7 @@ function remoteGuardAlarmDocument() {
     strong{color:#ffd9a0}@keyframes pulse{from{transform:scale(.994);box-shadow:0 0 0 8px rgba(255,61,76,.07),0 32px 100px rgba(0,0,0,.72)}to{transform:scale(1);box-shadow:0 0 0 16px rgba(255,61,76,.14),0 32px 120px rgba(126,0,18,.62)}}
   </style>
 </head>
-<body><main><div class="crest">⚡️</div><h1>安全警报</h1><h2>十万伏特发现远程连接</h2><p>聊天窗口已经隐藏，系统将在 <strong>3 秒后锁定 Windows</strong><br>请在本机确认远控来源并断开可疑连接</p></main></body>
+<body><main><div class="crest">⚡️</div><h1>安全警报</h1><h2>十万伏特发现未信任的远程连接</h2><p>聊天窗口已经隐藏，请到<strong>皮卡丘主窗口</strong>选择可信来源<br>默认预留 5 分钟，可在主窗口继续延长</p></main></body>
 </html>`;
 }
 
@@ -4934,9 +5005,12 @@ function destroyRemoteGuardAlarmWindows() {
 }
 
 function showRemoteGuardAlarmWindows() {
-  if (!app.isReady() || remoteGuardAlarmWindows.size > 0) return;
+  if (!app.isReady()) return;
+  const mainDisplay=mainWindow&&!mainWindow.isDestroyed()?screen.getDisplayMatching(mainWindow.getBounds()).id:undefined;
+  for(const window of remoteGuardAlarmWindows)if(!window.isDestroyed()&&screen.getDisplayMatching(window.getBounds()).id===mainDisplay)window.destroy();
   const alarmUrl = `data:text/html;charset=utf-8,${encodeURIComponent(remoteGuardAlarmDocument())}`;
   for (const display of screen.getAllDisplays()) {
+    if(display.id===mainDisplay||[...remoteGuardAlarmWindows].some(window=>!window.isDestroyed()&&screen.getDisplayMatching(window.getBounds()).id===display.id))continue;
     const alarmWindow = new BrowserWindow({
       x: display.bounds.x,
       y: display.bounds.y,
@@ -5000,7 +5074,7 @@ function scheduleRemoteGuardWindowsLock() {
     !remoteGuardThreatActive ||
     !remoteGuardIncidentLatched
   ) return;
-  const windowsLockScheduledAt = Date.now() + remoteGuardWindowsLockDelayMs;
+  const windowsLockScheduledAt = remoteGuardDecision.deadline || Date.now() + remoteGuardWindowsLockDelayMs;
   remoteGuardStatus = {
     ...remoteGuardStatus,
     windowsLockState: 'scheduled',
@@ -5029,7 +5103,7 @@ function scheduleRemoteGuardWindowsLock() {
         notifyRemoteGuardStatus();
       }
     });
-  }, remoteGuardWindowsLockDelayMs);
+  }, Math.max(0,windowsLockScheduledAt-Date.now()));
 }
 
 function beginRemoteGuardIncident() {
@@ -5055,6 +5129,7 @@ function clearRemoteGuardIncident() {
   if (remoteGuardThreatActive) return false;
   const previousRuntimeReason = remoteGuardRuntimeReason;
   remoteGuardIncidentLatched = false;
+  remoteGuardDecision.clear();
   remoteGuardRuntimeReason = '';
   if (remoteGuardWindowsLockTimer) {
     clearTimeout(remoteGuardWindowsLockTimer);
@@ -5079,10 +5154,17 @@ async function runRemoteGuardScan(forceProcessRefresh = false) {
   if (remoteGuardScanPromise) return remoteGuardScanPromise;
   remoteGuardScanPromise = (async () => {
     const startedAt = Date.now();
-    const evaluation = await inspectWindowsRemoteAccess(process.pid, { forceProcessRefresh });
+    let trustedSources:import('./shared.js').RemoteGuardTrustedSource[]=[];
+    let trustError='';
+    try{trustedSources=await readRemoteGuardTrustedSources();}catch{trustError='本机可信来源读取失败，当前连接仍按未信任处理';}
+    const evaluation = await inspectWindowsRemoteAccess(process.pid, { forceProcessRefresh,trustedSources });
     const checkedAt = Date.now();
+    const previousDeadline=remoteGuardDecision.deadline;
+    remoteGuardDecision.observe(evaluation.findings.filter(f=>f.severity==='confirmed'&&!f.trusted).map(f=>f.connection?.id||f.code),checkedAt);
+    if(previousDeadline!==remoteGuardDecision.deadline&&remoteGuardWindowsLockTimer){clearTimeout(remoteGuardWindowsLockTimer);remoteGuardWindowsLockTimer=null;}
     remoteGuardThreatActive = evaluation.threatActive;
     remoteGuardLastClearState = evaluation.state;
+    remoteGuardStatus={...remoteGuardStatus,findings:evaluation.findings,trustedSources,threatActive:evaluation.threatActive};
 
     if (evaluation.threatActive) {
       if (!remoteGuardIncidentLatched) beginRemoteGuardIncident();
@@ -5098,6 +5180,7 @@ async function runRemoteGuardScan(forceProcessRefresh = false) {
       }
       if (remoteGuardIncidentLatched) {
         destroyRemoteGuardAlarmWindows();
+        stopRemoteGuardAlarmSound();
         focusMainWindowForRemoteGuardRecovery();
       }
     }
@@ -5120,7 +5203,7 @@ async function runRemoteGuardScan(forceProcessRefresh = false) {
       windowsLockScheduledAt: evaluation.threatActive ? remoteGuardStatus.windowsLockScheduledAt : undefined,
       findings: evaluation.findings,
       coverage: evaluation.coverage,
-      reason: remoteGuardRuntimeReason || evaluation.reason
+      reason: remoteGuardRuntimeReason || trustError || evaluation.reason
     };
     notifyRemoteGuardStatus();
     return remoteGuardStatus;
@@ -5128,6 +5211,24 @@ async function runRemoteGuardScan(forceProcessRefresh = false) {
     remoteGuardScanPromise = null;
   });
   return remoteGuardScanPromise;
+}
+
+async function refreshRemoteGuardForAction(){if(remoteGuardScanPromise)await remoteGuardScanPromise;return runRemoteGuardScan(true);}
+async function trustRemoteGuardConnection(id:string):Promise<RemoteGuardActionResult>{
+  const status=await refreshRemoteGuardForAction();
+  const finding=status.findings.find(f=>f.connection?.id===id&&f.severity==='confirmed');
+  if(!finding?.connection?.trustKey)return {ok:false,reason:'连接已变化或实际来源不可读，请重新巡检后选择',status};
+  try{await rememberRemoteGuardSource(finding.connection);return {ok:true,status:await refreshRemoteGuardForAction()};}catch(e){return {ok:false,reason:e instanceof Error?e.message:'可信来源保存失败',status:remoteGuardStatus};}
+}
+async function removeRemoteGuardTrust(key:string):Promise<RemoteGuardActionResult>{
+  try{await forgetRemoteGuardSource(key);return {ok:true,status:await refreshRemoteGuardForAction()};}catch(e){return {ok:false,reason:e instanceof Error?e.message:'取消信任失败',status:remoteGuardStatus};}
+}
+async function adjustRemoteGuardDecision(immediate=false):Promise<RemoteGuardActionResult>{
+  await refreshRemoteGuardForAction();
+  if(!remoteGuardThreatActive)return {ok:false,reason:'当前没有等待处理的未信任连接',status:remoteGuardStatus};
+  if(remoteGuardWindowsLockTimer){clearTimeout(remoteGuardWindowsLockTimer);remoteGuardWindowsLockTimer=null;}
+  if(immediate)remoteGuardDecision.lockNow(Date.now());else remoteGuardDecision.extend(Date.now());
+  scheduleRemoteGuardWindowsLock();return {ok:true,status:remoteGuardStatus};
 }
 
 async function acknowledgeRemoteGuardIncident(): Promise<RemoteGuardActionResult> {
@@ -5168,6 +5269,7 @@ async function startRemoteGuard() {
       windowsLockScheduledAt: undefined
     };
     if (remoteGuardThreatActive && remoteGuardIncidentLatched) {
+      remoteGuardDecision.extend(Date.now());
       showRemoteGuardAlarmWindows();
       scheduleRemoteGuardWindowsLock();
     }
@@ -6623,6 +6725,8 @@ async function stopAllSignalProfilesForQuit() {
   signalControlClients.clear();
   signalControlSessions.clear();
 
+  // Login cancellation and startup failures must be able to quit without a license.
+  if (!clientLicenseManager?.isRuntimeAllowed()) return;
   const config = await readConfig();
   const dataDirs = config.profiles
     .filter((profile) => profile.platform === 'signal')
@@ -8350,8 +8454,8 @@ function registerIpc() {
   });
   trustedHandle('system:get-memory-status', false, () => getMemoryStatus());
   trustedHandle('taskbar:set-unread-count', true, (_event, count: unknown) => setTaskbarUnreadCount(count));
-  trustedHandle('lock-screen:status', true, () => getLockScreenStatus());
-  trustedHandle('lock-screen:engage', true, () => engageWorkspaceVisibilityLock());
+  trustedHandle('lock-screen:status', false, () => { assertLockScreenRecoveryAllowed(); return getLockScreenStatus(); });
+  trustedHandle('lock-screen:engage', false, () => { assertLockScreenRecoveryAllowed(); return engageWorkspaceVisibilityLock(); });
   trustedHandle('lock-screen:check-network-offline', true, () => checkNetworkOffline());
   trustedHandle('lock-screen:authorize-pin-change', true, (event, mode: LockScreenPinChangeMode) => {
     if (mode !== 'setup' && mode !== 'reset' && mode !== 'upgrade') {
@@ -8366,10 +8470,14 @@ function registerIpc() {
       assertText(token, 'Lock credential authorization', 256)
     )
   );
-  trustedHandle('lock-screen:unlock', true, (_event, pin: string) => unlockLockScreen(assertText(pin, 'Lock credential', 32)));
+  trustedHandle('lock-screen:unlock', false, (_event, pin: string) => { assertLockScreenRecoveryAllowed(); return unlockLockScreen(assertText(pin, 'Lock credential', 32)); });
   trustedHandle('remote-guard:status', false, () => remoteGuardStatus);
   trustedHandle('remote-guard:scan-now', false, () => runRemoteGuardScan(true));
   trustedHandle('remote-guard:acknowledge', false, () => acknowledgeRemoteGuardIncident());
+  trustedHandle('remote-guard:trust',false,(_event,id:string)=>trustRemoteGuardConnection(assertText(id,'Remote connection',160)));
+  trustedHandle('remote-guard:forget',false,(_event,key:string)=>removeRemoteGuardTrust(assertText(key,'Trusted source',64)));
+  trustedHandle('remote-guard:extend',false,()=>adjustRemoteGuardDecision());
+  trustedHandle('remote-guard:lock-now',false,()=>adjustRemoteGuardDecision(true));
   trustedHandle(
     'window:set-theme',
     true,
@@ -8766,7 +8874,12 @@ if (!backgroundWorkerMode) app.on('before-quit', (event) => {
     signalShutdownBeforeQuitDone = true;
     app.quit();
   }, gracefulQuitTimeoutMs);
-  signalShutdownBeforeQuitPromise ??= stopAllSignalProfilesForQuit().then(() => cleanupPackagedRuntimeLogs()).finally(() => {
+  signalShutdownBeforeQuitPromise ??= stopAllSignalProfilesForQuit()
+    .then(() => cleanupPackagedRuntimeLogs())
+    .catch((error) => {
+      // Shutdown errors must not become a second fatal startup dialog.
+      if (runtimeLoggingEnabled) console.error('Signal shutdown cleanup failed:', error);
+    }).finally(() => {
     if (signalShutdownBeforeQuitTimer) {
       clearTimeout(signalShutdownBeforeQuitTimer);
       signalShutdownBeforeQuitTimer = null;

@@ -7,7 +7,9 @@ const props=defineProps<{profileId:string;resolveTarget:()=>Promise<CustomerTarg
 const current=ref<CustomerState|null>(null),target=ref<CustomerTarget|null>(null);
 const settings=ref<CustomerSettings>({fields:[],stages:[]});
 const loading=ref(true),error=ref(''),settingsOpen=ref(false),settingsBusy=ref(false),settingsError=ref('');
-const settingsDraft=ref<CustomerSettings>({fields:[],stages:[]}),newField=ref(''),newStage=ref('');
+const settingsDraft=ref<CustomerSettings>({fields:[],stages:[]}),newStage=ref('');
+const newStageInput=ref<HTMLInputElement|null>(null),settingsNotice=ref('');
+function stageInputRef(element:unknown){newStageInput.value=element instanceof HTMLInputElement?element:null;}
 const localTransferBusy=ref(false),transferNotice=ref('');
 const transferBusy=computed(()=>localTransferBusy.value||!!current.value?.transferring);
 const stagePreview=ref<CustomerImportPreview|null>(null),selectedImportStage=ref(''),stageSelect=ref<HTMLSelectElement|null>(null);
@@ -25,9 +27,9 @@ function stageDialogKey(event:KeyboardEvent){
 let identity='',generation=0,reading=false,disposed=false,timer:ReturnType<typeof setInterval>|undefined;
 const record=computed(()=>current.value?.record);
 const otherErrors=computed(()=>[...customerWrites.values()].filter(state=>state.error&&state!==current.value));
-const missing=computed(()=>customerRequiredFields.filter(name=>!record.value?.values[name]?.trim()));
+const missing=computed(()=>customerRequiredFields.filter(name=>!record.value?.values[name]?.trim()||(name==='客户阶段'&&!settings.value.stages.includes(record.value.values[name]))));
 const entries=computed(()=>[...(record.value?.entries||[])].sort((a,b)=>b.createdAt-a.createdAt));
-const stageOptions=computed(()=>[...new Set([...settings.value.stages,...(record.value?.values['客户阶段']?[record.value.values['客户阶段']]:[])])]);
+const stageOptions=computed(()=>settings.value.stages);
 const platformNames={opensms:'打新增',whatsapp:'WhatsApp',telegram:'Telegram',signal:'Signal'};
 function changed(){if(current.value)changedCustomer(current.value);}
 async function refresh(){
@@ -57,11 +59,19 @@ function addEntry(){
 function editEntry(entry:CustomerEntry){if(!record.value)return;if((record.value.draft.talked||record.value.draft.next)&&!window.confirm('替换当前未提交的跟进草稿？'))return;record.value.draft={talked:entry.talked,next:entry.next,editingId:entry.id};changed();}
 function removeEntry(entry:CustomerEntry){if(!record.value||!window.confirm('确定删除这条跟进记录？'))return;record.value.entries=record.value.entries.filter(e=>e.id!==entry.id);if(record.value.draft.editingId===entry.id)record.value.draft={talked:'',next:'',editingId:''};changed();}
 function cancelEdit(){if(!record.value)return;record.value.draft={talked:'',next:'',editingId:''};changed();}
-function configure(){settingsDraft.value=JSON.parse(JSON.stringify(settings.value));newField.value='';newStage.value='';settingsError.value='';settingsOpen.value=!settingsOpen.value;}
-function addField(){const name=newField.value.trim();if(!name)return;if([...customerRequiredFields,...settingsDraft.value.fields.map(f=>f.name)].includes(name)){settingsError.value='字段名称已存在';return;}settingsDraft.value.fields.push({id:crypto.randomUUID(),name});newField.value='';settingsError.value='';}
+function manageStages(){if(!settingsOpen.value){settingsDraft.value=JSON.parse(JSON.stringify(settings.value));newStage.value='';settingsError.value='';settingsOpen.value=true;}void nextTick(()=>newStageInput.value?.focus());}
 function addStage(){const name=newStage.value.trim();if(!name)return;if(settingsDraft.value.stages.includes(name)){settingsError.value='客户阶段已存在';return;}settingsDraft.value.stages.push(name);newStage.value='';settingsError.value='';}
-async function saveSettings(){settingsBusy.value=true;settingsError.value='';try{settings.value=await window.chatTranslator.saveCustomerSettings(JSON.parse(JSON.stringify(settingsDraft.value)));settingsOpen.value=false;}catch(e){settingsError.value=e instanceof Error?e.message:String(e);}finally{settingsBusy.value=false;}}
-function removeField(id:string){if(window.confirm('移除此自定义字段？所有客户将不再显示该字段，已填写的内容仍保留。'))settingsDraft.value.fields=settingsDraft.value.fields.filter(f=>f.id!==id);}
+async function saveSettings(){
+  if(settingsBusy.value)return;settingsBusy.value=true;settingsError.value='';settingsNotice.value='';
+  try{
+    const next=JSON.parse(JSON.stringify(settingsDraft.value)) as CustomerSettings;
+    const stage=newStage.value.trim();
+    if(stage){if(next.stages.includes(stage))throw new Error('客户阶段已存在');next.stages.push(stage);}
+    settings.value=await window.chatTranslator.saveCustomerSettings(next);settingsOpen.value=false;newStage.value='';
+    settingsNotice.value=`已保存 ${settings.value.stages.length} 个客户阶段，所有平台和联系人共用`;
+  }catch(e){settingsError.value=e instanceof Error?e.message:String(e);}finally{settingsBusy.value=false;}
+}
+function removeStage(stage:string){if(settingsDraft.value.stages.length<=1)return;if(window.confirm(`删除客户阶段「${stage}」？所有平台和联系人的可选列表都会移除此项，已有客户的原阶段记录仍保留，之后可重新选择。`))settingsDraft.value.stages=settingsDraft.value.stages.filter(value=>value!==stage);}
 async function transfer(mode:'import'|'export'){
   const state=current.value;if(!state||!target.value||transferBusy.value||settingsBusy.value||settingsOpen.value)return;
   const captured=JSON.parse(JSON.stringify(target.value)) as CustomerTarget;
@@ -113,25 +123,25 @@ const date=(value:number)=>new Date(value).toLocaleString();
     <p v-if="error" class="customer-error" role="alert">{{error}}</p>
     <template v-if="record&&current&&target">
       <header class="customer-summary"><div><strong>{{target.contactTitle||target.phone||'当前联系人'}}</strong><small>{{platformNames[target.platform]}} · {{target.platform==='opensms'?target.phone:'当前账号'}} · 仅本机</small></div><span :class="{complete:!missing.length}">{{missing.length?`待补充 ${missing.length} 项`:'资料完整'}}</span></header>
-      <div class="customer-save-status" role="status"><span v-if="current.error" class="customer-error">保存失败：{{current.error}} <button :disabled="transferBusy" @click="flushCustomer(current)">重试保存</button></span><span v-else>{{current.saving?'正在保存…':current.savedRevision<current.revision?'有待保存修改':record.updatedAt?'已保存到本机':'填写后自动保存草稿'}}</span><div class="customer-transfer-actions"><button :disabled="transferBusy||settingsBusy||settingsOpen" @click="transfer('import')">导入</button><button :disabled="transferBusy||settingsBusy||settingsOpen" @click="transfer('export')">导出</button><button :disabled="transferBusy||settingsBusy" @click="configure">字段与阶段</button></div></div>
+      <div class="customer-save-status" role="status"><span v-if="current.error" class="customer-error">保存失败：{{current.error}} <button :disabled="transferBusy" @click="flushCustomer(current)">重试保存</button></span><span v-else>{{current.saving?'正在保存…':current.savedRevision<current.revision?'有待保存修改':record.updatedAt?'已保存到本机':'填写后自动保存草稿'}}</span><div class="customer-transfer-actions"><button :disabled="transferBusy||settingsBusy||settingsOpen" @click="transfer('import')">导入</button><button :disabled="transferBusy||settingsBusy||settingsOpen" @click="transfer('export')">导出</button></div></div>
       <p v-if="transferBusy||transferNotice" class="customer-transfer-notice" role="status">{{transferBusy?'正在处理文件…':transferNotice}}</p>
-      <fieldset class="customer-edit-region" :disabled="transferBusy">
-      <section v-if="settingsOpen" class="customer-settings" aria-label="字段与阶段设置">
-        <p>自定义字段与阶段供所有客户共用，自定义字段选填。</p>
-        <div class="customer-inline"><input v-model="newField" maxlength="40" placeholder="新增字段名称" aria-label="新增字段名称" @keydown.enter.prevent="addField"><button :disabled="settingsDraft.fields.length>=40" @click="addField">添加字段</button></div>
-        <div class="customer-chips"><span v-for="field in settingsDraft.fields" :key="field.id">{{field.name}} <button :aria-label="`移除字段${field.name}`" @click="removeField(field.id)">×</button></span></div>
-        <div class="customer-inline"><input v-model="newStage" maxlength="40" placeholder="新增客户阶段" aria-label="新增客户阶段" @keydown.enter.prevent="addStage"><button :disabled="settingsDraft.stages.length>=40" @click="addStage">添加阶段</button></div>
-        <div class="customer-chips"><span v-for="(stage,index) in settingsDraft.stages" :key="stage">{{stage}} <button :disabled="settingsDraft.stages.length<=1" :aria-label="`移除阶段${stage}`" @click="settingsDraft.stages.splice(index,1)">×</button></span></div>
-        <p v-if="settingsError" class="customer-error" role="alert">{{settingsError}}</p>
-        <button class="primary" :disabled="settingsBusy" @click="saveSettings">{{settingsBusy?'保存中…':'保存设置'}}</button>
-      </section>
+      <p v-if="settingsNotice" class="customer-transfer-notice" role="status">{{settingsNotice}}</p>
+      <fieldset class="customer-edit-region" :disabled="transferBusy||settingsBusy">
       <div class="customer-grid">
-        <label v-for="name in customerRequiredFields" :key="name" :class="{wide:name==='兴趣'||name==='备注'||name==='客户阶段'}"><span>{{name}} <b>*</b><small v-if="!record.values[name]?.trim()">待补充</small></span>
-          <select v-if="name==='客户阶段'" v-model="record.values[name]" :aria-label="name" aria-required="true" @change="changed"><option value="" disabled>请选择阶段</option><option v-for="stage in stageOptions" :key="stage">{{stage}}</option></select>
+        <template v-for="name in customerRequiredFields" :key="name"><label :class="{wide:name==='兴趣'||name==='备注'||name==='客户阶段'}"><span>{{name}} <b>*</b><small v-if="!record.values[name]?.trim()">待补充</small><button v-if="name==='客户阶段'" type="button" class="customer-manage-stages" @click.prevent="manageStages">管理选项</button></span>
+          <template v-if="name==='客户阶段'"><select v-model="record.values[name]" :aria-label="name" aria-required="true" @change="changed"><option value="" disabled>请选择阶段</option><option v-for="stage in stageOptions" :key="stage">{{stage}}</option></select><small v-if="record.values[name]&&!stageOptions.includes(record.values[name])" class="customer-retired-stage">原阶段“{{record.values[name]}}”已从全局选项中删除，请重新选择。</small></template>
           <textarea v-else-if="name==='备注'||name==='兴趣'" v-model="record.values[name]" :aria-label="name" aria-required="true" rows="2" maxlength="8000" @input="changed"></textarea>
           <input v-else v-model="record.values[name]" :aria-label="name" aria-required="true" maxlength="8000" @input="changed">
         </label>
-        <label v-for="field in settings.fields" :key="field.id"><span>{{field.name}} <small>选填</small></span><input v-model="record.values[field.id]" :aria-label="field.name" maxlength="8000" @input="changed"></label>
+        <section v-if="name==='客户阶段'&&settingsOpen" class="customer-settings wide" aria-label="管理客户阶段选项">
+          <h3>管理客户阶段选项</h3>
+          <p>所有平台和联系人共用，支持新增和删除。</p>
+          <div class="customer-inline"><input :ref="stageInputRef" v-model="newStage" maxlength="40" placeholder="新增客户阶段" aria-label="新增客户阶段" @keydown.enter.prevent="addStage"><button :disabled="settingsDraft.stages.length>=40" @click="addStage">添加阶段</button></div>
+          <div class="customer-chips"><span v-for="stage in settingsDraft.stages" :key="stage">{{stage}} <button :disabled="settingsDraft.stages.length<=1" :aria-label="`移除阶段${stage}`" @click="removeStage(stage)">删除</button></span></div>
+          <p v-if="settingsError" class="customer-error" role="alert">{{settingsError}}</p>
+          <div class="customer-inline"><button class="primary" :disabled="settingsBusy" @click="saveSettings">{{settingsBusy?'保存中…':'保存阶段'}}</button><button @click="settingsOpen=false">取消</button></div>
+        </section>
+        </template>
       </div>
       <section class="customer-compose" aria-label="添加跟进记录"><h3>{{record.draft.editingId?'编辑跟进记录':'添加跟进'}}</h3>
         <label>今天聊了什么<textarea v-model="record.draft.talked" aria-label="今天聊了什么" rows="2" maxlength="16000" @input="changed"></textarea></label>
@@ -148,6 +158,7 @@ const date=(value:number)=>new Date(value).toLocaleString();
 </template>
 
 <style scoped>
+.customer-manage-stages{margin-left:auto}.customer-retired-stage{color:var(--muted);font-size:11px}.customer-stage-settings-title{margin-top:12px!important}
 .customer-follow-up select option{color:#000!important;background:#fff!important;color-scheme:light}.customer-stage-overlay{position:absolute;inset:0;z-index:5;display:flex;align-items:center;justify-content:center;padding:16px;background:#0008}.customer-stage-dialog{width:100%;max-height:100%;overflow:auto;box-sizing:border-box;padding:18px;border:1px solid var(--line);border-radius:12px;background:var(--panel-strong);box-shadow:var(--shadow)}.customer-stage-dialog p{overflow-wrap:anywhere;white-space:pre-wrap}.customer-stage-hint{color:var(--muted)}.customer-stage-dialog footer{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
 .customer-edit-region{border:0;padding:0;margin:0;min-width:0}.customer-transfer-actions{display:flex;gap:4px;flex-shrink:0}.customer-transfer-notice{margin:4px 0 8px;color:var(--muted);font-size:11px}
 .customer-follow-up{font-size:12px;color:var(--text);line-height:1.5}.customer-summary{display:flex;gap:10px;align-items:center;justify-content:space-between;padding-bottom:8px;border-bottom:1px solid var(--line)}.customer-summary strong{font-size:15px;overflow-wrap:anywhere}.customer-summary small{display:block;color:var(--muted);font-size:11px}.customer-summary>span{white-space:nowrap;color:var(--accent-bright);font-size:11px}.customer-summary>span.complete{color:#55b98a}.customer-save-status{display:flex;gap:8px;align-items:center;justify-content:space-between;margin:7px 0;color:var(--muted);font-size:11px}.customer-follow-up button{padding:4px 8px;font-size:11px}.customer-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:7px 10px}.customer-grid label{min-width:0}.customer-grid .wide{grid-column:1/-1}.customer-follow-up label{display:flex;flex-direction:column;gap:3px}.customer-grid label>span{display:flex;align-items:center;gap:4px}.customer-grid b{color:#e28e7a}.customer-grid small{margin-left:auto;font-size:10px;color:var(--muted)}.customer-follow-up input:not([type=checkbox]):not([type=file]),.customer-follow-up textarea,.customer-follow-up select{box-sizing:border-box;width:100%;min-width:0;border:1px solid var(--line);border-radius:6px;background:var(--bg-soft);color:var(--text);padding:6px 8px;font:inherit;outline:none}.customer-follow-up input:focus,.customer-follow-up textarea:focus,.customer-follow-up select:focus{border-color:var(--accent)}.customer-follow-up textarea{resize:vertical;min-height:48px}.customer-follow-up h3{font-size:13px;margin:0 0 7px}.customer-compose{margin-top:14px;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--panel-muted)}.customer-compose label+label{margin-top:7px}.customer-inline{display:flex;align-items:center;gap:6px;margin-top:8px}.customer-inline input,.customer-inline small{flex:1;min-width:0}.customer-inline small{color:var(--muted);font-size:10px}.customer-inline button{flex-shrink:0}.customer-timeline-title{margin-top:14px!important}.customer-timeline-title small{color:var(--muted);font-weight:400}.customer-timeline{list-style:none;margin:0 0 0 4px;padding:0 0 0 12px;border-left:1px solid var(--line)}.customer-timeline li{position:relative;margin:0 0 10px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--panel-muted)}.customer-timeline li:before{content:'';position:absolute;left:-17px;top:14px;width:7px;height:7px;background:var(--accent);border-radius:50%}.customer-timeline header{display:flex;align-items:center;justify-content:space-between;gap:6px}.customer-timeline time,.customer-timeline small{color:var(--muted);font-size:10px}.customer-timeline header button{padding:2px 5px;margin-left:4px}.customer-timeline p{white-space:pre-wrap;overflow-wrap:anywhere;margin:6px 0}.customer-timeline p b{display:block;font-size:10px;color:var(--muted);font-weight:500}.customer-empty{color:var(--muted);padding:8px 0}.customer-error{color:#e77f78}.customer-settings{margin-bottom:10px;padding:10px;border:1px solid var(--line);border-radius:8px}.customer-settings p{margin:0 0 6px;font-size:11px;color:var(--muted)}.customer-chips{display:flex;flex-wrap:wrap;gap:4px;margin:6px 0}.customer-chips>span{border:1px solid var(--line);border-radius:5px;padding:2px 4px;font-size:11px}.customer-chips button{border:0;padding:0 3px;background:transparent}

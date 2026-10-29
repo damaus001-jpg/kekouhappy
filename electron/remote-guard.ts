@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { isAbsolute, join, resolve } from 'node:path';
 import {
   evaluateRemoteGuardScan,
+  parseRdpListenerPort,
   type RemoteGuardScanEvaluation
 } from './remote-guard-core.js';
 
@@ -16,6 +17,7 @@ const processCommandTimeoutMs = 1_200;
 const commandMaxBuffer = 4 * 1024 * 1024;
 let lastProcessScanAttemptAt = 0;
 let cachedTasklist: CommandResult = { ok: false, stdout: '' };
+let cachedRdpPort=0;
 
 function trustedWindowsRoot() {
   const root = resolve(process.env.SystemRoot || process.env.windir || 'C:\\Windows');
@@ -54,7 +56,7 @@ function runWindowsCommand(executable: string, args: string[], timeoutMs = fastC
 
 export async function inspectWindowsRemoteAccess(
   currentProcessId: number,
-  options: { forceProcessRefresh?: boolean } = {}
+  options: { forceProcessRefresh?: boolean;trustedSources?:import('./shared.js').RemoteGuardTrustedSource[] } = {}
 ): Promise<RemoteGuardScanEvaluation> {
   if (process.platform !== 'win32') {
     return {
@@ -75,14 +77,16 @@ export async function inspectWindowsRemoteAccess(
       ? runWindowsCommand(windowsSystemExecutable('tasklist.exe'), ['/FO', 'CSV', '/NH'], processCommandTimeoutMs)
       : Promise.resolve(cachedTasklist);
     if (refreshProcesses) lastProcessScanAttemptAt = now;
-    const [processResult, sessionResult, connectionResult] = await Promise.all([
+    const [processResult, sessionResult, connectionResult,portResult] = await Promise.all([
       processScan,
       runWindowsCommand(windowsSystemExecutable('qwinsta.exe'), []),
-      runWindowsCommand(windowsSystemExecutable('netstat.exe'), ['-ano', '-p', 'tcp'])
+      runWindowsCommand(windowsSystemExecutable('netstat.exe'), ['-ano', '-p', 'tcp']),
+      refreshProcesses?runWindowsCommand(windowsSystemExecutable('reg.exe'),['query','HKLM\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp','/v','PortNumber']):Promise.resolve(null)
     ]);
     if (refreshProcesses) cachedTasklist = processResult.ok ? processResult : { ok: false, stdout: '' };
     sessions = sessionResult;
     netstat = connectionResult;
+    if(portResult)cachedRdpPort=portResult.ok?parseRdpListenerPort(portResult.stdout):0;
   } catch {
     // Invalid or unavailable Windows system paths fail visibly through degraded coverage.
   }
@@ -94,7 +98,7 @@ export async function inspectWindowsRemoteAccess(
     netstatOutput: netstat.stdout,
     processesAvailable: cachedTasklist.ok,
     windowsSessionsAvailable: sessions.ok,
-    connections: netstat.ok ? 'available' : 'unavailable'
+    connections: netstat.ok ? 'available' : 'unavailable',rdpPort:cachedRdpPort,trustedSources:options.trustedSources
   });
 }
 
