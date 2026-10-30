@@ -1,8 +1,8 @@
 {
   "name": "maoyi",
   "productName": "皮卡丘翻译器",
-  "version": "1.16.18",
-  "shortVersionWindows": "1.16.18",
+  "version": "1.16.19",
+  "shortVersionWindows": "1.16.19",
   "private": true,
   "description": "皮卡丘翻译器多账号聊天翻译工作台。",
   "main": "dist-electron/main.js",
@@ -81,6 +81,7 @@
     "test:murong-purple-theme": "node tools/test-murong-purple-theme.mjs",
     "test:clear-water-blue-theme": "node tools/test-clear-water-blue-theme.mjs",
     "test:storage-migration": "npm run build && node tools/test-storage-migration.mjs",
+    "test:storage-migration-ui": "node tools/test-storage-migration-ui.cjs",
     "test:issuer-suite-isolation": "node tools/test-issuer-suite-isolation.mjs",
     "test:public-reproduction": "npm run build && node tools/test-public-reproduction.mjs",
     "test:production-environment-restore": "node tools/test-production-environment-restore.mjs",
@@ -147,7 +148,7 @@
     "wait-on": "^8.0.3"
   },
   "build": {
-    "buildVersion": "1.16.18",
+    "buildVersion": "1.16.19",
     "appId": "com.maoyi.translator",
     "productName": "皮卡丘翻译器",
     "executableName": "maoyi",
@@ -160,6 +161,7 @@
       "dist/**/*",
       "dist-electron/main.js",
       "electron/preload.cjs",
+      "electron/storage-migration-preload.cjs",
       "electron/webview-send-guard-preload.cjs",
       "package.json"
     ],

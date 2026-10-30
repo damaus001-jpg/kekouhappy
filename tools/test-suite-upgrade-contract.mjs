@@ -24,7 +24,7 @@ const cloneCheck = main.slice(
 assert.match(cloneCheck, /inspectRuntimeBinding\(defaultRuntimeBindingPath\(\), \{[\s\S]*hardwareHash:[\s\S]*devicePublicKeyPem:/);
 assert.match(cloneCheck, /source\.suiteId === localUpgradeSource\.payload\.suiteId/);
 assert.match(cloneCheck, /source\.keyId === localUpgradeSource\.payload\.keyId/);
-assert.match(cloneCheck, /await beginForeignCloneReset\(inspection\.file, inspection\.reason\)/);
+assert.match(cloneCheck, /await beginForeignCloneReset\(inspection\.file\)/);
 
 const prepareRuntime = main.slice(
   main.indexOf('async function prepareAuthorizedRuntime()'),

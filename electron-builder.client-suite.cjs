@@ -6,7 +6,7 @@ if (!output) throw new Error('MAOYI_CLIENT_BUILD_OUTPUT is required.');
 module.exports = {
   appId: 'com.maoyi.translator',
   productName: '皮卡丘翻译器',
-  buildVersion: '1.16.18',
+  buildVersion: '1.16.19',
   executableName: 'maoyi',
   asar: true,
   electronDist: 'node_modules/electron/dist',
@@ -15,6 +15,7 @@ module.exports = {
     'dist/**/*',
     'dist-electron/main.js',
     'electron/preload.cjs',
+    'electron/storage-migration-preload.cjs',
     'electron/webview-send-guard-preload.cjs',
     'package.json'
   ],

@@ -100,11 +100,12 @@ import {
 } from './clone-reset.js';
 import {
   createStorageMigrationPlan,
-  runStorageMigrationWorker,
   storageMigrationArgument,
   storageMigrationPlanPathFromArgs,
   storageMigrationWorkerDataPath
 } from './storage-migration.js';
+import { reserveStorageMigration, releaseStorageMigration, setStorageMigrationWorkerPid } from './storage-migration.js';
+import { showActiveStorageMigration, runStorageMigrationWithWindow } from './storage-migration-window.js';
 import {
   createSignalLaunchCredential,
   type RuntimeBindingPayload
@@ -2285,6 +2286,7 @@ if (!gotSingleInstanceLock) {
 if (!backgroundWorkerMode) queueSignalNotificationProtocolArguments(process.argv);
 
 if (!backgroundWorkerMode) app.on('second-instance', (_event, commandLine) => {
+  if (storageMigrationScheduled) { void showActiveStorageMigration(storageBootstrapPath()).catch(() => undefined); return; }
   queueSignalNotificationProtocolArguments(commandLine);
   if (!mainWindow || mainWindow.isDestroyed()) return;
   if (mainWindow.isMinimized()) mainWindow.restore();
@@ -4156,9 +4158,14 @@ async function spawnStorageMigrationWorker(planPath: string) {
     const onError = (error: Error) => reject(error);
     worker.once('error', onError);
     worker.once('spawn', () => {
-      worker.off('error', onError);
-      worker.unref();
-      resolvePromise();
+      void setStorageMigrationWorkerPid(planPath, worker.pid || 0).then(() => {
+        worker.off('error', onError);
+        worker.unref();
+        resolvePromise();
+      }).catch(error => {
+        worker.kill();
+        reject(error);
+      });
     });
   });
 }
@@ -4216,7 +4223,8 @@ async function beginStorageLocationChange() {
       `当前目录：${currentDataPath}`,
       `新目录：${prepared.plan.targetRoot}`,
       '',
-      '迁移成功后将切换到新目录，原目录会保留为备份，不会自动删除。'
+      '迁移成功后将切换到新目录，原目录会保留为备份，不会自动删除。',
+      '数据较多或磁盘较慢时可能需要较长时间。关闭主界面后会显示迁移进度窗口，可最小化，请勿关机或断开磁盘。'
     ].join('\n'),
     buttons: ['开始迁移', '取消'],
     defaultId: 1,
@@ -4229,6 +4237,7 @@ async function beginStorageLocationChange() {
   }
 
   try {
+    await reserveStorageMigration(prepared.planPath);
     await spawnStorageMigrationWorker(prepared.planPath);
     storageMigrationScheduled = true;
     setTimeout(() => app.quit(), 300);
@@ -4239,6 +4248,7 @@ async function beginStorageLocationChange() {
       targetPath: prepared.plan.targetRoot
     };
   } catch (error) {
+    await releaseStorageMigration(prepared.planPath).catch(() => undefined);
     await rm(prepared.planPath, { force: true });
     return {
       ok: false,
@@ -4248,42 +4258,20 @@ async function beginStorageLocationChange() {
   }
 }
 
-async function runtimeRecoveryDiagnostic(reason: string) {
-  const files = await Promise.all(['device-identity.dat', 'runtime-binding.dat', 'license.dat', 'client-account.json'].map(async name => {
-    try {
-      const info = await stat(join(app.getPath('userData'), name));
-      return `${name}：${info.isFile() ? `${info.size} 字节，修改时间 ${info.mtime.toISOString()}` : '路径不是文件'}`;
-    } catch (error) {
-      return `${name}：${(error as NodeJS.ErrnoException).code === 'ENOENT' ? '不存在' : `无法访问（${(error as NodeJS.ErrnoException).code || '未知错误'}）`}`;
-    }
-  }));
-  return `客户端版本：${app.getVersion()}\n数据目录：${app.getPath('userData')}\n校验原因：${reason}\n${files.join('\n')}\n\n诊断信息不包含密钥或授权文件内容。请先备份现有数据，不要反复初始化。`;
-}
-
-async function beginForeignCloneReset(bindingFile?: { dataRootId?: string; suiteId?: string }, diagnosticReason = '设备身份或运行绑定校验失败') {
+async function beginForeignCloneReset(bindingFile?: { dataRootId?: string; suiteId?: string }) {
   if (userDataOverride && process.env.MAOYI_ALLOW_CLONE_RESET_FOR_OVERRIDE !== '1') {
     throw new Error('隔离数据目录被识别为外来克隆；开发环境未启用自动初始化');
   }
   if (!(runtimeLoggingEnabled && process.env.MAOYI_CLONE_RESET_TEST_AUTOCONFIRM === '1')) {
-    const detail = await runtimeRecoveryDiagnostic(diagnosticReason);
-    let choice: number;
-    do {
-      choice = dialog.showMessageBoxSync({
-        type: 'warning', title: appDisplayName,
-        message: '数据安全校验未通过，已停止启动', detail,
-        buttons: ['复制诊断信息', '退出并保留数据', '清空数据并初始化'],
-        defaultId: 1, cancelId: 1, noLink: true
-      });
-      if (choice === 0) clipboard.writeText(detail);
-    } while (choice === 0);
-    if (choice !== 2) { app.quit(); return; }
-    const confirmation = dialog.showMessageBoxSync({
-      type: 'warning', title: appDisplayName,
-      message: '确定清空当前数据目录？',
-      detail: `将删除 ${app.getPath('userData')} 中的账号、聊天、客户资料和配置。此操作不能撤销。恢复误删数据时，请取消并先备份。`,
-      buttons: ['确认清空', '取消并保留数据'], defaultId: 1, cancelId: 1, noLink: true
+    dialog.showMessageBoxSync({
+      type: 'warning',
+      title: appDisplayName,
+      message: '缺少启动器，正在初始化',
+      detail: '检测到来自其他电脑的应用数据。本机复制数据将被清除，程序随后退出。',
+      buttons: ['确定'],
+      defaultId: 0,
+      noLink: true
     });
-    if (confirmation !== 0) { app.quit(); return; }
   }
   const { planPath } = await createCloneResetPlan({
     targetRoot: app.getPath('userData'),
@@ -4356,7 +4344,7 @@ async function verifyRuntimeCloneState() {
         return true;
       }
     }
-    await beginForeignCloneReset(inspection.file, inspection.reason);
+    await beginForeignCloneReset(inspection.file);
     return false;
   }
   const authorization = clientLicenseManager.getStatus();
@@ -4365,7 +4353,7 @@ async function verifyRuntimeCloneState() {
     containsExistingData &&
     (authorization.state === 'device-error' || clientLicenseManager.wasDeviceIdentityCreatedThisRun())
   ) {
-    await beginForeignCloneReset(undefined, `运行绑定文件缺失；${authorization.reason || (clientLicenseManager.wasDeviceIdentityCreatedThisRun() ? '本次启动重新生成了设备身份' : '设备身份不可用')}`);
+    await beginForeignCloneReset();
     return false;
   }
   return true;
@@ -8802,9 +8790,9 @@ if (cloneResetWorkerMode) {
 } else if (storageMigrationWorkerMode) {
   app.whenReady().then(async () => {
     try {
-      await runStorageMigrationWorker(storageMigrationPlanPath);
-      app.exit(0);
+      await runStorageMigrationWithWindow(storageMigrationPlanPath);
     } catch (error) {
+      await releaseStorageMigration(storageMigrationPlanPath).catch(() => undefined);
       dialog.showErrorBox(
         appDisplayName,
         error instanceof Error ? `数据迁移失败：${error.message}` : '数据迁移失败，客户端继续使用原目录'
@@ -8815,6 +8803,11 @@ if (cloneResetWorkerMode) {
 } else {
   app.whenReady().then(async () => {
     Menu.setApplicationMenu(null);
+    if (await showActiveStorageMigration(storageBootstrapPath())) {
+      signalShutdownBeforeQuitDone = true;
+      app.exit(0);
+      return;
+    }
     registerLocalAppProtocol();
     installWebContentsSecurityPolicy();
     if (!(await initializeUserDataPath())) {

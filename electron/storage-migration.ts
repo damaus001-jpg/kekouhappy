@@ -1,6 +1,6 @@
-import { createReadStream } from 'node:fs';
+import { createReadStream, createWriteStream } from 'node:fs';
 import {
-  copyFile,
+  open,
   lstat,
   mkdir,
   readFile,
@@ -14,7 +14,7 @@ import { spawn } from 'node:child_process';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, normalize, parse, relative, resolve } from 'node:path';
-import { finished } from 'node:stream/promises';
+import { finished, pipeline } from 'node:stream/promises';
 
 export const storageMigrationArgument = '--df-storage-migration-plan=';
 export const storageDataRootName = 'maoyi Data';
@@ -62,6 +62,95 @@ type FileManifestEntry = {
 };
 
 type RenameOperation = (sourcePath: string, targetPath: string) => Promise<void>;
+
+export type StorageMigrationProgress = {
+  phase: 'waiting' | 'scanning' | 'copying' | 'verifying' | 'switching' | 'completed' | 'failed';
+  completedFiles: number;
+  totalFiles: number;
+  processedBytes: number;
+  totalBytes: number;
+  estimatedRemainingSeconds?: number;
+};
+type MigrationLease = { planPath: string; parentProcessId: number; workerProcessId: number; createdAt: number };
+const migrationLeasePath = (bootstrapPath: string) => join(dirname(bootstrapPath), 'storage-migration-active.json');
+
+async function replaceMigrationLease(bootstrapPath: string, lease: MigrationLease) {
+  const marker = migrationLeasePath(bootstrapPath);
+  const temporary = `${marker}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, JSON.stringify(lease));
+    await renameStoragePathWithRetry(temporary, marker);
+  } finally { await rm(temporary, { force: true }); }
+}
+
+export async function setStorageMigrationWorkerPid(planPath: string, workerProcessId: number) {
+  if (!Number.isSafeInteger(workerProcessId) || workerProcessId <= 0) throw new Error('迁移进程编号无效');
+  const plan = await readMigrationPlan(planPath);
+  const lease = await activeStorageMigration(plan.bootstrapPath);
+  if (!lease || !sameStoragePath(lease.planPath, planPath) || lease.parentProcessId !== process.pid || lease.workerProcessId && lease.workerProcessId !== workerProcessId) throw new Error('迁移进程交接失败');
+  await replaceMigrationLease(plan.bootstrapPath, { ...lease, workerProcessId });
+}
+
+export function storageMigrationFocusPipe(bootstrapPath: string) {
+  const id = createHash('sha256').update(resolve(bootstrapPath).toLowerCase()).digest('hex').slice(0, 24);
+  return process.platform === 'win32' ? `\\\\.\\pipe\\maoyi-migration-${id}` : join(tmpdir(), `maoyi-migration-${id}.sock`);
+}
+
+export async function activeStorageMigration(bootstrapPath: string): Promise<MigrationLease | null> {
+  const path = migrationLeasePath(bootstrapPath);
+  let lease: MigrationLease;
+  try {
+    let raw = await readFile(path, 'utf8');
+    for (let attempt = 0; ; attempt++) {
+      try { lease = JSON.parse(raw); break; }
+      catch (error) { if (!(error instanceof SyntaxError) || attempt >= 5) throw error; await new Promise(r => setTimeout(r, 25)); raw = await readFile(path, 'utf8'); }
+    }
+  }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw new Error('迁移状态无法读取，请保留原数据并联系供应商'); }
+  if (!lease || typeof lease.planPath !== 'string' || !Number.isSafeInteger(lease.parentProcessId) || !Number.isSafeInteger(lease.workerProcessId) || !Number.isFinite(lease.createdAt)) throw new Error('迁移状态无效，请保留原数据并联系供应商');
+  const plan = await readMigrationPlan(lease.planPath, false).catch(() => null);
+  if (plan && sameStoragePath(plan.bootstrapPath, bootstrapPath)) {
+    if (await processExists(lease.workerProcessId) || (!lease.workerProcessId && (await processExists(lease.parentProcessId) || Date.now() - lease.createdAt < 30_000))) return lease;
+  }
+  await rm(path, { force: true });
+  return null;
+}
+
+export async function reserveStorageMigration(planPath: string, worker = false) {
+  const plan = await readMigrationPlan(planPath);
+  const active = await activeStorageMigration(plan.bootstrapPath);
+  if (active) {
+    if (!worker || !sameStoragePath(active.planPath, planPath) || active.workerProcessId && active.workerProcessId !== process.pid) throw new Error('数据正在迁移，请等待现有迁移完成');
+    // Replace the lease atomically: a missing marker during handover could let a
+    // second client open the source directory while it is being copied.
+    await replaceMigrationLease(plan.bootstrapPath, { ...active, workerProcessId: process.pid });
+    return;
+  }
+  await mkdir(dirname(plan.bootstrapPath), { recursive: true });
+  const handle = await open(migrationLeasePath(plan.bootstrapPath), 'wx');
+  try { await handle.writeFile(JSON.stringify({ planPath: resolve(planPath), parentProcessId: plan.parentProcessId, workerProcessId: worker ? process.pid : 0, createdAt: Date.now() })); }
+  finally { await handle.close(); }
+}
+
+export async function releaseStorageMigration(planPath: string) {
+  const plan = await readMigrationPlan(planPath, false);
+  const path = migrationLeasePath(plan.bootstrapPath);
+  try {
+    const lease = JSON.parse(await readFile(path, 'utf8')) as MigrationLease;
+    const ownsLease = lease.workerProcessId ? lease.workerProcessId === process.pid : lease.parentProcessId === process.pid;
+    if (ownsLease && sameStoragePath(lease.planPath, planPath)) await rm(path, { force: true });
+  } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+}
+
+async function readMigrationPlan(planPath: string, requireFresh = true): Promise<StorageMigrationPlan> {
+  const resolved = resolve(planPath);
+  if (!sameStoragePath(dirname(resolved), migrationWorkRoot())) throw new Error('数据迁移计划路径无效');
+  const plan = JSON.parse(await readFile(resolved, 'utf8')) as StorageMigrationPlan;
+  if (plan.schemaVersion !== 1 || plan.productId !== 'maoyi-translator' || !/^[a-f0-9-]{36}$/i.test(plan.migrationId) || !Number.isSafeInteger(plan.parentProcessId) || plan.expiresAt - plan.createdAt !== storageMigrationPlanTtlMs || requireFresh && Date.now() > plan.expiresAt) throw new Error('数据迁移计划无效或已过期');
+  assertOwnedTargetPath(plan);
+  assertOwnedSourceAndBootstrap(plan.sourceRoot, plan.bootstrapPath);
+  return plan;
+}
 
 export async function renameStoragePathWithRetry(
   sourcePath: string,
@@ -238,8 +327,9 @@ async function processExists(processId: number) {
   try {
     process.kill(processId, 0);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    // A client started without elevation must still respect an elevated worker.
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
   }
 }
 
@@ -251,11 +341,11 @@ async function waitForParentExit(processId: number) {
   if (await processExists(processId)) throw new Error('客户端未能在规定时间内退出，数据迁移已取消');
 }
 
-async function hashFile(path: string) {
+async function hashFile(path: string, onBytes?: (bytes: number) => void) {
   const hash = createHash('sha256');
   const stream = createReadStream(path);
   try {
-    for await (const chunk of stream) hash.update(chunk);
+    for await (const chunk of stream) { hash.update(chunk); onBytes?.(Buffer.byteLength(chunk)); }
     await finished(stream, { cleanup: true });
     return hash.digest('hex');
   } finally {
@@ -263,7 +353,7 @@ async function hashFile(path: string) {
   }
 }
 
-async function collectManifest(root: string) {
+async function collectManifest(root: string, onBytes?: (bytes: number) => void, onFile?: () => void) {
   const files: FileManifestEntry[] = [];
   const directories: string[] = [];
   async function visit(current: string, relativeDirectory: string) {
@@ -278,7 +368,8 @@ async function collectManifest(root: string) {
         directories.push(relativePath);
         await visit(sourcePath, relativePath);
       } else if (itemStat.isFile()) {
-        files.push({ relativePath, size: itemStat.size, sha256: await hashFile(sourcePath) });
+        files.push({ relativePath, size: itemStat.size, sha256: await hashFile(sourcePath, onBytes) });
+        onFile?.();
       } else {
         throw new Error(`数据目录包含不支持的文件类型：${relativePath}`);
       }
@@ -297,9 +388,22 @@ async function assertFreeSpace(targetParent: string, requiredBytes: number) {
   }
 }
 
-async function copyAndVerify(plan: StorageMigrationPlan) {
-  const sourceManifest = await collectManifest(plan.sourceRoot);
+async function copyAndVerify(plan: StorageMigrationPlan, report: (value: StorageMigrationProgress) => void) {
+  const progress: StorageMigrationProgress = { phase: 'scanning', completedFiles: 0, totalFiles: 0, processedBytes: 0, totalBytes: 0 };
+  let lastReport = 0, stageStarted = Date.now();
+  const publish = (force = false) => {
+    if (!force && Date.now() - lastReport < 150) return;
+    lastReport = Date.now();
+    const elapsed = (Date.now() - stageStarted) / 1000;
+    const remaining = progress.totalBytes - progress.processedBytes;
+    progress.estimatedRemainingSeconds = progress.totalBytes && progress.processedBytes && elapsed > 2 ? Math.ceil(remaining / (progress.processedBytes / elapsed)) : undefined;
+    report({ ...progress });
+  };
+  publish(true);
+  const sourceManifest = await collectManifest(plan.sourceRoot, bytes => { progress.processedBytes += bytes; publish(); }, () => { progress.completedFiles++; publish(); });
   await assertFreeSpace(plan.targetParent, sourceManifest.totalBytes);
+  Object.assign(progress, { phase: 'copying', completedFiles: 0, totalFiles: sourceManifest.files.length, processedBytes: 0, totalBytes: sourceManifest.totalBytes });
+  stageStarted = Date.now(); publish(true);
   await mkdir(plan.stagingRoot);
   for (const directory of sourceManifest.directories) {
     await mkdir(join(plan.stagingRoot, directory), { recursive: true });
@@ -307,9 +411,15 @@ async function copyAndVerify(plan: StorageMigrationPlan) {
   for (const file of sourceManifest.files) {
     const targetPath = join(plan.stagingRoot, file.relativePath);
     await mkdir(dirname(targetPath), { recursive: true });
-    await copyFile(join(plan.sourceRoot, file.relativePath), targetPath);
+    const input = createReadStream(join(plan.sourceRoot, file.relativePath));
+    input.on('data', chunk => { progress.processedBytes += Buffer.byteLength(chunk); publish(); });
+    await pipeline(input, createWriteStream(targetPath, { flags: 'wx' }));
+    progress.completedFiles++; publish();
   }
-  const targetManifest = await collectManifest(plan.stagingRoot);
+  Object.assign(progress, { phase: 'verifying', completedFiles: 0, processedBytes: 0 });
+  stageStarted = Date.now(); publish(true);
+  const targetManifest = await collectManifest(plan.stagingRoot, bytes => { progress.processedBytes += bytes; publish(); }, () => { progress.completedFiles++; publish(); });
+  publish(true);
   if (targetManifest.files.length !== sourceManifest.files.length || targetManifest.totalBytes !== sourceManifest.totalBytes) {
     throw new Error('数据迁移完整性检查失败：文件数量或大小不一致');
   }
@@ -333,25 +443,17 @@ function restartPackagedClient() {
   }
 }
 
-export async function runStorageMigrationWorker(planPath: string) {
+export async function runStorageMigrationWorker(planPath: string, options: { onProgress?: (value: StorageMigrationProgress) => void; restart?: boolean } = {}) {
   const resolvedPlanPath = resolve(planPath);
-  if (!sameStoragePath(dirname(resolvedPlanPath), migrationWorkRoot())) throw new Error('数据迁移计划路径无效');
-  const plan = JSON.parse(await readFile(resolvedPlanPath, 'utf8')) as StorageMigrationPlan;
-  if (
-    plan.schemaVersion !== 1 ||
-    plan.productId !== 'maoyi-translator' ||
-    !plan.migrationId ||
-    Date.now() > plan.expiresAt ||
-    plan.expiresAt - plan.createdAt !== storageMigrationPlanTtlMs
-  ) {
-    throw new Error('数据迁移计划无效或已过期');
-  }
-  assertOwnedTargetPath(plan);
-  assertOwnedSourceAndBootstrap(plan.sourceRoot, plan.bootstrapPath);
-  await waitForParentExit(plan.parentProcessId);
+  const plan = await readMigrationPlan(resolvedPlanPath);
+  await reserveStorageMigration(resolvedPlanPath, true);
+  const report = (value: StorageMigrationProgress) => { try { options.onProgress?.(value); } catch { /* Display errors cannot alter the data transaction. */ } };
+  report({ phase: 'waiting', completedFiles: 0, totalFiles: 0, processedBytes: 0, totalBytes: 0 });
   let targetCreated = false;
   try {
-    const manifest = await copyAndVerify(plan);
+    await waitForParentExit(plan.parentProcessId);
+    const manifest = await copyAndVerify(plan, report);
+    report({ phase: 'switching', completedFiles: manifest.files.length, totalFiles: manifest.files.length, processedBytes: manifest.totalBytes, totalBytes: manifest.totalBytes });
     if (await pathExists(plan.targetRoot)) throw new Error(`目标目录已存在：${plan.targetRoot}`);
     await renameStoragePathWithRetry(plan.stagingRoot, plan.targetRoot);
     targetCreated = true;
@@ -359,9 +461,11 @@ export async function runStorageMigrationWorker(planPath: string) {
     // The launcher pointer now owns the verified target. Later cleanup failures
     // must never roll back by deleting the active data directory.
     targetCreated = false;
+    await releaseStorageMigration(resolvedPlanPath);
     await rm(resolvedPlanPath, { force: true }).catch(() => undefined);
     await rm(dirname(resolvedPlanPath), { recursive: false, force: true }).catch(() => undefined);
-    const restartStarted = plan.restartPackagedClient ? restartPackagedClient() : false;
+    report({ phase: 'completed', completedFiles: manifest.files.length, totalFiles: manifest.files.length, processedBytes: manifest.totalBytes, totalBytes: manifest.totalBytes });
+    const restartStarted = plan.restartPackagedClient && options.restart !== false ? restartPackagedClient() : false;
     return {
       migrationId: plan.migrationId,
       sourceRoot: plan.sourceRoot,
@@ -372,9 +476,12 @@ export async function runStorageMigrationWorker(planPath: string) {
     };
   } catch (error) {
     assertOwnedTargetPath(plan);
-    if (await pathExists(plan.stagingRoot)) await rm(plan.stagingRoot, { recursive: true, force: true });
-    if (targetCreated && await pathExists(plan.targetRoot)) await rm(plan.targetRoot, { recursive: true, force: true });
-    if (plan.restartPackagedClient) restartPackagedClient();
+    try {
+      if (await pathExists(plan.stagingRoot)) await rm(plan.stagingRoot, { recursive: true, force: true });
+      if (targetCreated && await pathExists(plan.targetRoot)) await rm(plan.targetRoot, { recursive: true, force: true });
+    } finally { await releaseStorageMigration(resolvedPlanPath); }
+    report({ phase: 'failed', completedFiles: 0, totalFiles: 0, processedBytes: 0, totalBytes: 0 });
+    if (plan.restartPackagedClient && options.restart !== false) restartPackagedClient();
     throw error;
   }
 }
