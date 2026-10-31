@@ -45,7 +45,7 @@ export async function runStorageMigrationWithWindow(planPath:string){
   const reopen=()=>{
     if(reopening)return;reopening=true;
     if(!plan.restartPackagedClient){app.exit(0);return;}
-    const child=spawn(process.execPath,[],{detached:true,stdio:'ignore',windowsHide:true});
+    const child=spawn(process.execPath,[],{detached:true,stdio:'ignore',windowsHide:false});
     child.once('error',()=>{reopening=false;void win.webContents.executeJavaScript(`window.showMigrationFailure(${JSON.stringify('自动打开失败，请关闭此窗口后手动打开翻译器。')})`);});
     child.once('spawn',()=>{child.unref();server.close();app.exit(0);});
   };
@@ -54,8 +54,9 @@ export async function runStorageMigrationWithWindow(planPath:string){
   try{
     await new Promise<void>((resolve,reject)=>{server.once('error',reject);server.listen(storageMigrationFocusPipe(plan.bootstrapPath),()=>{server.removeListener('error',reject);server.on('error',()=>{});resolve();});});
     await win.loadURL('data:text/html;charset=utf-8,'+encodeURIComponent(migrationProgressDocument()));
-    await win.webContents.executeJavaScript(`document.getElementById('paths').textContent=${JSON.stringify(`原目录：${plan.sourceRoot}\n新目录：${plan.targetRoot}`)}`);
+    // Make the window visible before waiting for any renderer-side work.
     focus();
+    await win.webContents.executeJavaScript(`document.getElementById('paths').textContent=${JSON.stringify(`原目录：${plan.sourceRoot}\n新目录：${plan.targetRoot}`)}`);
     await runStorageMigrationWorker(planPath,{restart:false,onProgress:(progress:StorageMigrationProgress)=>{if(!win.isDestroyed())void win.webContents.executeJavaScript(`window.showMigrationProgress(${JSON.stringify(progress)})`).catch(()=>{});}});
     terminal=true;
     server.close();

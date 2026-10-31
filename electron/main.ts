@@ -4153,7 +4153,9 @@ async function spawnStorageMigrationWorker(planPath: string) {
     const worker = spawn(process.execPath, args, {
       detached: true,
       stdio: 'ignore',
-      windowsHide: true
+      // This worker owns a user-visible progress window. SW_HIDE can suppress
+      // its first BrowserWindow.show() on Windows.
+      windowsHide: false
     });
     const onError = (error: Error) => reject(error);
     worker.once('error', onError);
