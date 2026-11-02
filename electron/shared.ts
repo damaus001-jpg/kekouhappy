@@ -1,5 +1,5 @@
-export type Platform = 'whatsapp' | 'telegram-a' | 'telegram-k' | 'signal' | 'opensms';
-export type WorkspaceApp = 'whatsapp' | 'telegram' | 'signal' | 'opensms';
+export type Platform = 'whatsapp' | 'telegram-a' | 'telegram-k' | 'signal' | 'opensms' | 'apple';
+export type WorkspaceApp = 'whatsapp' | 'telegram' | 'signal' | 'opensms' | 'apple';
 export type AppTheme = 'pink' | 'blackGold' | 'murongPurple' | 'clearWaterBlue';
 export type LastActiveProfileIds = Record<WorkspaceApp, string | null>;
 
@@ -131,6 +131,7 @@ export type TranslationCustomizationStatus = {
 };
 
 export function workspaceAppForPlatform(platform: Platform): WorkspaceApp {
+  if (platform === 'apple') return 'apple';
   if (platform === 'opensms') return 'opensms';
   if (platform === 'whatsapp') return 'whatsapp';
   if (platform === 'signal') return 'signal';
@@ -139,7 +140,7 @@ export function workspaceAppForPlatform(platform: Platform): WorkspaceApp {
 
 export function defaultProfileTabOrder(profiles: ChatProfile[]) {
   const result: string[] = [];
-  for (const app of ['whatsapp', 'telegram', 'signal', 'opensms'] as const) {
+  for (const app of ['whatsapp', 'telegram', 'signal', 'opensms', 'apple'] as const) {
     const appProfiles = profiles.filter((profile) => workspaceAppForPlatform(profile.platform) === app);
     const groupOrder = new Map<string, number>();
     for (const profile of appProfiles) {
@@ -188,7 +189,7 @@ export function sanitizeLastActiveProfileIds(
   const byId = new Map(profiles.map((profile) => [profile.id, profile]));
   const activeProfile = activeProfileId ? byId.get(activeProfileId) : undefined;
   const result = {} as LastActiveProfileIds;
-  for (const app of ['whatsapp', 'telegram', 'signal', 'opensms'] as const) {
+  for (const app of ['whatsapp', 'telegram', 'signal', 'opensms', 'apple'] as const) {
     const candidate = typeof source[app] === 'string' ? source[app] : null;
     const candidateProfile = candidate ? byId.get(candidate) : undefined;
     if (candidateProfile && workspaceAppForPlatform(candidateProfile.platform) === app) {

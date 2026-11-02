@@ -19,6 +19,8 @@ import { buildWhatsAppContactListResizeScript } from './whatsapp-contact-list-re
 import { buildOpenSmsContactListResizeScript } from './opensms-contact-list-resize-runtime';
 import { buildVoiceConversationSignatureScript, buildVoiceMessageActionButtonStateScript, buildVoiceMessageScanScript, buildVoiceMessageAudioChunkScript } from './local-speech-runtime';
 import opensmsIcon from './assets/opensms-bubble.svg';
+import androidIcon from './assets/android.svg';
+import appleIcon from './assets/apple.svg';
 import { installTranslationLayoutWatchersFromDom } from './translation-layout-runtime';
 import type { ExportSnapshot } from './conversation-export-runtime';
 import type { ConversationExportSelection,ConversationExportRow } from '../electron/conversation-export-types';
@@ -205,6 +207,8 @@ const activePanel = ref<Panel>('apps');
 const activeTheme = ref<ThemeName>(window.chatTranslator?.getInitialTheme?.() ?? 'blackGold');
 const showDeveloperDiagnostics = ref(import.meta.env.DEV);
 const themeMenuOpen = ref(false);
+const openSmsEntryOpen = ref(false);
+let openSmsEntryTrigger: HTMLElement | null = null;
 const workspaceHeaderCollapsed = ref(false);
 const pokeballBursting = ref(false);
 const profiles = ref<ChatProfile[]>([]);
@@ -214,7 +218,8 @@ const lastActiveProfileIds = ref<LastActiveProfileIds>({
   whatsapp: null,
   telegram: null,
   signal: null,
-  opensms: null
+  opensms: null,
+  apple: null
 });
 const configState = ref<AppConfig | null>(null);
 const currentApp = ref<RuntimeApp>('whatsapp');
@@ -223,7 +228,8 @@ const platformCatalog = ref<PlatformInfo[]>([
   { platform: 'telegram-a', label: 'Telegram A', url: 'https://web.telegram.org/a/' },
   { platform: 'telegram-k', label: 'Telegram K', url: 'https://web.telegram.org/k/' },
   { platform: 'signal', label: 'Signal', url: '' },
-  { platform: 'opensms', label: '打新增', url: 'https://www.opensms.cc/#/index/chat' }
+  { platform: 'opensms', label: '安卓', url: 'https://www.opensms.cc/#/index/chat' },
+  { platform: 'apple', label: '苹果', url: 'http://127.0.0.1:8070/' }
 ]);
 const isCreatingProfile = ref(false);
 const openSmsError = ref('');
@@ -613,8 +619,10 @@ const appTiles: AppTile[] = [
   { app: 'whatsapp', platform: 'whatsapp', label: 'WhatsApp', short: 'WA', color: '#22c55e', icon: multiWhatsappIcon },
   { app: 'telegram', platform: 'telegram-k', label: 'Telegram', short: 'TG', color: '#35a8ff', icon: multiTelegramIcon },
   { app: 'signal', platform: 'signal', label: 'Signal', short: 'SG', color: '#5361ff', icon: multiSignalIcon },
-  { app: 'opensms', platform: 'opensms', label: '打新增', short: 'SMS', color: '#25bd68', icon: opensmsIcon }
+  { app: 'opensms', platform: 'opensms', label: '打新增', short: 'SMS', color: '#25bd68', icon: androidIcon },
+  { app: 'apple', platform: 'apple', label: '苹果', short: 'iOS', color: '#8594a7', icon: appleIcon }
 ];
+const appEntryTiles = appTiles.filter(tile => tile.app !== 'apple').map(tile => tile.app === 'opensms' ? { ...tile, icon: opensmsIcon } : tile);
 
 const activeProfile = computed(() => profiles.value.find((profile) => profile.id === activeProfileId.value) ?? null);
 const activeSignalProfile = computed(() => (activeProfile.value?.platform === 'signal' ? activeProfile.value : null));
@@ -629,10 +637,12 @@ const hasBlockingModal = computed(() => Boolean(
   renameTargetProfile.value ||
   reauthorizationDialogOpen.value ||
   translationCustomizationOpen.value ||
+  openSmsEntryOpen.value ||
   eyeCareTranslationDialogOpen.value
 ));
 watch([assistantOpen,conversationExportMenuOpen], async () => { await nextTick(); scheduleSignalWorkspaceSyncBurst(); });
 watch([signedIn, lockScreenVisible, activePanel], () => { assistantOpen.value = false; });
+watch([signedIn, lockScreenVisible, activePanel], () => { openSmsEntryOpen.value = false; });
 const translationCustomizationDirty = computed(() => (
   translationCustomizationDraft.value.trim() !== translationCustomizationSaved.value.trim()
 ));
@@ -666,6 +676,7 @@ const workspaceTabs = computed<RuntimeTab[]>(() => {
     });
 });
 const unreadCountsByApp = computed<Record<RuntimeApp, number>>(() => ({
+  apple: 0,
   opensms: profiles.value.filter(p=>p.platform==='opensms').reduce((sum,p)=>sum+unreadCountForProfile(p.id),0),
   whatsapp: profiles.value
     .filter((profile) => appForPlatform(profile.platform) === 'whatsapp')
@@ -1342,6 +1353,7 @@ function isTelegramPlatform(platform: Platform): boolean {
 }
 
 function platformForApp(app: RuntimeApp): Platform {
+  if (app === 'apple') return 'apple';
   if (app === 'opensms') return 'opensms';
   if (app === 'whatsapp') return 'whatsapp';
   if (app === 'signal') return 'signal';
@@ -1366,6 +1378,48 @@ function firstOrderedProfileIdForApp(app: RuntimeApp) {
   }) ?? profiles.value.find((profile) => appForPlatform(profile.platform) === app)?.id ?? null;
 }
 
+function openAppEntry(app: RuntimeApp) {
+  if (app !== 'opensms') {
+    selectRuntimeApp(app);
+    return;
+  }
+  openSmsEntryTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  openSmsEntryOpen.value = true;
+  void nextTick(() => document.querySelector<HTMLButtonElement>('.opensms-entry-android')?.focus());
+}
+
+function closeOpenSmsEntry() {
+  openSmsEntryOpen.value = false;
+  const trigger = openSmsEntryTrigger;
+  openSmsEntryTrigger = null;
+  void nextTick(() => { if (trigger?.isConnected) trigger.focus(); });
+}
+
+function openAndroidWorkspace() {
+  openSmsEntryOpen.value = false;
+  openSmsEntryTrigger = null;
+  selectRuntimeApp('opensms');
+}
+
+function openAppleWorkspace() {
+  openSmsEntryOpen.value = false;
+  openSmsEntryTrigger = null;
+  selectRuntimeApp('apple');
+}
+
+function trapOpenSmsEntryFocus(event: KeyboardEvent) {
+  const buttons = Array.from((event.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>('button:not(:disabled)'));
+  const first = buttons[0];
+  const last = buttons[buttons.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last?.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first?.focus();
+  }
+}
+
 function selectRuntimeApp(app: RuntimeApp) {
   const previousProfileId = activeProfileId.value;
   rememberActiveProfile(previousProfileId);
@@ -1388,6 +1442,7 @@ function selectRuntimeApp(app: RuntimeApp) {
     void refreshUnreadCount(nextActiveId);
   }
   if (app === 'opensms' && !nextActiveId) void openOpenSms();
+  if (app === 'apple' && !nextActiveId) void openOpenSms('apple');
   if (app !== 'signal') void nextTick(() => scheduleSignalWorkspaceSyncBurst());
 }
 
@@ -2074,6 +2129,13 @@ function handleLockScreenKeydown(event: KeyboardEvent) {
 }
 
 function nextProfileName(app: RuntimeApp) {
+  if (app === 'apple') {
+    const existingNames = new Set(profiles.value.filter(profile => profile.platform === 'apple').map(profile => profile.name));
+    if (!existingNames.has('苹果')) return '苹果';
+    let suffix = 2;
+    while (existingNames.has(`苹果 ${suffix}`)) suffix += 1;
+    return `苹果 ${suffix}`;
+  }
   if (app === 'opensms') {
     const existingNames = new Set(profiles.value.filter(profile => profile.platform === 'opensms').map(profile => profile.name));
     if (!existingNames.has('打新增')) return '打新增';
@@ -2087,6 +2149,7 @@ function nextProfileName(app: RuntimeApp) {
 }
 
 function openCreateProfileDialog() {
+  if(currentApp.value==='apple'){void openOpenSms('apple');return;}
   if(currentApp.value==='opensms'){void openOpenSms();return;}
   isCreatingProfile.value = false;
   createProfileError.value = '';
@@ -2096,13 +2159,13 @@ function openCreateProfileDialog() {
   void nextTick(() => scheduleSignalWorkspaceSyncBurst());
 }
 
-async function openOpenSms(){
+async function openOpenSms(app: 'opensms' | 'apple' = 'opensms'){
   if(isCreatingProfile.value)return;
   isCreatingProfile.value=true;openSmsError.value='';
   try{
-    const profile=await window.chatTranslator.createProfile('opensms',nextProfileName('opensms'),'打新增');
+    const profile=await window.chatTranslator.createProfile(app,nextProfileName(app),app==='apple'?'苹果':'打新增');
     const config=await window.chatTranslator.getConfig();
-    applyConfig({...config,activeProfileId:profile.id});currentApp.value='opensms';activePanel.value='session';
+    applyConfig({...config,activeProfileId:profile.id});currentApp.value=app;activePanel.value='session';
   }catch(error){openSmsError.value=error instanceof Error?error.message:String(error);}
   finally{isCreatingProfile.value=false;}
 }
@@ -9235,6 +9298,11 @@ function refreshTelegramUnreadCountsOnResume() {
 function handleWebviewDomReady(event: Event, profile: ChatProfile) {
   const webview = event.currentTarget as Electron.WebviewTag | null;
   if (!webview) return;
+  if (profile.platform === 'apple') {
+    webRuntimeReloadAttempts.delete(profile.id);
+    void webview.executeJavaScript(buildFingerprintScript(profile), true).catch(() => undefined);
+    return;
+  }
   resetWebTranslationRuntime(profile.id);
   webRuntimeReloadAttempts.delete(profile.id);
   void webview.executeJavaScript(`window.__dfTranslationRuntimeGeneration = ${webRuntimeGenerations.get(profile.id)};`, true).catch(() => undefined);
@@ -9986,6 +10054,7 @@ async function preRenderHistoryCachedTranslations(profileId: string) {
 }
 
 function getRuntimeScriptExecutor(profile: ChatProfile) {
+  if (profile.platform === 'apple') return null;
   if (profile.platform === 'signal') {
     if (!window.chatTranslator?.executeSignalScript) return null;
     return {
@@ -10022,6 +10091,7 @@ async function resolveCustomerTarget():Promise<CustomerTarget> {
   const profile=profiles.value.find(p=>p.id===activeProfileId.value);
   if(!profile||activePanel.value!=='session'||lockScreenVisible.value)throw new Error('请先打开一个联系人会话');
   const platform=appForPlatform(profile.platform);
+  if(platform==='apple')throw new Error('请打开聊天平台的联系人会话');
   if(platform==='opensms'){
     const contact=await executeProfileScript<AssistantContact>(profile.id,buildOpenSmsScript({action:'contact'}));
     if(activeProfileId.value!==profile.id)throw new Error('正在切换账号');
@@ -10037,13 +10107,13 @@ let conversationExportCancelled=false;
 async function exportCurrentConversation({mode,scope}:ConversationExportSelection){
   if(conversationExportBusy.value)return;
   const profile=profiles.value.find(p=>p.id===activeProfileId.value);if(!profile){conversationExportStatus.value='请先打开一个联系人会话';return;}
+  const platform=appForPlatform(profile.platform);if(platform==='apple')return;
   if(!window.chatTranslator.exportConversation){conversationExportStatus.value='请重新启动开发版，加载导出功能';return;}
   conversationExportBusy.value=true;conversationExportCancelled=false;conversationExportProfileId.value=profile.id;
   conversationExportStatus.value='正在读取当前会话…';
   const exportDate=localConversationExportDate();
   let contactId='';
   const pause=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
-  const platform=appForPlatform(profile.platform);
   let exportStage='begin';
   try{
     const start=unwrapConversationExportResult<ExportSnapshot>(await executeProfileScript(profile.id,buildConversationExportScript({action:'begin',platform})));
@@ -10098,7 +10168,8 @@ const assistantCopyBusy=ref(false);
 const assistantCopyStatus=ref('');
 const assistantUsedIds=computed(()=>{
   const profile=profiles.value.find(p=>p.id===activeProfileId.value);if(!profile)return [];const contact=assistantContacts.value[profile.id];if(!contact)return [];
-  return (assistantUsages.value[profile.id]||[]).filter(u=>assistantUsageMatchesContact(u,appForPlatform(profile.platform),contact)).map(u=>u.materialId);
+  const platform=appForPlatform(profile.platform);if(platform==='apple')return [];
+  return (assistantUsages.value[profile.id]||[]).filter(u=>assistantUsageMatchesContact(u,platform,contact)).map(u=>u.materialId);
 });
 let assistantCatalogPromise:Promise<AssistantCatalog>|null=null;
 let assistantCatalogAt=0;
@@ -10126,6 +10197,7 @@ async function syncAssistantPending(profileId:string,pending:AssistantStagedMate
   assistantStageTokens.set(profileId,token);
 }
 async function installAssistantMaterialRuntime(profile:ChatProfile){
+  const platform=appForPlatform(profile.platform);if(platform==='apple')return;
   const enabled=signedIn.value&&!lockScreenVisible.value&&!hasBlockingModal.value&&activePanel.value==='session'&&activeProfileId.value===profile.id;
   if(profile.platform==='opensms')await executeProfileScript(profile.id,buildOpenSmsScript({action:'enabled',enabled}));
   const catalog=await readAssistantCatalog();
@@ -10135,12 +10207,13 @@ async function installAssistantMaterialRuntime(profile:ChatProfile){
   const themeNode=document.querySelector('.workspace-page')||document.querySelector('.app-page')||document.documentElement;
   const css=getComputedStyle(themeNode),colors:Record<string,string>={};
   for(const key of ['--text','--muted','--muted-strong','--accent','--accent-bright','--bg','--bg-soft','--panel-strong','--panel-muted','--line','--line-strong'])colors[key]=css.getPropertyValue(key).trim();
-  const installed=await executeProfileScript<{fresh:boolean}>(profile.id,buildAssistantRuntimeScript({command:'install',config:{platform:appForPlatform(profile.platform),catalog,colors,icon:await assistantIconData(),usages,enabled,showButton:false}}));
+  const installed=await executeProfileScript<{fresh:boolean}>(profile.id,buildAssistantRuntimeScript({command:'install',config:{platform,catalog,colors,icon:await assistantIconData(),usages,enabled,showButton:false}}));
   if(!enabled||installed?.fresh)assistantStageTokens.delete(profile.id);
 }
 async function copyAssistantMaterial(material:AssistantMaterial,cardTitle=''){
   if(assistantCopyBusy.value)return;
   const profile=profiles.value.find(p=>p.id===activeProfileId.value);if(!profile)return;
+  const platform=appForPlatform(profile.platform);if(platform==='apple')return;
   assistantCopyBusy.value=true;assistantCopyStatus.value='正在准备素材…';
   let inserted=false;
   try {
@@ -10167,7 +10240,7 @@ async function copyAssistantMaterial(material:AssistantMaterial,cardTitle=''){
     inserted=true;
     const current=await executeProfileScript<AssistantContact>(profile.id,buildAssistantRuntimeScript({command:'contact'}));
     if(!signedIn.value||lockScreenVisible.value||hasBlockingModal.value||activePanel.value!=='session'||activeProfileId.value!==profile.id||current?.id!==contact.id||current.phone!==contact.phone||confirmed.contactId!==contact.id)throw new Error('粘贴期间会话已变化，请检查草稿');
-    const usage=await window.chatTranslator.recordAssistantUse({profileId:profile.id,platform:appForPlatform(profile.platform),token:pending.token,contactId:contact.id,contactTitle:contact.title||'当前联系人',...(contact.phone?{phone:contact.phone}:{}),...(confirmed.actualText!==undefined?{actualText:confirmed.actualText}:{})});
+    const usage=await window.chatTranslator.recordAssistantUse({profileId:profile.id,platform,token:pending.token,contactId:contact.id,contactTitle:contact.title||'当前联系人',...(contact.phone?{phone:contact.phone}:{}),...(confirmed.actualText!==undefined?{actualText:confirmed.actualText}:{})});
     assistantContacts.value[profile.id]=current;
     assistantUsages.value[profile.id]=(assistantUsages.value[profile.id]||[]).filter(u=>!(u.platform===usage.platform&&u.contactId===usage.contactId&&u.materialId===usage.materialId)).concat(usage);
     await executeProfileScript(profile.id,buildAssistantRuntimeScript({command:'result',token:pending.token,usage})).catch(()=>undefined);
@@ -10184,6 +10257,7 @@ watch(activeProfileId,()=>{assistantCopyStatus.value='';});
 async function pollAssistantMaterialEvents(profileId:string){
   if(assistantMaterialPolls.has(profileId))return;
   const profile=profiles.value.find(p=>p.id===profileId);if(!profile)return;
+  const platform=appForPlatform(profile.platform);if(platform==='apple')return;
   assistantMaterialPolls.add(profileId);
   try{
     const snapshot=await executeProfileScript<AssistantRuntimeSnapshot>(profileId,buildAssistantRuntimeScript({command:'poll'}));
@@ -10204,7 +10278,7 @@ async function pollAssistantMaterialEvents(profileId:string){
           const catalog=await readAssistantCatalog();if(![...catalog.schedule,...catalog.quotes].some(c=>c.materials.some(m=>m.mediaId===event.mediaId)))throw new Error('未知图片素材');
           await transferAssistantImage(profileId,event.mediaId,await window.chatTranslator.getAssistantImage(event.mediaId));
         } else if(event.action==='used'&&event.token&&event.contactId){
-          const usage=await window.chatTranslator.recordAssistantUse({profileId,platform:appForPlatform(profile.platform),token:event.token,contactId:event.contactId,contactTitle:event.contactTitle||'当前联系人',...(event.phone?{phone:event.phone}:{}),...(event.actualText!==undefined?{actualText:event.actualText}:{})});
+          const usage=await window.chatTranslator.recordAssistantUse({profileId,platform,token:event.token,contactId:event.contactId,contactTitle:event.contactTitle||'当前联系人',...(event.phone?{phone:event.phone}:{}),...(event.actualText!==undefined?{actualText:event.actualText}:{})});
           assistantUsages.value[profileId]=(assistantUsages.value[profileId]||[]).filter(u=>!(u.contactId===usage.contactId&&u.materialId===usage.materialId)).concat(usage);
           await executeProfileScript(profileId,buildAssistantRuntimeScript({command:'result',token:event.token,usage}));
         }
@@ -12649,7 +12723,7 @@ onUnmounted(() => {
         </div>
 
         <div class="app-card-row">
-          <button v-for="tile in appTiles" :key="tile.app" class="launch-card" type="button" :disabled="isCreatingProfile" @click="selectRuntimeApp(tile.app)">
+          <button v-for="tile in appEntryTiles" :key="tile.app" class="launch-card" type="button" :disabled="isCreatingProfile" @click="openAppEntry(tile.app)">
             <span class="app-logo"><img :src="tile.icon" :alt="tile.label" /></span>
             <strong>{{ tile.label }}</strong>
           </button>
@@ -12835,7 +12909,7 @@ onUnmounted(() => {
         <img :src="multiSignalIcon" alt="Signal" />
         <span v-if="unreadCountForApp('signal') > 0" class="app-unread-dot" aria-hidden="true"></span>
       </button>
-      <button type="button" class="app-short sms" :class="{active:currentApp==='opensms',unread:unreadCountForApp('opensms')>0}" title="打新增" aria-label="打新增" @click="selectRuntimeApp('opensms')">
+      <button type="button" class="app-short sms" :class="{active:currentApp==='opensms'||currentApp==='apple',unread:unreadCountForApp('opensms')>0}" title="打新增" aria-label="打新增" aria-haspopup="dialog" :aria-expanded="openSmsEntryOpen" @click="openAppEntry('opensms')">
         <img :src="opensmsIcon" alt="打新增" /><small class="opensms-label">打新增</small>
         <span v-if="unreadCountForApp('opensms')>0" class="app-unread-dot" aria-hidden="true"></span>
       </button>
@@ -12902,7 +12976,7 @@ onUnmounted(() => {
       <div v-if="currentApp === 'signal' && activeVoiceTranslationStatus" class="signal-voice-status" role="status" aria-live="polite">
         {{ activeVoiceTranslationStatus }}
       </div>
-      <div v-if="showDeveloperDiagnostics && currentApp !== 'signal'" class="signal-status-strip">
+      <div v-if="showDeveloperDiagnostics && currentApp !== 'signal' && currentApp !== 'apple'" class="signal-status-strip">
         <span>{{ activeComposerStatus || '输入翻译状态：等待输入' }}</span>
         <strong>{{ activeWebComposerDiagnosticStatus || 'Web 输入探针：等待结果' }}</strong>
       </div>
@@ -12933,10 +13007,10 @@ onUnmounted(() => {
           <button class="signal-open-button" type="button" @click="launchActiveSignalProfile">打开 Signal</button>
         </template>
         <template v-else>
-          <p>{{ currentApp==='opensms'?'打新增':`${currentAppTile.label} 未打开多开环境` }}</p>
-          <span v-if="currentApp==='opensms'">{{openSmsError || (isCreatingProfile?'正在打开，请稍候…':'登录后即可翻译当前会话。')}}</span>
+          <p>{{ currentApp==='opensms'?'安卓':`${currentAppTile.label} 未打开多开环境` }}</p>
+          <span v-if="currentApp==='opensms'||currentApp==='apple'">{{openSmsError || (isCreatingProfile?'正在打开，请稍候…':currentApp==='apple'?'点击下方按钮打开苹果工作台。':'登录后即可翻译当前会话。')}}</span>
           <span v-else>点击顶部 +，填写自定义名称后创建当前应用的多开。</span>
-          <button type="button" :disabled="isCreatingProfile" @click="openCreateProfileDialog">{{currentApp==='opensms'?'打开打新增':'新建多开'}}</button>
+          <button type="button" :disabled="isCreatingProfile" @click="openCreateProfileDialog">{{currentApp==='opensms'?'打开安卓':currentApp==='apple'?'打开苹果':'新建多开'}}</button>
         </template>
       </div>
     </section>
@@ -13001,7 +13075,33 @@ onUnmounted(() => {
     </div>
   </main>
 
-  <AssistantLibraryPanel v-if="signedIn && activePanel === 'session' && !lockScreenVisible && !hasBlockingModal"
+  <div
+    v-if="openSmsEntryOpen && signedIn && !lockScreenVisible"
+    class="modal-mask opensms-entry-mask"
+    :class="themeClass"
+    @click.self="closeOpenSmsEntry"
+    @keydown.esc.stop.prevent="closeOpenSmsEntry"
+    @keydown.tab="trapOpenSmsEntryFocus"
+  >
+    <section class="modal-card opensms-entry-card" role="dialog" aria-modal="true" aria-labelledby="opensms-entry-title">
+      <h3 id="opensms-entry-title">打新增</h3>
+      <div class="opensms-entry-options">
+        <button class="opensms-entry-option opensms-entry-android" type="button" @click="openAndroidWorkspace">
+          <img :src="androidIcon" alt="" />
+          <strong>安卓</strong>
+        </button>
+        <button class="opensms-entry-option opensms-entry-apple" type="button" @click="openAppleWorkspace">
+          <img :src="appleIcon" alt="" />
+          <strong>苹果</strong>
+        </button>
+      </div>
+      <div class="modal-actions">
+        <button type="button" @click="closeOpenSmsEntry">取消</button>
+      </div>
+    </section>
+  </div>
+
+  <AssistantLibraryPanel v-if="signedIn && activePanel === 'session' && currentApp !== 'apple' && !lockScreenVisible && !hasBlockingModal"
     v-model:open="assistantOpen" :workspace="activePanel === 'session'" :collapsed="workspaceHeaderCollapsed" :class="themeClass"
     :customer-profile-id="activeProfileId||''" :resolve-customer="resolveCustomerTarget" :used-ids="assistantUsedIds" :copy-busy="assistantCopyBusy" :copy-status="assistantCopyStatus" :contact-title="assistantContacts[activeProfileId||'']?.title"
     @copy="copyAssistantMaterial($event.material,$event.cardTitle)" @changed="assistantLibraryChanged" :export-busy="conversationExportBusy" :export-status="conversationExportStatus"

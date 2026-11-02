@@ -2646,6 +2646,59 @@ select:focus {
   margin-top: 16px;
 }
 
+.opensms-entry-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.opensms-entry-option {
+  display: flex;
+  min-height: 146px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 18px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--text);
+  background: var(--panel);
+}
+
+.opensms-entry-option img {
+  width: 48px;
+  height: 48px;
+}
+
+.opensms-entry-option strong {
+  font-size: 18px;
+}
+
+.opensms-entry-android {
+  border-color: #25bd68;
+}
+
+.opensms-entry-android:hover,
+.opensms-entry-android:focus-visible {
+  outline: 2px solid #25bd68;
+  outline-offset: 2px;
+}
+
+.opensms-entry-apple {
+  border-color: #8594a7;
+}
+
+.opensms-entry-apple:hover,
+.opensms-entry-apple:focus-visible {
+  outline: 2px solid #8594a7;
+  outline-offset: 2px;
+}
+
+.opensms-entry-apple img {
+  filter: invert(0.65);
+}
+
 .eye-care-translation-card {
   position: relative;
   width: min(590px, calc(100vw - 40px));

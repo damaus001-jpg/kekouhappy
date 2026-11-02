@@ -168,8 +168,29 @@ assert.match(
 );
 assert.match(
   main,
-  /mainWindow\.on\('resized', requestSignalWorkspaceSyncBurst\);/,
+  /mainWindow\.on\('resized', refreshSignalAfterLayoutChange\);/,
   'Signal geometry must synchronize after the main window finishes resizing'
+);
+const mainSignalLayoutRefresh = contractSlice(
+  main,
+  'function refreshSignalAfterLayoutChange()',
+  'function requestSignalProfilePresentation(',
+  'translator Signal layout refresh'
+);
+const layoutRefreshActions = [];
+const refreshSignalLayout = new Function(
+  'requestSignalWorkspaceSyncBurst',
+  'scheduleSignalLayoutCacheReplay',
+  `${mainSignalLayoutRefresh}\nreturn refreshSignalAfterLayoutChange;`
+)(
+  () => layoutRefreshActions.push('sync-workspace'),
+  () => layoutRefreshActions.push('replay-cached-translations')
+);
+refreshSignalLayout();
+assert.deepEqual(
+  layoutRefreshActions,
+  ['sync-workspace', 'replay-cached-translations'],
+  'layout refresh must synchronize Signal geometry and replay cached translations'
 );
 assert.match(
   main,

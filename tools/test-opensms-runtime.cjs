@@ -345,8 +345,14 @@ if(!process.versions.electron){
     const mainCode=['createProfile','createProfileRecord'].map(name=>mainAst.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text===name).getText(mainAst)).join('\n');
     const factory=ts.transpileModule('let creatingOpenSms=null;\n'+mainCode,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
     let config={profiles:[],profileTabOrder:[],lastActiveProfileIds:{}};let ids=0;
-    const create=new Function('readConfig','saveConfig','randomId','platformDefaults','buildFingerprint','userAgentForPlatform','configureSession','workspaceAppForPlatform',factory+';return createProfile;')(async()=>structuredClone(config),async value=>{config=value;},()=>`id-${++ids}`,{opensms:{label:'打新增'}},()=>({}),()=>'',()=>{},shared.workspaceAppForPlatform);
+    const create=new Function('readConfig','saveConfig','randomId','platformDefaults','buildFingerprint','userAgentForPlatform','configureSession','workspaceAppForPlatform','assertProfileStorageAvailable',factory+';return createProfile;')(async()=>structuredClone(config),async value=>{config=value;},()=>`id-${++ids}`,{opensms:{label:'打新增'},apple:{label:'苹果'}},index=>({fingerprintId:`fingerprint-${index}`}),()=>'',()=>{},shared.workspaceAppForPlatform,async()=>{});
     const created=await Promise.all(Array.from({length:12},()=>create('opensms','打新增','打新增')));assert.equal(new Set(created.map(p=>p.id)).size,1);assert.equal(config.profiles.length,1);const second=await create('opensms','打新增 2','打新增');assert.equal(config.profiles.length,2);assert.notEqual(second.id,created[0].id,'OpenSMS can now create a second isolated profile');
+    const appleOne=await create('apple','苹果','苹果'),appleTwo=await create('apple','苹果 2','苹果');
+    assert.notEqual(appleOne.partition,appleTwo.partition,'Apple browsers use isolated persistent sessions');
+    assert.notEqual(appleOne.fingerprint.fingerprintId,appleTwo.fingerprint.fingerprintId,'Apple browsers use independent fingerprint records');
+    assert.equal(config.lastActiveProfileIds.apple,appleTwo.id);
+    assert.equal(auth.isAllowedPlatformUrl('apple','http://127.0.0.1:8070/'),true);
+    for(const url of ['http://127.0.0.1:8071/','http://localhost:8070/','https://127.0.0.1:8070/','http://127.0.0.1:8070@evil.example/','http://user@127.0.0.1:8070/'])assert.equal(auth.isAllowedPlatformUrl('apple',url),false);
     assert.ok(source.indexOf('class="app-short sms"')>source.indexOf('class="app-short sg"'));assert.match(source,/:src="opensmsIcon" alt="打新增"/);assert.match(source,/function nextProfileName\(app: RuntimeApp\)[\s\S]*?existingNames\.has\(`打新增 \$\{suffix\}`\)/,'OpenSMS profile names are generated without collisions');assert.match(source,/<button class="add-tab" type="button"[^>]*@click="openCreateProfileDialog">\+/,'OpenSMS exposes the add-profile control');assert.match(source,/<em aria-label="rename"/);assert.match(source,/<i aria-label="close"/);
     // Render the actual application navigation fragment with Vue and the real CSS.
     const navStart=source.indexOf('<button type="button" class="app-short wa"');
@@ -358,17 +364,40 @@ if(!process.versions.electron){
     const png=name=>'data:image/png;base64,'+fs.readFileSync(path.join(root,'src/assets',name)).toString('base64');
     await execute(`window.__dfOpenSms.dispose();delete window.__dfOpenSms;document.body.innerHTML='<div id="nav-fixture"></div>';const style=document.createElement('style');style.textContent=${JSON.stringify(css)};document.head.appendChild(style);`);
     await execute(fs.readFileSync(require.resolve('vue/dist/vue.global.prod.js'),'utf8')+';true');
-    const template='<main class="page workspace-page theme-black-gold"><header class="runtime-header">Navigation fixture</header><aside class="runtime-side"><button>Home</button><button>Lock</button><button>Guard</button><button>Collapse</button>'+nav+'<button class="runtime-customize-button">Settings</button></aside></main>';
-    await execute(`Vue.createApp({template:${JSON.stringify(template)},setup(){const currentApp=Vue.ref('signal');window.testCurrentApp=currentApp;return {currentApp,multiWhatsappIcon:${JSON.stringify(png('multi-whatsapp.png'))},multiTelegramIcon:${JSON.stringify(png('multi-telegram.png'))},multiSignalIcon:${JSON.stringify(png('multi-signal.png'))},opensmsIcon:${JSON.stringify(icon)},unreadCountForApp:()=>0,selectRuntimeApp:app=>currentApp.value=app};}}).mount('#nav-fixture');true`);
+    const entryStart=source.lastIndexOf('<div',source.indexOf('class="modal-mask opensms-entry-mask"'));
+    const entryEnd=source.indexOf('<AssistantLibraryPanel',entryStart);
+    const entry=source.slice(entryStart,entryEnd);
+    const entryFunctions=ts.transpileModule(['openAppEntry','closeOpenSmsEntry','openAndroidWorkspace','openAppleWorkspace','trapOpenSmsEntryFocus'].map(name=>ast.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text===name).getText(ast)).join('\n'),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+    const svg=name=>'data:image/svg+xml;base64,'+fs.readFileSync(path.join(root,'src/assets',name)).toString('base64');
+    const template='<main class="page workspace-page" :class="themeClass"><header class="runtime-header">Navigation fixture</header><aside class="runtime-side"><button>Home</button><button>Lock</button><button>Guard</button><button>Collapse</button>'+nav+'<button class="runtime-customize-button">Settings</button></aside></main>'+entry;
+    await execute(`Vue.createApp({template:${JSON.stringify(template)},setup(){
+      const currentApp=Vue.ref('signal'),openSmsEntryOpen=Vue.ref(false),themeClass=Vue.ref('theme-black-gold');
+      let openSmsEntryTrigger=null;const nextTick=Vue.nextTick,selectRuntimeApp=app=>currentApp.value=app;
+      ${entryFunctions};window.testCurrentApp=currentApp;window.testTheme=themeClass;
+      return {currentApp,openSmsEntryOpen,themeClass,signedIn:true,lockScreenVisible:false,multiWhatsappIcon:${JSON.stringify(png('multi-whatsapp.png'))},multiTelegramIcon:${JSON.stringify(png('multi-telegram.png'))},multiSignalIcon:${JSON.stringify(png('multi-signal.png'))},opensmsIcon:${JSON.stringify(icon)},androidIcon:${JSON.stringify(svg('android.svg'))},appleIcon:${JSON.stringify(svg('apple.svg'))},unreadCountForApp:()=>0,selectRuntimeApp,openAppEntry,closeOpenSmsEntry,openAndroidWorkspace,openAppleWorkspace,trapOpenSmsEntryFocus};
+    }}).mount('#nav-fixture');true`);
     await new Promise(r=>setTimeout(r,100));
     for(const theme of ['theme-black-gold','theme-pink','theme-black-gold theme-murong-purple','theme-black-gold theme-clear-water-blue']){
-      await execute(`document.querySelector('main').className='page workspace-page '+${JSON.stringify(theme)}`);
+      await execute(`window.testTheme.value=${JSON.stringify(theme)}`);
       const layout=await execute(`(()=>{const button=document.querySelector('.app-short.sms'),sg=document.querySelector('.app-short.sg'),label=button.querySelector('small');const a=button.getBoundingClientRect(),b=sg.getBoundingClientRect(),c=label.getBoundingClientRect();return {below:a.top>=b.bottom,label:label.textContent,inside:c.top>=a.top&&c.bottom<=a.bottom,loaded:button.querySelector('img').naturalWidth>0};})()`);
       assert.deepEqual(layout,{below:true,label:'打新增',inside:true,loaded:true});
+      await execute(`document.querySelector('.app-short.sms').focus();document.querySelector('.app-short.sms').click()`);
+      assert.equal(await execute('window.testCurrentApp.value'),'signal','opening the second-level entry must not switch apps or create an OpenSMS profile');
+      const entryLayout=await execute(`(()=>{const card=document.querySelector('.opensms-entry-card'),rect=card.getBoundingClientRect();return {labels:Array.from(card.querySelectorAll('.opensms-entry-option strong'),node=>node.textContent),enabled:Array.from(card.querySelectorAll('.opensms-entry-option'),button=>!button.disabled),focused:document.activeElement.classList.contains('opensms-entry-android'),inside:rect.left>=0&&rect.right<=innerWidth&&rect.top>=0&&rect.bottom<=innerHeight,icons:Array.from(card.querySelectorAll('.opensms-entry-option img'),img=>img.naturalWidth>0)};})()`);
+      assert.deepEqual(entryLayout,{labels:['安卓','苹果'],enabled:[true,true],focused:true,inside:true,icons:[true,true]});
+      await execute(`document.querySelector('.opensms-entry-card .modal-actions button').click()`);
+      assert.equal(await execute(`document.querySelector('.opensms-entry-card')===null&&document.activeElement===document.querySelector('.app-short.sms')`),true,'cancel closes the entry and restores focus');
     }
-    await execute(`document.querySelector('.app-short.sms').click()`);assert.equal(await execute(`window.testCurrentApp.value`),'opensms');
+    await execute(`document.querySelector('.app-short.sms').click()`);
+    await execute(`document.querySelector('.opensms-entry-android').click()`);assert.equal(await execute(`window.testCurrentApp.value`),'opensms');
+    assert.equal(await execute(`document.querySelector('.opensms-entry-card')===null`),true,'selecting Android closes the entry');
+    assert.match(source,/@click="openAppEntry\(tile.app\)"/,'the application center uses the same second-level entry');
+    await execute(`document.querySelector('.app-short.sms').click()`);
     await execute('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))');await new Promise(r=>setTimeout(r,150));
     const screenshot=await win.webContents.capturePage(undefined,{stayHidden:true,stayAwake:true});fs.mkdirSync(path.join(root,'.tmp/opensms-runtime-test'),{recursive:true});fs.writeFileSync(path.join(root,'.tmp/opensms-runtime-test/sidebar.png'),screenshot.toPNG());
-    win.destroy();console.log('opensms-runtime: actual App dispatch, body/direction, account isolation, GPT, Enter/button translation, races, IME, sensitive/MMS/startup/lock guards, confirmed materials/photo duplicates, singleton and four-theme Vue sidebar passed');app.exit(0);
+    await execute(`document.querySelector('.opensms-entry-apple').click()`);
+    assert.equal(await execute('window.testCurrentApp.value'),'apple','Apple selects its own multi-browser platform');
+    assert.equal(await execute(`document.querySelector('.opensms-entry-card')===null`),true);
+    win.destroy();console.log('opensms-runtime: actual App dispatch, body/direction, account isolation, GPT, Enter/button translation, races, IME, sensitive/MMS/startup/lock guards, confirmed materials/photo duplicates, singleton and four-theme Vue sidebar/second-level entry passed');app.exit(0);
   }).catch(error=>{console.error(error);app.exit(1);});
 }

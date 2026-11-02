@@ -295,7 +295,8 @@ const platformDefaults: Record<Platform, { label: string; url: string }> = {
   'telegram-a': { label: 'Telegram A', url: 'https://web.telegram.org/a' },
   'telegram-k': { label: 'Telegram K', url: 'https://web.telegram.org/k/' },
   signal: { label: 'Signal', url: '' },
-  opensms: { label: '打新增', url: 'https://www.opensms.cc/#/index/chat' }
+  opensms: { label: '打新增', url: 'https://www.opensms.cc/#/index/chat' },
+  apple: { label: '苹果', url: 'http://127.0.0.1:8070/' }
 };
 
 const whatsappUserAgent = buildWindowsChromiumUserAgent(process.versions.chrome);
@@ -1584,7 +1585,7 @@ const gracefulQuitTimeoutMs = 8000;
 const rendererReadyTimeoutMs = 5000;
 let fatalStartupDialogShown = false;
 const profileIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const supportedPlatforms = new Set<Platform>(['whatsapp', 'telegram-a', 'telegram-k', 'signal', 'opensms']);
+const supportedPlatforms = new Set<Platform>(['whatsapp', 'telegram-a', 'telegram-k', 'signal', 'opensms', 'apple']);
 
 // SIGNAL_CACHE_PROTOCOL_PURE_START
 const signalCacheProtocolMaxBatchSize = 100;
@@ -2159,6 +2160,7 @@ function isTrustedMainUrl(value: string) {
 function isAllowedPlatformUrl(platform: Platform, value: string) {
   try {
     const url = new URL(value);
+    if (platform === 'apple') return url.origin === 'http://127.0.0.1:8070' && !url.username && !url.password;
     if (url.protocol !== 'https:') return false;
     if (platform === 'opensms') return url.hostname === 'www.opensms.cc' || url.hostname === 'opensms.cc';
     if (platform === 'whatsapp') return url.hostname === 'web.whatsapp.com';
@@ -2173,6 +2175,7 @@ function isAllowedPlatformUrl(platform: Platform, value: string) {
 function isAllowedPlatformPermissionOrigin(platform: Platform, value: string) {
   try {
     const url = new URL(value);
+    if (platform === 'apple') return url.origin === 'http://127.0.0.1:8070' && !url.username && !url.password;
     if (url.protocol !== 'https:') return false;
     if (platform === 'opensms') return url.hostname === 'www.opensms.cc' || url.hostname === 'opensms.cc';
     if (platform === 'whatsapp') return url.hostname === 'web.whatsapp.com';
@@ -3422,7 +3425,8 @@ function defaultConfig(): AppConfig {
       whatsapp: null,
       telegram: null,
       signal: null,
-      opensms: null
+      opensms: null,
+      apple: null
     },
     activeTheme: 'blackGold',
     eyeCareTranslationEnabled: false,
@@ -3876,7 +3880,7 @@ function sanitizeConfig(config: AppConfig): AppConfig {
 }
 
 function userAgentForPlatform(platform: Platform) {
-  if (platform === 'signal' || platform === 'opensms') return whatsappUserAgent;
+  if (platform === 'signal' || platform === 'opensms' || platform === 'apple') return whatsappUserAgent;
   return platform === 'whatsapp' ? whatsappUserAgent : telegramUserAgent;
 }
 
@@ -8692,7 +8696,8 @@ async function createWindow() {
       event.preventDefault();
       return;
     }
-    webPreferences.preload = webviewSendGuardPreloadPath;
+    if (platform === 'apple') delete webPreferences.preload;
+    else webPreferences.preload = webviewSendGuardPreloadPath;
     webPreferences.nodeIntegration = false;
     webPreferences.nodeIntegrationInSubFrames = false;
     webPreferences.contextIsolation = true;
