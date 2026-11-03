@@ -1578,6 +1578,10 @@ const signalVisibilityShutdownGraceMs = 250;
 let signalShutdownBeforeQuitDone = false;
 let signalShutdownBeforeQuitPromise: Promise<void> | null = null;
 let signalShutdownBeforeQuitTimer: NodeJS.Timeout | null = null;
+let customerQuitSaveReady = false;
+let customerQuitSavePromise: Promise<void> | null = null;
+let customerWindowCloseReady = false;
+let customerWindowClosePromise: Promise<void> | null = null;
 let signalControlServer: Server | null = null;
 let signalControlPort: number | null = null;
 let signalControlServerPromise: Promise<number> | null = null;
@@ -4062,6 +4066,7 @@ async function createProfileRecord(platform: Platform, name: string, group: stri
   config.activeProfileId = profile.id;
   config.profileTabOrder = [...config.profileTabOrder.filter((profileId) => profileId !== profile.id), profile.id];
   config.lastActiveProfileIds[workspaceAppForPlatform(profile.platform)] = profile.id;
+  if (profile.platform === 'apple') config.lastActiveProfileIds.opensms = profile.id;
   configureSession(profile);
   await saveConfig(config);
   return profile;
@@ -7391,7 +7396,7 @@ function registerApprovedComposerTranslation(request: TranslateRequest, requestI
   const isWebComposerEnter = request.reason === 'composer-enter' && (
     request.platform === 'whatsapp' ||
     request.platform === 'telegram-a' ||
-    request.platform === 'telegram-k' || request.platform === 'opensms'
+    request.platform === 'telegram-k' || request.platform === 'opensms' || request.platform === 'apple'
   );
   const isSignalChineseToEnglish = request.platform === 'signal' &&
     (request.reason === 'composer-enter' || request.reason === 'composer-pretranslate') &&
@@ -8644,6 +8649,47 @@ async function runDevelopmentCacheSmokeCheck() {
   if (loaded[0]?.translatedText !== request.translatedText) throw new Error('Encrypted translation cache smoke round trip failed.');
 }
 
+async function flushMainWindowCustomerWrites() {
+  const target = mainWindow;
+  if (!target || target.isDestroyed() || target.webContents.isDestroyed() || !isTrustedMainUrl(target.webContents.getURL())) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      target.webContents.executeJavaScript('window.__dfFlushCustomerWritesBeforeExit?.()'),
+      new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error('客户资料仍在保存，请检查保存状态后重试')), 30_000); })
+    ]);
+  } finally { if (timer) clearTimeout(timer); }
+}
+
+async function reportCustomerSaveExitFailure(error: unknown) {
+  const target = mainWindow;
+  if (!target || target.isDestroyed()) return;
+  await target.webContents.executeJavaScript('window.__dfResumeCustomerEditing?.()').catch(() => undefined);
+  await dialog.showMessageBox(target, {
+    type: 'error', title: '客户资料尚未保存', message: '已取消退出，客户资料和草稿仍保留在窗口中。',
+    detail: `${error instanceof Error ? error.message : String(error)}\n\n请检查客户跟进中的保存状态，重试保存后再退出。`, buttons: ['返回检查']
+  });
+}
+
+function prepareCustomerWritesForQuit() {
+  if (customerQuitSaveReady || !mainWindow || mainWindow.isDestroyed() || !isTrustedMainUrl(mainWindow.webContents.getURL())) return true;
+  customerQuitSavePromise ??= flushMainWindowCustomerWrites()
+    .then(() => { customerQuitSaveReady = true; app.quit(); })
+    .catch(reportCustomerSaveExitFailure)
+    .finally(() => { customerQuitSavePromise = null; });
+  return false;
+}
+
+function deferWindowCloseForCustomerWrites(event: { preventDefault: () => void }) {
+  const target = mainWindow;
+  if (customerWindowCloseReady || !target || target.isDestroyed() || !isTrustedMainUrl(target.webContents.getURL())) return;
+  event.preventDefault();
+  customerWindowClosePromise ??= flushMainWindowCustomerWrites()
+    .then(() => { if (!target.isDestroyed()) { customerWindowCloseReady = true; target.close(); } })
+    .catch(reportCustomerSaveExitFailure)
+    .finally(() => { customerWindowCloseReady = false; customerWindowClosePromise = null; });
+}
+
 async function createWindow() {
   const initialTheme = await readInitialAppTheme();
   const initialThemeBackground = initialTheme === 'pink'
@@ -8696,8 +8742,7 @@ async function createWindow() {
       event.preventDefault();
       return;
     }
-    if (platform === 'apple') delete webPreferences.preload;
-    else webPreferences.preload = webviewSendGuardPreloadPath;
+    webPreferences.preload = webviewSendGuardPreloadPath;
     webPreferences.nodeIntegration = false;
     webPreferences.nodeIntegrationInSubFrames = false;
     webPreferences.contextIsolation = true;
@@ -8710,11 +8755,15 @@ async function createWindow() {
     if (!mainWindow?.isMinimized()) prepareSignalWindowsForMainHide();
   });
   mainWindow.on('close', (event) => {
-    if (!remoteGuardIncidentLatched || signalShutdownBeforeQuitDone) return;
-    event.preventDefault();
-    showRemoteGuardAlarmWindows();
-    startRemoteGuardAlarmSound();
-    focusMainWindowForRemoteGuardRecovery();
+    if (remoteGuardIncidentLatched && !signalShutdownBeforeQuitDone) {
+      event.preventDefault();
+      void mainWindow?.webContents.executeJavaScript('window.__dfResumeCustomerEditing?.()').catch(() => undefined);
+      showRemoteGuardAlarmWindows();
+      startRemoteGuardAlarmSound();
+      focusMainWindowForRemoteGuardRecovery();
+      return;
+    }
+    deferWindowCloseForCustomerWrites(event);
   });
   mainWindow.on('restore', requestSignalWorkspaceRestoreOnce);
   mainWindow.on('show', requestSignalWorkspaceRestoreOnce);
@@ -8870,6 +8919,7 @@ if (cloneResetWorkerMode) {
 if (!backgroundWorkerMode) app.on('before-quit', (event) => {
   if (signalShutdownBeforeQuitDone) return;
   event.preventDefault();
+  if (!prepareCustomerWritesForQuit()) return;
   signalShutdownBeforeQuitTimer ??= setTimeout(() => {
     signalShutdownBeforeQuitDone = true;
     app.quit();

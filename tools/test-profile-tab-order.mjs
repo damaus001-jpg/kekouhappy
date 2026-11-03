@@ -4,7 +4,9 @@ import { fileURLToPath } from 'node:url';
 import {
   defaultProfileTabOrder,
   sanitizeLastActiveProfileIds,
-  sanitizeProfileTabOrder
+  sanitizeProfileTabOrder,
+  workspaceAppContainsPlatform,
+  workspaceAppForPlatform
 } from '../dist-electron/shared.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -67,6 +69,26 @@ assert.deepEqual(
   { whatsapp: 'wa-1', telegram: 'tg-1', signal: 'sg-1', opensms: null, apple: null },
   'last-active ids must stay inside their own application'
 );
+
+const newContactsProfiles = [
+  ...profiles,
+  profile('android-1', 'opensms', '打新增', 40),
+  profile('apple-1', 'apple', '苹果', 50)
+];
+const newContactsOrder = sanitizeProfileTabOrder(newContactsProfiles, manualOrder);
+const restoredNewContacts = sanitizeLastActiveProfileIds(
+  newContactsProfiles,
+  { opensms: 'apple-1', apple: 'apple-1', whatsapp: 'wa-1' },
+  'wa-1',
+  newContactsOrder
+);
+assert.equal(restoredNewContacts.opensms, 'apple-1', 'the shared new-contacts entry must restore an Apple tab after restarting');
+assert.equal(workspaceAppContainsPlatform('opensms', 'opensms'), true);
+assert.equal(workspaceAppContainsPlatform('opensms', 'apple'), true);
+assert.equal(workspaceAppContainsPlatform('whatsapp', 'apple'), false);
+assert.equal(workspaceAppForPlatform('apple'), 'apple', 'grouping tabs must preserve the Apple translation/runtime identity');
+assert.equal(sanitizeLastActiveProfileIds([newContactsProfiles.at(-1)], {}, null, ['apple-1']).opensms, 'apple-1', 'an existing Apple-only workspace must open without creating Android');
+assert.equal(sanitizeLastActiveProfileIds([], restoredNewContacts, null, []).opensms, null, 'removing the last new-contacts profile must clear its remembered tab');
 
 function sourceBetween(start, end) {
   const startIndex = appSource.indexOf(start);

@@ -16,7 +16,7 @@ const compile=code=>ts.transpileModule(code,{compilerOptions:{target:ts.ScriptTa
     readConfig:async()=>{reads++;if(!authorized)throw Error('not authorized');return {profiles:[{platform:'signal',id:'a',signalDataDir:local}]};},
     signalInstancePath:id=>id,killSignalProcessesByDataDir:async()=>killed++,
     backgroundWorkerMode:false,signalShutdownBeforeQuitDone:false,signalShutdownBeforeQuitTimer:null,signalShutdownBeforeQuitPromise:null,gracefulQuitTimeoutMs:8000,
-    setTimeout:()=>1,clearTimeout:()=>{},cleanupPackagedRuntimeLogs:async()=>{throw Error('fixture cleanup failure');},runtimeLoggingEnabled:true,console:{error:()=>logs++},stopRemoteGuard:()=>{}
+    setTimeout:()=>1,clearTimeout:()=>{},prepareCustomerWritesForQuit:()=>true,cleanupPackagedRuntimeLogs:async()=>{throw Error('fixture cleanup failure');},runtimeLoggingEnabled:true,console:{error:()=>logs++},stopRemoteGuard:()=>{}
   };
   vm.createContext(context);vm.runInContext(compile(functions),context);
   assert.equal(await context.initializeUserDataPath(),false,'unavailable mapped data can exit cleanly');assert.equal(applied,'');assert.equal(saved,'');

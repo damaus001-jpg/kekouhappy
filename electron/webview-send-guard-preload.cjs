@@ -56,6 +56,14 @@ const blockedPhonePrompts = new WeakMap();
 // Fail closed during document startup, before the page-world SMS guard exists.
 // The established WA/TG handlers below remain scoped to their original hosts.
 function guardOpenSmsStartup(event) {
+  if (location.origin === 'http://127.0.0.1:8070') {
+    if (document.documentElement?.dataset.dfAppleGuard === '2026-11-02-apple-v1') return;
+    const element = event.target?.nodeType === Node.ELEMENT_NODE ? event.target : event.target?.parentElement;
+    if ((event.key === 'Enter' && element?.closest?.('#reply-box #reply-zh')) || element?.closest?.('#reply-box #send-reply')) {
+      event.preventDefault(); event.stopImmediatePropagation();
+    }
+    return;
+  }
   if (!['opensms.cc', 'www.opensms.cc'].includes(location.hostname)) return;
   if (document.documentElement?.dataset.dfOpenSmsGuard === '2026-10-16-opensms-v1') return;
   const element = event.target?.nodeType === Node.ELEMENT_NODE ? event.target : event.target?.parentElement;

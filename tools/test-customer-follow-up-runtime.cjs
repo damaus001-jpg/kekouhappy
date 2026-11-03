@@ -12,9 +12,9 @@ if(!process.versions.electron){
     const store=await import('../dist-electron/customer-follow-up-store.js');
     const transfer=await import('../dist-electron/customer-follow-up-transfer.js');
     const {emptyAssistantLibrary}=await import('../dist-electron/assistant-library-types.js');
-    let failNext=false;
+    let failNext=false,saveCount=0;
     ipcMain.handle('fixture:get',(_e,t)=>store.readCustomer(t));
-    ipcMain.handle('fixture:save',async(_e,t,v)=>{await new Promise(r=>setTimeout(r,100));if(failNext){failNext=false;throw new Error('Fixture disk unavailable');}return store.saveCustomer(t,v);});
+    ipcMain.handle('fixture:save',async(_e,t,v)=>{saveCount++;await new Promise(r=>setTimeout(r,100));if(failNext){failNext=false;throw new Error('Fixture disk unavailable');}return store.saveCustomer(t,v);});
     ipcMain.handle('fixture:settings',(_e,v)=>store.saveCustomerSettings(v));
     ipcMain.handle('fixture:export',(_e,t)=>transfer.exportCustomerFile(t));
     ipcMain.handle('fixture:preview',async(_e,t)=>{await new Promise(r=>setTimeout(r,200));return transfer.previewCustomerFile(t);});
@@ -23,7 +23,7 @@ if(!process.versions.electron){
     ipcMain.handle('fixture:fail',()=>{failNext=true;});
     const preload=path.join(dir,'preload.cjs');fs.writeFileSync(preload,`const {contextBridge,ipcRenderer}=require('electron');contextBridge.exposeInMainWorld('chatTranslator',{getAssistantLibrary:()=>ipcRenderer.invoke('fixture:library'),getCustomer:t=>ipcRenderer.invoke('fixture:get',t),saveCustomer:(t,v)=>ipcRenderer.invoke('fixture:save',t,v),saveCustomerSettings:v=>ipcRenderer.invoke('fixture:settings',v),exportCustomer:t=>ipcRenderer.invoke('fixture:export',t),previewCustomerImport:t=>ipcRenderer.invoke('fixture:preview',t),importCustomer:(t,token,stage)=>ipcRenderer.invoke('fixture:import',t,token,stage),failNext:()=>ipcRenderer.invoke('fixture:fail')});`);
     fs.writeFileSync(path.join(dir,'fixture.html'),`<!doctype html><html><head><meta charset="utf-8"><style>:root{--text:#eee;--muted:#aaa;--muted-strong:#ccc;--accent:#dca749;--accent-bright:#ffd68f;--bg:#111;--bg-soft:#191919;--panel-strong:#222;--panel-muted:#292929;--line:#555;--line-strong:#666;--shadow:0 8px 30px #0006}body{background:#111}</style></head><body><div id="fixture"></div><script type="module">
-      import {createApp,h,ref} from 'vue';import Panel from '/src/components/CustomAssistantPanel.vue';
+      import {createApp,h,ref} from 'vue';import Panel from '/src/components/CustomAssistantPanel.vue';import {installCustomerExitSaveHandler} from '/src/customer-follow-up-client.ts';installCustomerExitSaveHandler();
       const target=ref({platform:'opensms',profileId:'sms-a',contactId:'chat-a',contactTitle:'客户 A',phone:'+12135551212'}),open=ref(true);
       window.setTarget=value=>target.value=value;window.setOpen=value=>open.value=value;window.confirm=()=>true;
       createApp({setup(){return()=>h(Panel,{open:open.value,workspace:true,collapsed:true,customerProfileId:target.value.profileId,resolveCustomer:async()=>JSON.parse(JSON.stringify(target.value)),onExport:selection=>window.lastExport=selection,onExportMenuOpen:value=>window.exportMenuOpen=value,'onUpdate:open':v=>open.value=v});}}).mount('#fixture');
@@ -56,7 +56,8 @@ if(!process.versions.electron){
     await click('客户跟进');await wait(`!!document.querySelector('[aria-label="姓名"]')`);
     assert.ok(await exec(`document.querySelector('.customer-summary').textContent.includes('+12135551212')`));
     assert.equal(await exec(`getComputedStyle(document.querySelector('[aria-label="客户阶段"] option:last-child')).color`),'rgb(0, 0, 0)','stage options remain black under the dark palette');
-    await input('姓名','客户 A 的资料');await input('年龄','35');await input('今天聊了什么','未提交草稿');await saved();
+    await exec(`(()=>{for(const [label,value] of [['姓名','客户 A 的资料'],['年龄','35'],['今天聊了什么','未提交草稿']]){const input=document.querySelector('[aria-label="'+label+'"]');input.value=value;input.dispatchEvent(new Event('input',{bubbles:true}));}return true;})()`);await saved();
+    assert.equal(saveCount,1,'a burst across several fields is persisted as one encrypted record write');
     const a={platform:'opensms',profileId:'sms-a',contactId:'chat-a',contactTitle:'客户 A',phone:'+12135551212'};
     const b={...a,contactId:'chat-b',contactTitle:'客户 B',phone:'+12135551213'};
     await input('城市','Los Angeles');await exec(`window.setTarget(${JSON.stringify(b)})`);
@@ -87,7 +88,7 @@ if(!process.versions.electron){
     assert.equal((await store.readCustomer(b)).settings.stages.includes('随后删除的阶段'),false,'deletion is global');
     await exec(`(()=>{const s=document.querySelector('[aria-label="客户阶段"]');s.value='重点客户';s.dispatchEvent(new Event('change',{bubbles:true}));return true;})()`);await saved();
     await exec(`window.chatTranslator.failNext()`);await input('职业','Engineer');await wait(`document.querySelector('.customer-save-status')?.textContent.includes('保存失败')`);await click('重试保存');await saved();
-    await input('兴趣','Hiking');await exec(`window.setOpen(false)`);await new Promise(r=>setTimeout(r,250));await exec(`window.setOpen(true)`);await wait(`document.querySelector('[aria-label="兴趣"]')?.value==='Hiking'`);
+    await input('兴趣','Hiking');await exec(`window.setOpen(false)`);await new Promise(r=>setTimeout(r,250));assert.equal((await store.readCustomer(a)).record.values['兴趣'],'Hiking','closing the panel flushes before the typing delay expires');await exec(`window.setOpen(true)`);await wait(`document.querySelector('[aria-label="兴趣"]')?.value==='Hiking'`);
     assert.ok(await exec(`Array.from(document.querySelector('[aria-label="客户阶段"]').options).some(o=>o.value==='直接保存的新阶段')`),'new stages survive close and reopen');
     for(const name of ['城市','职业','兴趣','客户阶段','备注'])await input(name==='客户阶段'?'备注':name,'已填写');
     await saved();await wait(`document.querySelector('.customer-summary')?.textContent.includes('资料完整')`);
@@ -141,9 +142,21 @@ if(!process.versions.electron){
     await click('导入');await exec(`window.setTarget(${JSON.stringify(wa)})`);await wait(`document.querySelector('.customer-summary')?.textContent.includes('WhatsApp')`);await new Promise(r=>setTimeout(r,350));
     assert.equal((await store.readCustomer(wa)).record.values['姓名'],'WA account one','switching while selecting a file cannot import into the new contact');
     const beforeBad=await store.readCustomer(wa);fs.writeFileSync(exported,'bad JSON');await click('导入');await wait(`document.querySelector('.customer-error')?.textContent.includes('JSON 文件损坏')`);assert.deepEqual(await store.readCustomer(wa),beforeBad);
+    const ts=require('typescript'),mainSource=fs.readFileSync(path.join(root,'electron/main.ts'),'utf8'),mainTree=ts.createSourceFile('main.ts',mainSource,ts.ScriptTarget.Latest,true);
+    const closeHelpers=['flushMainWindowCustomerWrites','reportCustomerSaveExitFailure','deferWindowCloseForCustomerWrites'].map(name=>mainTree.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text===name).getText(mainTree)).join('\n');
+    const closeCode=ts.transpileModule(closeHelpers,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;const exitErrors=[];
+    const close=new Function('mainWindow','dialog','isTrustedMainUrl',`let customerWindowCloseReady=false,customerWindowClosePromise=null;${closeCode};return {handle:deferWindowCloseForCustomerWrites,pending:()=>customerWindowClosePromise};`)(win,{showMessageBox:async(_win,options)=>exitErrors.push(options)},()=>true);
+    win.on('close',close.handle);
+    await exec(`window.chatTranslator.failNext()`);await input('备注','退出前尚未保存的草稿');win.close();await close.pending();
+    assert.equal(win.isDestroyed(),false,'failed customer save cancels native window close');assert.equal(exitErrors.length,1);
+    assert.equal(await exec(`document.documentElement.inert`),false);assert.equal(await exec(`document.querySelector('[aria-label="备注"]').value`),'退出前尚未保存的草稿');
+    assert.notEqual((await store.readCustomer(wa)).record.values['备注'],'退出前尚未保存的草稿');
+    const closed=new Promise(resolve=>win.once('closed',resolve));win.close();await close.pending();await closed;assert.equal(win.isDestroyed(),true,'retry persists the remaining draft before closing');
+    assert.equal((await store.readCustomer(wa)).record.values['备注'],'退出前尚未保存的草稿');
+    console.log('customer save UI: merged field writes, immediate panel-close save, real native-close failure/draft preservation and successful retry passed');
     console.log('customer stage UI: global custom options across platforms, black option text, mismatch notification, mandatory local selection, cancel/switch protection and unchanged global definitions passed');
     console.log('customer transfer UI: export flushes edits, both filename rules, import preview/cancellation, confirmed target overwrite, timestamp/draft/cache replacement, post-import editing/reopen, contact-switch cancellation and damaged-file preservation passed');
     console.log('customer-follow-up UI: menu, compact layout, autosave, rapid switches, SMS sharing, account isolation, draft restoration, custom fields/stages, timeline editing/deletion, save retry, close/reopen passed');
-    console.log('Screenshots: '+dir);win.destroy();await server.close();clearTimeout(timeout);app.exit(0);
+    console.log('Screenshots: '+dir);await server.close();clearTimeout(timeout);app.exit(0);
   }).catch(async e=>{console.error(e);if(server)await server.close();clearTimeout(timeout);app.exit(1);});
 }

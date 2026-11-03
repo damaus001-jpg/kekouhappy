@@ -5,6 +5,8 @@ declare global {
     chatTranslator: ElectronApi;
     windowControl: WindowControlApi;
     __chatTranslatorProfile?: unknown;
+    __dfFlushCustomerWritesBeforeExit?: () => Promise<void>;
+    __dfResumeCustomerEditing?: () => void;
   }
 
   namespace Electron {

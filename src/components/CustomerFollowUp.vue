@@ -32,32 +32,34 @@ const entries=computed(()=>[...(record.value?.entries||[])].sort((a,b)=>b.create
 const stageOptions=computed(()=>settings.value.stages);
 const platformNames={opensms:'打新增',whatsapp:'WhatsApp',telegram:'Telegram',signal:'Signal'};
 function changed(){if(current.value)changedCustomer(current.value);}
+function flushCurrent(){if(current.value)void flushCustomer(current.value);}
+function commitChanged(){changed();flushCurrent();}
 async function refresh(){
   if(reading||disposed)return;reading=true;const token=generation;
   try{
     const found=await props.resolveTarget();if(disposed||token!==generation)return;
     const next=JSON.stringify(found.platform==='opensms'?[found.platform,found.phone]:[found.platform,found.profileId,found.contactId]);
     if(next===identity){target.value=found;return;}
-    finishStage(null);current.value=null;target.value=null;loading.value=true;error.value='';settingsOpen.value=false;transferNotice.value='';
+    flushCurrent();finishStage(null);current.value=null;target.value=null;loading.value=true;error.value='';settingsOpen.value=false;transferNotice.value='';
     const snapshot=await window.chatTranslator.getCustomer(found);if(disposed||token!==generation)return;
     current.value=customerState(found,snapshot);settings.value=snapshot.settings;target.value=found;identity=next;
-  }catch(e){if(!disposed&&token===generation){identity='';current.value=null;target.value=null;error.value=(e instanceof Error?e.message:String(e)).replace('需要导出的','');}}
+  }catch(e){if(!disposed&&token===generation){flushCurrent();identity='';current.value=null;target.value=null;error.value=(e instanceof Error?e.message:String(e)).replace('需要导出的','');}}
   finally{reading=false;if(token===generation)loading.value=false;else if(!disposed)void refresh();}
 }
-function reset(){finishStage(null);generation++;identity='';current.value=null;target.value=null;error.value='';transferNotice.value='';loading.value=true;void refresh();}
+function reset(){flushCurrent();finishStage(null);generation++;identity='';current.value=null;target.value=null;error.value='';transferNotice.value='';loading.value=true;void refresh();}
 watch(()=>props.profileId,reset,{flush:'sync'});
 onMounted(()=>{void refresh();timer=setInterval(()=>void refresh(),900);});
-onUnmounted(()=>{disposed=true;finishStage(null);generation++;if(timer)clearInterval(timer);});
+onUnmounted(()=>{flushCurrent();disposed=true;finishStage(null);generation++;if(timer)clearInterval(timer);});
 function addEntry(){
   if(!record.value)return;const draft=record.value.draft;
   if(!draft.talked.trim()||!draft.next.trim()){error.value='请填写今天聊了什么和下一步做什么';return;}
   const old=record.value.entries.find(e=>e.id===draft.editingId);
   if(old){old.talked=draft.talked.trim();old.next=draft.next.trim();old.updatedAt=Date.now();}
   else record.value.entries.push({id:crypto.randomUUID(),talked:draft.talked.trim(),next:draft.next.trim(),createdAt:Date.now(),updatedAt:Date.now()});
-  record.value.draft={talked:'',next:'',editingId:''};error.value='';changed();
+  record.value.draft={talked:'',next:'',editingId:''};error.value='';commitChanged();
 }
 function editEntry(entry:CustomerEntry){if(!record.value)return;if((record.value.draft.talked||record.value.draft.next)&&!window.confirm('替换当前未提交的跟进草稿？'))return;record.value.draft={talked:entry.talked,next:entry.next,editingId:entry.id};changed();}
-function removeEntry(entry:CustomerEntry){if(!record.value||!window.confirm('确定删除这条跟进记录？'))return;record.value.entries=record.value.entries.filter(e=>e.id!==entry.id);if(record.value.draft.editingId===entry.id)record.value.draft={talked:'',next:'',editingId:''};changed();}
+function removeEntry(entry:CustomerEntry){if(!record.value||!window.confirm('确定删除这条跟进记录？'))return;record.value.entries=record.value.entries.filter(e=>e.id!==entry.id);if(record.value.draft.editingId===entry.id)record.value.draft={talked:'',next:'',editingId:''};commitChanged();}
 function cancelEdit(){if(!record.value)return;record.value.draft={talked:'',next:'',editingId:''};changed();}
 function manageStages(){if(!settingsOpen.value){settingsDraft.value=JSON.parse(JSON.stringify(settings.value));newStage.value='';settingsError.value='';settingsOpen.value=true;}void nextTick(()=>newStageInput.value?.focus());}
 function addStage(){const name=newStage.value.trim();if(!name)return;if(settingsDraft.value.stages.includes(name)){settingsError.value='客户阶段已存在';return;}settingsDraft.value.stages.push(name);newStage.value='';settingsError.value='';}

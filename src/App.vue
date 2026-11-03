@@ -15,6 +15,7 @@ import { buildConversationExportScript,mergeConversationExportRows,unwrapConvers
 import { buildSignalGptButtonScript } from './gpt-handoff-runtime';
 import { buildSignalEmojiPickerScript } from './signal-emoji-picker-runtime';
 import { buildOpenSmsScript } from './opensms-runtime';
+import { buildAppleScript } from './apple-runtime';
 import { buildWhatsAppContactListResizeScript } from './whatsapp-contact-list-resize-runtime';
 import { buildOpenSmsContactListResizeScript } from './opensms-contact-list-resize-runtime';
 import { buildVoiceConversationSignatureScript, buildVoiceMessageActionButtonStateScript, buildVoiceMessageScanScript, buildVoiceMessageAudioChunkScript } from './local-speech-runtime';
@@ -45,6 +46,7 @@ import {
   sanitizeProfileTabOrder,
   signalTranslationAcceptancePolicy,
   workspaceAppForPlatform,
+  workspaceAppContainsPlatform,
   type AppTheme,
   type AppConfig,
   type ChatProfile,
@@ -652,7 +654,9 @@ const activePlatformInfo = computed(() => {
 });
 const activeWebUrl = computed(() => activePlatformInfo.value?.url ?? '');
 const currentAppTile = computed(() => appTiles.find((tile) => tile.app === currentApp.value) ?? appTiles[0]);
-const currentAppProfiles = computed(() => profiles.value.filter((profile) => appForPlatform(profile.platform) === currentApp.value));
+const currentAppProfiles = computed(() => profiles.value.filter((profile) =>
+  workspaceAppContainsPlatform(currentApp.value === 'apple' ? 'opensms' : currentApp.value, profile.platform)
+));
 const renderableProfiles = computed(() =>
   signedIn.value
     ? profiles.value
@@ -715,7 +719,7 @@ const activeSignalDiagnosticStatus = computed(() => (activeProfileId.value ? sig
 const activeWebComposerDiagnosticStatus = computed(() => (activeProfileId.value ? webComposerDiagnosticStatus.value[activeProfileId.value] ?? '' : ''));
 const canUseTranslatorComposer = computed(() => {
   const platform = activeProfile.value?.platform;
-  return platform === 'whatsapp' || platform === 'telegram-a' || platform === 'telegram-k' || platform === 'opensms';
+  return platform === 'whatsapp' || platform === 'telegram-a' || platform === 'telegram-k' || platform === 'opensms' || platform === 'apple';
 });
 const memoryUsedPercent = computed(() => Math.min(100, Math.max(0, memoryStatus.value?.usedPercent ?? 0)));
 const memoryFreeText = computed(() => (memoryStatus.value ? `${formatBytes(memoryStatus.value.freeBytes)} 可用` : '读取中'));
@@ -1366,7 +1370,8 @@ function rememberActiveProfile(profileId: string | null) {
   if (!profile) return;
   lastActiveProfileIds.value = {
     ...lastActiveProfileIds.value,
-    [appForPlatform(profile.platform)]: profile.id
+    [appForPlatform(profile.platform)]: profile.id,
+    ...((profile.platform === 'opensms' || profile.platform === 'apple') ? { opensms: profile.id } : {})
   };
 }
 
@@ -1374,15 +1379,16 @@ function firstOrderedProfileIdForApp(app: RuntimeApp) {
   const profilesById = new Map(profiles.value.map((profile) => [profile.id, profile]));
   return profileTabOrder.value.find((id) => {
     const profile = profilesById.get(id);
-    return profile && appForPlatform(profile.platform) === app;
-  }) ?? profiles.value.find((profile) => appForPlatform(profile.platform) === app)?.id ?? null;
+    return profile && workspaceAppContainsPlatform(app, profile.platform);
+  }) ?? profiles.value.find((profile) => workspaceAppContainsPlatform(app, profile.platform))?.id ?? null;
 }
 
 function openAppEntry(app: RuntimeApp) {
-  if (app !== 'opensms') {
-    selectRuntimeApp(app);
-    return;
-  }
+  selectRuntimeApp(app);
+}
+
+function openOpenSmsEntry() {
+  if (isCreatingProfile.value) return;
   openSmsEntryTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   openSmsEntryOpen.value = true;
   void nextTick(() => document.querySelector<HTMLButtonElement>('.opensms-entry-android')?.focus());
@@ -1398,13 +1404,13 @@ function closeOpenSmsEntry() {
 function openAndroidWorkspace() {
   openSmsEntryOpen.value = false;
   openSmsEntryTrigger = null;
-  selectRuntimeApp('opensms');
+  void openOpenSms();
 }
 
 function openAppleWorkspace() {
   openSmsEntryOpen.value = false;
   openSmsEntryTrigger = null;
-  selectRuntimeApp('apple');
+  void openOpenSms('apple');
 }
 
 function trapOpenSmsEntryFocus(event: KeyboardEvent) {
@@ -1427,7 +1433,7 @@ function selectRuntimeApp(app: RuntimeApp) {
   activePanel.value = 'session';
   const rememberedProfileId = lastActiveProfileIds.value[app];
   const nextActiveId = profiles.value.some((profile) => (
-    profile.id === rememberedProfileId && appForPlatform(profile.platform) === app
+    profile.id === rememberedProfileId && workspaceAppContainsPlatform(app, profile.platform)
   ))
     ? rememberedProfileId
     : firstOrderedProfileIdForApp(app);
@@ -1437,12 +1443,12 @@ function selectRuntimeApp(app: RuntimeApp) {
   activeProfileId.value = nextActiveId;
   rememberActiveProfile(nextActiveId);
   if (nextActiveId) {
+    const profile = profiles.value.find((item) => item.id === nextActiveId);
+    if (profile) currentApp.value = appForPlatform(profile.platform);
     void persistActiveProfile(nextActiveId);
     if (app === 'signal') void openSignalProfileInWorkspace(nextActiveId);
     void refreshUnreadCount(nextActiveId);
   }
-  if (app === 'opensms' && !nextActiveId) void openOpenSms();
-  if (app === 'apple' && !nextActiveId) void openOpenSms('apple');
   if (app !== 'signal') void nextTick(() => scheduleSignalWorkspaceSyncBurst());
 }
 
@@ -1456,6 +1462,7 @@ function selectRuntimeTab(profileId: string) {
   void persistActiveProfile(profileId);
   void refreshUnreadCount(profileId);
   const profile = profiles.value.find((item) => item.id === profileId);
+  if (profile) currentApp.value = appForPlatform(profile.platform);
   if (profile?.platform === 'signal') {
     void openSignalProfileInWorkspace(profileId);
     return;
@@ -2149,8 +2156,7 @@ function nextProfileName(app: RuntimeApp) {
 }
 
 function openCreateProfileDialog() {
-  if(currentApp.value==='apple'){void openOpenSms('apple');return;}
-  if(currentApp.value==='opensms'){void openOpenSms();return;}
+  if(currentApp.value==='opensms'||currentApp.value==='apple'){openOpenSmsEntry();return;}
   isCreatingProfile.value = false;
   createProfileError.value = '';
   newProfileName.value = nextProfileName(currentApp.value);
@@ -2274,7 +2280,7 @@ async function confirmCloseProfile() {
   const targetId = closeTargetProfile.value.id;
   try {
     if (sensitiveSendPending.value?.profileId === targetId) await clearSensitiveSendPending(targetId);
-    const selectedApp = currentApp.value;
+    const selectedApp = currentApp.value === 'apple' ? 'opensms' : currentApp.value;
     profiles.value = profiles.value.filter(profile => profile.id !== targetId);
     if (activeProfileId.value === targetId) activeProfileId.value = currentAppProfiles.value[0]?.id ?? null;
     cancelCloseProfileDialog();
@@ -2288,13 +2294,14 @@ async function confirmCloseProfile() {
     applyConfig(config);
     currentApp.value = selectedApp;
     const rememberedProfileId = lastActiveProfileIds.value[selectedApp];
-    if (!activeProfileId.value || appForPlatform(activeProfile.value?.platform ?? 'whatsapp') !== selectedApp) {
+    if (!activeProfileId.value || !workspaceAppContainsPlatform(selectedApp, activeProfile.value?.platform ?? 'whatsapp')) {
       activeProfileId.value = profiles.value.some((profile) => (
-        profile.id === rememberedProfileId && appForPlatform(profile.platform) === selectedApp
+        profile.id === rememberedProfileId && workspaceAppContainsPlatform(selectedApp, profile.platform)
       ))
         ? rememberedProfileId
         : firstOrderedProfileIdForApp(selectedApp);
     }
+    if (activeProfile.value) currentApp.value = appForPlatform(activeProfile.value.platform);
     rememberActiveProfile(activeProfileId.value);
     if (activeProfileId.value) void persistActiveProfile(activeProfileId.value);
   } catch (error) {
@@ -2532,6 +2539,20 @@ async function setVoiceMessageButtonState(profileId: string, key: string, label:
 }
 
 function clearTranslationRuntimeCache(profileId: string) {
+  const installTimer = composerInstallIntervals.get(profileId);
+  if (installTimer) clearInterval(installTimer);
+  composerInstallIntervals.delete(profileId);
+  const eventPollTimer = composerEventPollIntervals.get(profileId);
+  if (eventPollTimer) clearTimeout(eventPollTimer);
+  composerEventPollIntervals.delete(profileId);
+  for (const key of [profileId, `voice:${profileId}`]) {
+    const scanTimer = translationIntervals.get(key);
+    if (scanTimer) clearInterval(scanTimer);
+    translationIntervals.delete(key);
+  }
+  const refreshTimer = profileTranslationRefreshTimers.get(profileId);
+  if (refreshTimer) clearTimeout(refreshTimer);
+  profileTranslationRefreshTimers.delete(profileId);
   webRuntimeControllers.get(profileId)?.abort();
   webRuntimeControllers.delete(profileId);
   webRuntimeGenerations.set(profileId, (webRuntimeGenerations.get(profileId) ?? 0) + 1);
@@ -3405,7 +3426,7 @@ function isLatestSignalMessageCandidate(candidate: MessageCandidate) {
 }
 
 function isLatestVisibleMessageCandidate(app: RuntimeApp, candidate: MessageCandidate) {
-  if (app === 'opensms') return isBaseLatestVisibleCandidate(candidate);
+  if (app === 'opensms' || app === 'apple') return isBaseLatestVisibleCandidate(candidate);
   if (app === 'whatsapp') return isLatestWhatsAppMessageCandidate(candidate);
   if (app === 'telegram') return isLatestTelegramMessageCandidate(candidate);
   return isLatestSignalMessageCandidate(candidate);
@@ -3702,7 +3723,7 @@ async function sendConfirmedSensitiveText(profile: ChatProfile, text: string, co
   diagnosticEvent('sensitive:send-result', { profileId: profile.id, platform: profile.platform, status: sendResult?.ok ? 'accepted' : 'rejected', reason: sendResult?.reason || '', version: sendResult?.method || '' });
   await clearSensitiveSendPending(profile.id);
   if (!sendResult?.ok) {
-    setComposerStatus(profile.id, '平台未接受发送，请重新确认');
+    setComposerStatus(profile.id, sendResult?.submitted ? '手机工作台已接收操作，请核对发送结果，勿重复发送' : '平台未接受发送，请重新确认');
     return;
   }
   void verifySentMessageIntegrity(profile, text, outgoingKeysBeforeSend, sendIntegrityNotBefore);
@@ -4183,8 +4204,8 @@ async function handleInjectedComposerEvent(
     } else {
       setComposerFeedbackState(profileId, '');
     }
-    await setInjectedComposerState(profileId, { draft: '', status: '', translated: '', reviewStatus: 'hidden', reviewText: '', ...(profile.platform === 'signal' ? { expectedConversationSignature: expectedSendConversation } : {}) });
-    setComposerStatus(profileId, sendResult?.ok ? '' : /signal-conversation|sms-conversation|sms-focus/.test(sendResult?.reason || '')
+    await setInjectedComposerState(profileId, { draft: '', status: '', translated: '', reviewStatus: 'hidden', reviewText: '', ...((profile.platform === 'signal' || profile.platform === 'apple') ? { expectedConversationSignature: expectedSendConversation } : {}) });
+    setComposerStatus(profileId, sendResult?.ok ? '' : sendResult?.submitted ? '手机工作台已接收操作，请核对发送结果，勿重复发送' : /signal-conversation|sms-conversation|sms-focus|apple-conversation|apple-focus/.test(sendResult?.reason || '')
       ? '联系人或输入框已变化，发送流程已停止，请核对当前会话'
       : '未发送成功，内容已保留，请再次按回车重试');
     return;
@@ -4302,7 +4323,7 @@ async function writeNativeComposer(
   const profile = profiles.value.find((item) => item.id === profileId);
   const webview = profile && appForPlatform(profile.platform) !== 'signal' ? getWebviewByProfileId(profileId) : null;
   const isTelegramProfile = profile?.platform === 'telegram-a' || profile?.platform === 'telegram-k';
-  if (webview && options.instant && !isTelegramProfile && profile?.platform !== 'opensms') {
+  if (webview && options.instant && !isTelegramProfile && profile?.platform !== 'opensms' && profile?.platform !== 'apple') {
     const pasted = await pasteTextIntoNativeComposer(webview, text);
     if (pasted) {
       void window.chatTranslator?.appendSignalDebugLog?.({
@@ -4392,13 +4413,13 @@ async function pulseNativeTyping(profileId: string) {
 async function sendNativeComposer(profileId: string, expectedText = '', allowSensitiveExactText = false, conversationSignature = '') {
   const profile = profiles.value.find((item) => item.id === profileId);
   const webview = profile && appForPlatform(profile.platform) !== 'signal' ? getWebviewByProfileId(profileId) : null;
-  const result = await executeProfileScript<{ ok?: boolean; method?: string; reason?: string; count?: number; candidates?: number; matchingRoots?: number; namedCandidates?: number; editableSummary?: Array<Record<string, unknown>> }>(
+  const result = await executeProfileScript<{ ok?: boolean; submitted?: boolean; method?: string; reason?: string; count?: number; candidates?: number; matchingRoots?: number; namedCandidates?: number; editableSummary?: Array<Record<string, unknown>> }>(
     profileId,
     buildComposerScript(allowSensitiveExactText ? 'sendExact' : 'send', expectedText, true, false, 'default', '', {
       platform: profile?.platform || 'whatsapp', conversationSignature
     })
   );
-  if (result?.ok || profile?.platform==='opensms' || !webview || typeof webview.sendInputEvent !== 'function') return result;
+  if (result?.ok || profile?.platform==='opensms' || profile?.platform==='apple' || !webview || typeof webview.sendInputEvent !== 'function') return result;
   const currentText = await webview.executeJavaScript(buildNativeComposerTextScript(), true).catch(() => '') as string;
   const canonical = (value: string) => value.replace(/\r\n?/g, '\n').replace(/\u00a0/g, ' ').normalize('NFC').trim();
   if (canonical(currentText) !== canonical(expectedText) || hasChineseText(currentText) || /^[0-9]{1,11}$/.test(currentText.trim())) return result;
@@ -4529,7 +4550,7 @@ function scheduleComposerEventPoll(profileId: string) {
       }
       const nextDelayMs = currentProfile.platform === 'signal'
         ? (activeProfileId.value === profileId ? 80 : 1000)
-        : (isTelegramPlatform(currentProfile.platform)||currentProfile.platform==='opensms') && activeProfileId.value === profileId
+        : (isTelegramPlatform(currentProfile.platform)||currentProfile.platform==='opensms'||currentProfile.platform==='apple') && activeProfileId.value === profileId
           ? 80
           : 300;
       const timer = window.setTimeout(() => void tick(), nextDelayMs);
@@ -4539,7 +4560,7 @@ function scheduleComposerEventPoll(profileId: string) {
 
   const profile = profiles.value.find((item) => item.id === profileId);
   const firstDelayMs = profile && (
-    profile.platform === 'signal' || isTelegramPlatform(profile.platform) || profile.platform==='opensms'
+    profile.platform === 'signal' || isTelegramPlatform(profile.platform) || profile.platform==='opensms' || profile.platform==='apple'
   ) && activeProfileId.value === profileId
     ? 80
     : 300;
@@ -4755,6 +4776,7 @@ function buildComposerScript(
 (async () => {
   const payload = ${payload};
   if (location.hostname==='opensms.cc'||location.hostname==='www.opensms.cc') return window.__dfOpenSms?.apply({action:'composer',payload}) || {ok:false,reason:'sms-runtime-unavailable'};
+  if (location.origin==='http://127.0.0.1:8070') return window.__dfApple?.apply({action:'composer',payload}) || {ok:false,reason:'apple-runtime-unavailable'};
 ${buildComposerPlainTextReaderSource()}
 ${buildMediaCaptionComposerSource()}
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -5205,6 +5227,7 @@ function buildNativeComposerHelpersScript(
   return `
 (() => {
   if(location.hostname==='opensms.cc'||location.hostname==='www.opensms.cc') return window.__dfOpenSms?.apply({action:${JSON.stringify(returnText?'text':'focus')}});
+  if(location.origin==='http://127.0.0.1:8070') return window.__dfApple?.apply({action:${JSON.stringify(returnText?'text':'focus')}});
   const composerKind = ${serializedComposerKind};
   const requestId = ${serializedRequestId};
 ${buildComposerPlainTextReaderSource()}
@@ -5356,6 +5379,7 @@ function buildComposerRequestMatchScript(requestId: string) {
 (() => {
   const payload = ${payload};
   if(location.hostname==='opensms.cc'||location.hostname==='www.opensms.cc')return window.__dfOpenSms?.apply({action:'matches',requestId:payload.requestId}) || false;
+  if(location.origin==='http://127.0.0.1:8070')return window.__dfApple?.apply({action:'matches',requestId:payload.requestId}) || false;
 ${buildMediaCaptionComposerSource()}
   const findComposer = () => {
     const isVisible = (el) => {
@@ -5389,6 +5413,7 @@ function buildWebComposerProbeScript() {
   return `
 (() => {
   if(location.hostname==='opensms.cc'||location.hostname==='www.opensms.cc')return window.__dfOpenSms?.apply({action:'probe'});
+  if(location.origin==='http://127.0.0.1:8070')return window.__dfApple?.apply({action:'probe'});
 ${buildComposerPlainTextReaderSource()}
 ${buildMediaCaptionComposerSource()}
   const isVisible = (el) => {
@@ -5568,6 +5593,7 @@ function buildInjectedComposerScript(action: 'install' | 'focus' | 'focusNative'
 (() => {
   const payload = ${payload};
   if(location.hostname==='opensms.cc'||location.hostname==='www.opensms.cc')return window.__dfOpenSms?.apply(payload) || false;
+  if(location.origin==='http://127.0.0.1:8070')return window.__dfApple?.apply(payload) || false;
   const telegramComposerMode = location.hostname.toLowerCase() === 'web.telegram.org';
   if (payload.action === 'state' && payload.state.expectedConversationSignature !== undefined) {
     const expected = payload.state.expectedConversationSignature.toLowerCase();
@@ -7415,6 +7441,17 @@ ${peekThemeCss}
     };
     const isLikelyNativeSendTarget = (event, composerTarget) => {
       const target = event.target;
+      const signalRoot = composerTarget?.closest?.('.CompositionArea, .module-composition-area');
+      if (signalRoot) {
+        // Native editor mouse-down/click must reach Signal unchanged so Quill
+        // can place the caret. Draft text and input-edge coordinates are never
+        // evidence of a send click inside Signal.
+        const button = target?.closest?.('button, [role="button"]');
+        if (!button || button.closest('.CompositionArea, .module-composition-area') !== signalRoot) return false;
+        if (button.hasAttribute('aria-haspopup') || button.closest('[data-fun-overlay], .FunPopover, [role="dialog"], [role="menu"], .df-composer-review')) return false;
+        if (!button.closest('.CompositionArea__button-cell') && !button.matches('.CompositionArea__edit-button--accept')) return false;
+        return isNativeSendButton(button);
+      }
       if (target?.closest?.('#' + webSendGuardOverlayId)) return true;
       const direct = target?.closest?.('button, [role="button"], .btn-send-container, .btn-send, .send-button, .simple-message-input-confirm, [class*="send"], [class*="tgico-send"]');
       if (direct && isNativeSendButton(direct)) return true;
@@ -7506,7 +7543,9 @@ ${peekThemeCss}
     };
     const nativeGuardVersion = telegramComposerMode
       ? telegramPageGuardVersion
-      : '2026-10-01-web-page-sensitive-input-v56';
+      : composer.closest('.CompositionArea, .module-composition-area')
+        ? '2026-11-02-signal-native-click-v57'
+        : '2026-10-01-web-page-sensitive-input-v56';
     if (composer.dataset.dfNativeGuard !== nativeGuardVersion) {
       if (composer.__dfNativeInputHandler) composer.removeEventListener('input', composer.__dfNativeInputHandler, true);
       if (composer.__dfNativeKeydownHandler) composer.removeEventListener('keydown', composer.__dfNativeKeydownHandler, true);
@@ -9140,7 +9179,7 @@ async function refreshWebSmartReplyUi(
   runtimeOverride?: { execute: <T>(script: string) => Promise<T> }
 ) {
   const profile = profiles.value.find((item) => item.id === profileId);
-  if (!profile || profile.platform === 'signal') return;
+  if (!profile || profile.platform === 'signal' || profile.platform === 'apple') return;
   const runtime = runtimeOverride || getRuntimeScriptExecutor(profile);
   if (!runtime) return;
   if(profile.platform==='opensms'){await runtime.execute(buildOpenSmsScript({action:'smart'}));return;}
@@ -9297,12 +9336,7 @@ function refreshTelegramUnreadCountsOnResume() {
 
 function handleWebviewDomReady(event: Event, profile: ChatProfile) {
   const webview = event.currentTarget as Electron.WebviewTag | null;
-  if (!webview) return;
-  if (profile.platform === 'apple') {
-    webRuntimeReloadAttempts.delete(profile.id);
-    void webview.executeJavaScript(buildFingerprintScript(profile), true).catch(() => undefined);
-    return;
-  }
+  if (!webview || !profiles.value.some(item => item.id === profile.id)) return;
   resetWebTranslationRuntime(profile.id);
   webRuntimeReloadAttempts.delete(profile.id);
   void webview.executeJavaScript(`window.__dfTranslationRuntimeGeneration = ${webRuntimeGenerations.get(profile.id)};`, true).catch(() => undefined);
@@ -9338,6 +9372,7 @@ function handleWebviewDomReady(event: Event, profile: ChatProfile) {
 const webRuntimeReloadAttempts = new Map<string, number>();
 
 function handleWebviewRuntimeFailure(event: Event, profile: ChatProfile) {
+  if (!profiles.value.some(item => item.id === profile.id)) return;
   if ((event as Event & { errorCode?: number }).errorCode === -3) return;
   const webview = event.currentTarget as Electron.WebviewTag | null;
   resetWebTranslationRuntime(profile.id);
@@ -10054,7 +10089,6 @@ async function preRenderHistoryCachedTranslations(profileId: string) {
 }
 
 function getRuntimeScriptExecutor(profile: ChatProfile) {
-  if (profile.platform === 'apple') return null;
   if (profile.platform === 'signal') {
     if (!window.chatTranslator?.executeSignalScript) return null;
     return {
@@ -10075,7 +10109,7 @@ function getRuntimeScriptExecutor(profile: ChatProfile) {
       if (signal.aborted || (webRuntimeGenerations.get(profile.id) ?? 0) !== generation) {
         return Promise.reject<T>(new Error('Web translation runtime replaced'));
       }
-      const platformBootstrap=profile.platform==='opensms'?buildOpenSmsScript({action:'bootstrap'})+';\n':'';
+      const platformBootstrap=profile.platform==='opensms'?buildOpenSmsScript({action:'bootstrap'})+';\n':profile.platform==='apple'?buildAppleScript({action:'bootstrap'})+';\n':'';
       const guardedScript = `window.__dfTranslationRuntimeGeneration ??= ${generation};\nif (window.__dfTranslationRuntimeGeneration !== ${generation}) throw new Error('Web translation runtime replaced');\n${platformBootstrap}${script}`;
       return withTranslationDeadline(webview.executeJavaScript(guardedScript, true) as Promise<T>, 8_000, signal);
     }
@@ -10197,8 +10231,8 @@ async function syncAssistantPending(profileId:string,pending:AssistantStagedMate
   assistantStageTokens.set(profileId,token);
 }
 async function installAssistantMaterialRuntime(profile:ChatProfile){
-  const platform=appForPlatform(profile.platform);if(platform==='apple')return;
   const enabled=signedIn.value&&!lockScreenVisible.value&&!hasBlockingModal.value&&activePanel.value==='session'&&activeProfileId.value===profile.id;
+  const platform=appForPlatform(profile.platform);if(platform==='apple'){await executeProfileScript(profile.id,buildAppleScript({action:'enabled',enabled}));return;}
   if(profile.platform==='opensms')await executeProfileScript(profile.id,buildOpenSmsScript({action:'enabled',enabled}));
   const catalog=await readAssistantCatalog();
   const contact=profile.platform==='opensms'?await executeProfileScript<AssistantContact>(profile.id,buildOpenSmsScript({action:'contact'})):undefined;
@@ -10318,6 +10352,7 @@ async function processManualMessageTranslations(profileId: string, runtime: { ex
 
 function buildUnreadScanScript(app: RuntimeApp) {
   if(app==='opensms')return buildOpenSmsScript({action:'unread'});
+  if(app==='apple')return buildAppleScript({action:'unread'});
   const platformApp = JSON.stringify(app);
   return `
 (() => {
@@ -10533,6 +10568,7 @@ function buildMessageScanScript(
   options: { limit?: number; viewportScreensAbove?: number; viewportScreensBelow?: number; includeAlreadyTranslated?: boolean } = {}
 ) {
   if(app==='opensms')return buildOpenSmsScript({action:'scan',options});
+  if(app==='apple')return buildAppleScript({action:'scan',options});
   const platformApp = JSON.stringify(app);
   const scanOptions = JSON.stringify(options);
   return `
@@ -11210,6 +11246,7 @@ function buildSignalDomProbeScript() {
 
 function buildLegacyTranslationCacheCleanupScript(app: RuntimeApp) {
   if(app==='opensms')return buildOpenSmsScript({action:'install'});
+  if(app==='apple')return buildAppleScript({action:'install'});
   const legacyRenderCacheKey = JSON.stringify(`df.translation.renderCache.v1.${app}`);
   return `
 (() => {
@@ -11249,6 +11286,7 @@ function buildSignalLegacyBubbleRuntimeRetirementScript() {
 
 function buildCachedTranslationRuntimeScript(app: RuntimeApp, entries: Array<{ sourceHash: string; sourceText?: string; translatedText: string; updatedAt?: number }>) {
   if(app==='opensms')return buildOpenSmsScript({action:'cache',entries});
+  if(app==='apple')return buildAppleScript({action:'cache',entries});
   const payload = JSON.stringify({ app, entries });
   return `
 (() => {
@@ -11971,6 +12009,7 @@ function buildWebBubbleRefreshStateScript(key: string, state: 'processing' | 'id
 
 function buildMessageTranslationInjectScript(key: string, translation: string, app: RuntimeApp, sourceText = '', replaceExisting = false, voiceMessage = false, conversationSignature = '') {
   if(app==='opensms')return buildOpenSmsScript({action:'inject',key,translation,sourceText,replaceExisting});
+  if(app==='apple')return buildAppleScript({action:'inject',key,translation,sourceText,replaceExisting});
   const payload = JSON.stringify({ key, translation, app, sourceText, replaceExisting, voiceMessage, conversationSignature });
   return `
 (() => {
@@ -12909,7 +12948,7 @@ onUnmounted(() => {
         <img :src="multiSignalIcon" alt="Signal" />
         <span v-if="unreadCountForApp('signal') > 0" class="app-unread-dot" aria-hidden="true"></span>
       </button>
-      <button type="button" class="app-short sms" :class="{active:currentApp==='opensms'||currentApp==='apple',unread:unreadCountForApp('opensms')>0}" title="打新增" aria-label="打新增" aria-haspopup="dialog" :aria-expanded="openSmsEntryOpen" @click="openAppEntry('opensms')">
+      <button type="button" class="app-short sms" :class="{active:currentApp==='opensms'||currentApp==='apple',unread:unreadCountForApp('opensms')>0}" title="打新增" aria-label="打新增" @click="openAppEntry('opensms')">
         <img :src="opensmsIcon" alt="打新增" /><small class="opensms-label">打新增</small>
         <span v-if="unreadCountForApp('opensms')>0" class="app-unread-dot" aria-hidden="true"></span>
       </button>
@@ -12976,7 +13015,7 @@ onUnmounted(() => {
       <div v-if="currentApp === 'signal' && activeVoiceTranslationStatus" class="signal-voice-status" role="status" aria-live="polite">
         {{ activeVoiceTranslationStatus }}
       </div>
-      <div v-if="showDeveloperDiagnostics && currentApp !== 'signal' && currentApp !== 'apple'" class="signal-status-strip">
+      <div v-if="showDeveloperDiagnostics && currentApp !== 'signal'" class="signal-status-strip">
         <span>{{ activeComposerStatus || '输入翻译状态：等待输入' }}</span>
         <strong>{{ activeWebComposerDiagnosticStatus || 'Web 输入探针：等待结果' }}</strong>
       </div>
@@ -13007,10 +13046,10 @@ onUnmounted(() => {
           <button class="signal-open-button" type="button" @click="launchActiveSignalProfile">打开 Signal</button>
         </template>
         <template v-else>
-          <p>{{ currentApp==='opensms'?'安卓':`${currentAppTile.label} 未打开多开环境` }}</p>
-          <span v-if="currentApp==='opensms'||currentApp==='apple'">{{openSmsError || (isCreatingProfile?'正在打开，请稍候…':currentApp==='apple'?'点击下方按钮打开苹果工作台。':'登录后即可翻译当前会话。')}}</span>
+          <p>{{ currentApp==='opensms'||currentApp==='apple'?'打新增 未打开多开环境':`${currentAppTile.label} 未打开多开环境` }}</p>
+          <span v-if="currentApp==='opensms'||currentApp==='apple'">{{openSmsError || (isCreatingProfile?'正在打开，请稍候…':'点击顶部 + 或下方按钮，选择安卓或苹果创建多开。')}}</span>
           <span v-else>点击顶部 +，填写自定义名称后创建当前应用的多开。</span>
-          <button type="button" :disabled="isCreatingProfile" @click="openCreateProfileDialog">{{currentApp==='opensms'?'打开安卓':currentApp==='apple'?'打开苹果':'新建多开'}}</button>
+          <button type="button" :disabled="isCreatingProfile" @click="openCreateProfileDialog">新建多开</button>
         </template>
       </div>
     </section>
@@ -13084,7 +13123,7 @@ onUnmounted(() => {
     @keydown.tab="trapOpenSmsEntryFocus"
   >
     <section class="modal-card opensms-entry-card" role="dialog" aria-modal="true" aria-labelledby="opensms-entry-title">
-      <h3 id="opensms-entry-title">打新增</h3>
+      <h3 id="opensms-entry-title">新建打新增多开</h3>
       <div class="opensms-entry-options">
         <button class="opensms-entry-option opensms-entry-android" type="button" @click="openAndroidWorkspace">
           <img :src="androidIcon" alt="" />

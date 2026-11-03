@@ -138,6 +138,11 @@ export function workspaceAppForPlatform(platform: Platform): WorkspaceApp {
   return 'telegram';
 }
 
+export function workspaceAppContainsPlatform(app: WorkspaceApp, platform: Platform): boolean {
+  if (app === 'opensms') return platform === 'opensms' || platform === 'apple';
+  return workspaceAppForPlatform(platform) === app;
+}
+
 export function defaultProfileTabOrder(profiles: ChatProfile[]) {
   const result: string[] = [];
   for (const app of ['whatsapp', 'telegram', 'signal', 'opensms', 'apple'] as const) {
@@ -192,17 +197,17 @@ export function sanitizeLastActiveProfileIds(
   for (const app of ['whatsapp', 'telegram', 'signal', 'opensms', 'apple'] as const) {
     const candidate = typeof source[app] === 'string' ? source[app] : null;
     const candidateProfile = candidate ? byId.get(candidate) : undefined;
-    if (candidateProfile && workspaceAppForPlatform(candidateProfile.platform) === app) {
+    if (candidateProfile && workspaceAppContainsPlatform(app, candidateProfile.platform)) {
       result[app] = candidate;
       continue;
     }
-    if (activeProfile && workspaceAppForPlatform(activeProfile.platform) === app) {
+    if (activeProfile && workspaceAppContainsPlatform(app, activeProfile.platform)) {
       result[app] = activeProfile.id;
       continue;
     }
     result[app] = profileTabOrder.find((id) => {
       const profile = byId.get(id);
-      return profile && workspaceAppForPlatform(profile.platform) === app;
+      return profile && workspaceAppContainsPlatform(app, profile.platform);
     }) ?? null;
   }
   return result;
