@@ -11,7 +11,8 @@ export function normalizeAssistantPhone(value: unknown): string {
 }
 
 export function assistantUsageMatchesContact(usage: AssistantUsage, platform: string, contact: AssistantContact): boolean {
-  if (usage.confirmation !== 'inserted' || usage.platform !== platform) return false;
-  if (platform === 'opensms') return Boolean(contact.phone && usage.phone === contact.phone);
+  if (usage.confirmation !== 'inserted') return false;
+  if (platform === 'opensms' || platform === 'apple') return Boolean((usage.platform === 'opensms' || usage.platform === 'apple') && contact.phone && usage.phone === contact.phone);
+  if (usage.platform !== platform) return false;
   return Boolean(contact.id && usage.contactId === contact.id);
 }

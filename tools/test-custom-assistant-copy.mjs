@@ -8,9 +8,10 @@ const ref=value=>({value});
 async function scenario(options={}){
   const calls=[];
   const material={id:'schedule:card:text:v:content-version',type:'text',text:'Whole card text'};
-  const target={id:'wa:15550000001@c.us',title:'Contact A'};
-  const env={assistantCopyBusy:ref(false),assistantCopyStatus:ref(''),profiles:ref([{id:'fixture-profile',platform:'whatsapp'}]),signedIn:ref(true),hasBlockingModal:ref(false),activeProfileId:ref('fixture-profile'),lockScreenVisible:ref(false),activePanel:ref('session'),assistantContacts:ref({}),assistantUsages:ref({'fixture-profile':[]}),
-    readAssistantCatalog:async()=>({schedule:options.missingMaterial?[]:[{materials:[material]}],quotes:[]}),installAssistantMaterialRuntime:async()=>{},buildAssistantRuntimeScript:value=>value,appForPlatform:()=> 'whatsapp',syncAssistantPending:async(_id,pending)=>{calls.push(['clear',pending]);},
+  const platform=options.platform||'whatsapp';
+  const target=platform==='apple'?{id:'apple:device-a:chat-a:%2B15550000001',title:'Contact A',phone:options.noPhone?'':'+15550000001'}:{id:'wa:15550000001@c.us',title:'Contact A'};
+  const env={assistantCopyBusy:ref(false),assistantCopyStatus:ref(''),profiles:ref([{id:'fixture-profile',platform}]),signedIn:ref(true),hasBlockingModal:ref(false),activeProfileId:ref('fixture-profile'),lockScreenVisible:ref(false),activePanel:ref('session'),assistantContacts:ref({}),assistantUsages:ref({'fixture-profile':[]}),
+    readAssistantCatalog:async()=>({schedule:options.missingMaterial?[]:[{materials:[material]}],quotes:[]}),installAssistantMaterialRuntime:async()=>{},buildAssistantRuntimeScript:value=>value,appForPlatform:()=> platform,syncAssistantPending:async(_id,pending)=>{calls.push(['clear',pending]);},
     window:{chatTranslator:{
       stageAssistantMaterial:async value=>{calls.push(['copy',value]);if(options.stageFailure)throw new Error('Clipboard failed');if(options.switchAccount)env.activeProfileId.value='another-profile';return{...value,token:'fixture-token'};},
       recordAssistantUse:async value=>{calls.push(['record',value]);if(options.recordFailure)throw new Error('Save failed');return{...value,materialId:material.id,usedAt:'now'};}
@@ -41,5 +42,7 @@ for(const options of [{cancel:true},{switchContact:true},{switchAccount:true},{n
   assert.equal(result.env.assistantUsages.value['fixture-profile'].length,0);
 }
 result=await scenario({recordFailure:true});assert.equal(result.env.assistantUsages.value['fixture-profile'].length,0);assert.match(result.env.assistantCopyStatus.value,/已粘贴，但未记录/);
+result=await scenario({platform:'apple'});assert.deepEqual(result.calls.map(c=>c[0]),['copy','confirm','record','clear']);assert.equal(result.calls[2][1].platform,'apple');assert.equal(result.calls[2][1].phone,'+15550000001');
+for(const options of [{noPhone:true},{switchContact:true},{switchAccount:true},{cancel:true}]){result=await scenario({platform:'apple',...options});assert.ok(!result.calls.some(c=>c[0]==='record'),'Apple material use stays bound to the confirmed device/contact and actual phone');}
 assert.doesNotMatch(fragment,/writeNativeComposer|sendNativeComposer|fetch\(|translate\(/);
 console.log('custom-assistant-copy: actual App handler confirmation/insertion before recording, cancellation, frozen contact/account, and persistence failures passed');

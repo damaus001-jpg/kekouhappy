@@ -621,7 +621,7 @@ const appTiles: AppTile[] = [
   { app: 'whatsapp', platform: 'whatsapp', label: 'WhatsApp', short: 'WA', color: '#22c55e', icon: multiWhatsappIcon },
   { app: 'telegram', platform: 'telegram-k', label: 'Telegram', short: 'TG', color: '#35a8ff', icon: multiTelegramIcon },
   { app: 'signal', platform: 'signal', label: 'Signal', short: 'SG', color: '#5361ff', icon: multiSignalIcon },
-  { app: 'opensms', platform: 'opensms', label: '打新增', short: 'SMS', color: '#25bd68', icon: androidIcon },
+  { app: 'opensms', platform: 'opensms', label: '安卓', short: 'SMS', color: '#25bd68', icon: androidIcon },
   { app: 'apple', platform: 'apple', label: '苹果', short: 'iOS', color: '#8594a7', icon: appleIcon }
 ];
 const appEntryTiles = appTiles.filter(tile => tile.app !== 'apple').map(tile => tile.app === 'opensms' ? { ...tile, icon: opensmsIcon } : tile);
@@ -676,7 +676,13 @@ const workspaceTabs = computed<RuntimeTab[]>(() => {
     })
     .map((profile) => {
     const tile = appTiles.find((item) => item.app === appForPlatform(profile.platform)) ?? appTiles[0];
-    return { ...profile, short: tile.short, color: tile.color, icon: tile.icon };
+    return {
+      ...profile,
+      name: profile.platform === 'opensms' ? opensmsProfileDisplayName(profile.name) : profile.name,
+      short: tile.short,
+      color: tile.color,
+      icon: tile.icon
+    };
     });
 });
 const unreadCountsByApp = computed<Record<RuntimeApp, number>>(() => ({
@@ -2144,15 +2150,20 @@ function nextProfileName(app: RuntimeApp) {
     return `苹果 ${suffix}`;
   }
   if (app === 'opensms') {
-    const existingNames = new Set(profiles.value.filter(profile => profile.platform === 'opensms').map(profile => profile.name));
-    if (!existingNames.has('打新增')) return '打新增';
+    const existingNames = new Set(profiles.value.filter(profile => profile.platform === 'opensms').map(profile => opensmsProfileDisplayName(profile.name)));
+    if (!existingNames.has('安卓')) return '安卓';
     let suffix = 2;
-    while (existingNames.has(`打新增 ${suffix}`)) suffix += 1;
-    return `打新增 ${suffix}`;
+    while (existingNames.has(`安卓 ${suffix}`)) suffix += 1;
+    return `安卓 ${suffix}`;
   }
   const prefix = app === 'whatsapp' ? 'WS' : app === 'telegram' ? 'TG' : 'SG';
   const next = profiles.value.filter((profile) => appForPlatform(profile.platform) === app).length + 1;
   return `${prefix}${String(next).padStart(2, '0')}`;
+}
+
+function opensmsProfileDisplayName(name: string) {
+  const match = name.match(/^打新增(?: (\d+))?$/);
+  return match ? `安卓${match[1] ? ` ${match[1]}` : ''}` : name;
 }
 
 function openCreateProfileDialog() {
@@ -2169,7 +2180,7 @@ async function openOpenSms(app: 'opensms' | 'apple' = 'opensms'){
   if(isCreatingProfile.value)return;
   isCreatingProfile.value=true;openSmsError.value='';
   try{
-    const profile=await window.chatTranslator.createProfile(app,nextProfileName(app),app==='apple'?'苹果':'打新增');
+    const profile=await window.chatTranslator.createProfile(app,nextProfileName(app),app==='apple'?'苹果':'安卓');
     const config=await window.chatTranslator.getConfig();
     applyConfig({...config,activeProfileId:profile.id});currentApp.value=app;activePanel.value='session';
   }catch(error){openSmsError.value=error instanceof Error?error.message:String(error);}
@@ -10125,9 +10136,8 @@ async function resolveCustomerTarget():Promise<CustomerTarget> {
   const profile=profiles.value.find(p=>p.id===activeProfileId.value);
   if(!profile||activePanel.value!=='session'||lockScreenVisible.value)throw new Error('请先打开一个联系人会话');
   const platform=appForPlatform(profile.platform);
-  if(platform==='apple')throw new Error('请打开聊天平台的联系人会话');
-  if(platform==='opensms'){
-    const contact=await executeProfileScript<AssistantContact>(profile.id,buildOpenSmsScript({action:'contact'}));
+  if(platform==='opensms'||platform==='apple'){
+    const contact=await executeProfileScript<AssistantContact>(profile.id,platform==='apple'?buildAppleScript({action:'contact'}):buildOpenSmsScript({action:'contact'}));
     if(activeProfileId.value!==profile.id)throw new Error('正在切换账号');
     if(!contact?.phone)throw new Error('无法识别实际收信手机号，请打开联系人会话');
     return {profileId:profile.id,platform,contactId:contact.id,contactTitle:contact.title,phone:contact.phone};
@@ -10141,7 +10151,8 @@ let conversationExportCancelled=false;
 async function exportCurrentConversation({mode,scope}:ConversationExportSelection){
   if(conversationExportBusy.value)return;
   const profile=profiles.value.find(p=>p.id===activeProfileId.value);if(!profile){conversationExportStatus.value='请先打开一个联系人会话';return;}
-  const platform=appForPlatform(profile.platform);if(platform==='apple')return;
+  const platform=appForPlatform(profile.platform);
+  const snapshotOnly=platform==='opensms'||platform==='apple';
   if(!window.chatTranslator.exportConversation){conversationExportStatus.value='请重新启动开发版，加载导出功能';return;}
   conversationExportBusy.value=true;conversationExportCancelled=false;conversationExportProfileId.value=profile.id;
   conversationExportStatus.value='正在读取当前会话…';
@@ -10152,10 +10163,10 @@ async function exportCurrentConversation({mode,scope}:ConversationExportSelectio
   try{
     const start=unwrapConversationExportResult<ExportSnapshot>(await executeProfileScript(profile.id,buildConversationExportScript({action:'begin',platform})));
     if(!start)throw new Error('聊天窗口尚未就绪');contactId=start.contactId;
-    if(platform!=='opensms')await pause(700);
-    let rows:ConversationExportRow[]=platform==='opensms'?start.rows:[],quietAt=0,oldFirst='',coverage:'history-top'|'partial'=platform==='opensms'?'history-top':'partial';
-    let note=platform==='opensms'?'已按页面顺序提取当前会话 message-box 容器内全部消息气泡；范围为该容器中的记录。':'历史未加载完成';const started=Date.now();
-    while(platform!=='opensms'&&Date.now()-started<15*60*1000){
+    if(!snapshotOnly)await pause(700);
+    let rows:ConversationExportRow[]=snapshotOnly?start.rows:[],quietAt=0,oldFirst='',coverage:'history-top'|'partial'=platform==='opensms'?'history-top':'partial';
+    let note=platform==='opensms'?'已按页面顺序提取当前会话 message-box 容器内全部消息气泡；范围为该容器中的记录。':platform==='apple'?'仅包含苹果手机工作台当前已读取并保存的会话记录，不保证包含手机全部历史。':'历史未加载完成';const started=Date.now();
+    while(!snapshotOnly&&Date.now()-started<15*60*1000){
       if(conversationExportCancelled||activeProfileId.value!==profile.id||lockScreenVisible.value||activePanel.value!=='session')throw new Error('导出已取消');
       exportStage='snapshot';
       const snapshot=unwrapConversationExportResult<ExportSnapshot>(await executeProfileScript(profile.id,buildConversationExportScript({action:'snapshot',platform,expectedId:contactId})));
@@ -10177,7 +10188,7 @@ async function exportCurrentConversation({mode,scope}:ConversationExportSelectio
     exportStage='confirm-contact';
     const current=unwrapConversationExportResult<ExportSnapshot>(await executeProfileScript(profile.id,buildConversationExportScript({action:'snapshot',platform,expectedId:contactId})));
     if(!current)throw new Error('无法确认当前联系人');
-    if(platform==='opensms')rows=current.rows;
+    if(snapshotOnly)rows=current.rows;
     if(!rows.length)throw new Error('当前会话没有可导出的记录');
     if(conversationExportCancelled||activeProfileId.value!==profile.id||lockScreenVisible.value||activePanel.value!=='session')throw new Error('导出已取消');
     conversationExportStatus.value=coverage==='partial'?`历史未完全加载，正在保存 ${rows.length} 条…`:`已读取 ${rows.length} 条，请选择保存位置…`;
@@ -10202,7 +10213,7 @@ const assistantCopyBusy=ref(false);
 const assistantCopyStatus=ref('');
 const assistantUsedIds=computed(()=>{
   const profile=profiles.value.find(p=>p.id===activeProfileId.value);if(!profile)return [];const contact=assistantContacts.value[profile.id];if(!contact)return [];
-  const platform=appForPlatform(profile.platform);if(platform==='apple')return [];
+  const platform=appForPlatform(profile.platform);
   return (assistantUsages.value[profile.id]||[]).filter(u=>assistantUsageMatchesContact(u,platform,contact)).map(u=>u.materialId);
 });
 let assistantCatalogPromise:Promise<AssistantCatalog>|null=null;
@@ -10232,10 +10243,10 @@ async function syncAssistantPending(profileId:string,pending:AssistantStagedMate
 }
 async function installAssistantMaterialRuntime(profile:ChatProfile){
   const enabled=signedIn.value&&!lockScreenVisible.value&&!hasBlockingModal.value&&activePanel.value==='session'&&activeProfileId.value===profile.id;
-  const platform=appForPlatform(profile.platform);if(platform==='apple'){await executeProfileScript(profile.id,buildAppleScript({action:'enabled',enabled}));return;}
+  const platform=appForPlatform(profile.platform);if(platform==='apple')await executeProfileScript(profile.id,buildAppleScript({action:'enabled',enabled}));
   if(profile.platform==='opensms')await executeProfileScript(profile.id,buildOpenSmsScript({action:'enabled',enabled}));
   const catalog=await readAssistantCatalog();
-  const contact=profile.platform==='opensms'?await executeProfileScript<AssistantContact>(profile.id,buildOpenSmsScript({action:'contact'})):undefined;
+  const contact=platform==='opensms'||platform==='apple'?await executeProfileScript<AssistantContact>(profile.id,platform==='apple'?buildAppleScript({action:'contact'}):buildOpenSmsScript({action:'contact'})):undefined;
   const usages=await window.chatTranslator.getAssistantUsage(profile.id,contact);assistantUsages.value[profile.id]=usages;
   if(contact)assistantContacts.value[profile.id]=contact;
   const themeNode=document.querySelector('.workspace-page')||document.querySelector('.app-page')||document.documentElement;
@@ -10247,7 +10258,7 @@ async function installAssistantMaterialRuntime(profile:ChatProfile){
 async function copyAssistantMaterial(material:AssistantMaterial,cardTitle=''){
   if(assistantCopyBusy.value)return;
   const profile=profiles.value.find(p=>p.id===activeProfileId.value);if(!profile)return;
-  const platform=appForPlatform(profile.platform);if(platform==='apple')return;
+  const platform=appForPlatform(profile.platform);
   assistantCopyBusy.value=true;assistantCopyStatus.value='正在准备素材…';
   let inserted=false;
   try {
@@ -10257,7 +10268,7 @@ async function copyAssistantMaterial(material:AssistantMaterial,cardTitle=''){
     await installAssistantMaterialRuntime(profile);
     const contact=await executeProfileScript<AssistantContact>(profile.id,buildAssistantRuntimeScript({command:'contact'}));
     if(!contact?.id)throw new Error('无法识别当前联系人，请先打开一个会话');
-    if(profile.platform==='opensms'&&!contact.phone)throw new Error('无法识别对方手机号，请先打开号码完整的会话');
+    if((platform==='opensms'||platform==='apple')&&!contact.phone)throw new Error('无法识别对方手机号，请先打开号码完整的会话');
     if(!signedIn.value||activeProfileId.value!==profile.id||lockScreenVisible.value||hasBlockingModal.value||activePanel.value!=='session')throw new Error('当前会话已变化，请重新操作');
     const pending=await window.chatTranslator.stageAssistantMaterial(known);
     if(pending.type==='image'&&pending.mediaId)await transferAssistantImage(profile.id,pending.mediaId,pending.imageData||'');
@@ -10291,7 +10302,7 @@ watch(activeProfileId,()=>{assistantCopyStatus.value='';});
 async function pollAssistantMaterialEvents(profileId:string){
   if(assistantMaterialPolls.has(profileId))return;
   const profile=profiles.value.find(p=>p.id===profileId);if(!profile)return;
-  const platform=appForPlatform(profile.platform);if(platform==='apple')return;
+  const platform=appForPlatform(profile.platform);
   assistantMaterialPolls.add(profileId);
   try{
     const snapshot=await executeProfileScript<AssistantRuntimeSnapshot>(profileId,buildAssistantRuntimeScript({command:'poll'}));
@@ -10300,7 +10311,7 @@ async function pollAssistantMaterialEvents(profileId:string){
     const contactChanged=previousContact?.id!==snapshot.contact.id||previousContact?.phone!==snapshot.contact.phone;
     if(contactChanged&&!assistantCopyBusy.value)assistantCopyStatus.value='';
     assistantContacts.value[profileId]=snapshot.contact;
-    if(contactChanged&&profile.platform==='opensms'){
+    if(contactChanged&&(platform==='opensms'||platform==='apple')){
       const usages=await window.chatTranslator.getAssistantUsage(profileId,snapshot.contact);
       assistantUsages.value[profileId]=usages;
       await executeProfileScript(profileId,buildAssistantRuntimeScript({command:'usages',usages}));
@@ -13140,7 +13151,7 @@ onUnmounted(() => {
     </section>
   </div>
 
-  <AssistantLibraryPanel v-if="signedIn && activePanel === 'session' && currentApp !== 'apple' && !lockScreenVisible && !hasBlockingModal"
+  <AssistantLibraryPanel v-if="signedIn && activePanel === 'session' && !lockScreenVisible && !hasBlockingModal"
     v-model:open="assistantOpen" :workspace="activePanel === 'session'" :collapsed="workspaceHeaderCollapsed" :class="themeClass"
     :customer-profile-id="activeProfileId||''" :resolve-customer="resolveCustomerTarget" :used-ids="assistantUsedIds" :copy-busy="assistantCopyBusy" :copy-status="assistantCopyStatus" :contact-title="assistantContacts[activeProfileId||'']?.title"
     @copy="copyAssistantMaterial($event.material,$event.cardTitle)" @changed="assistantLibraryChanged" :export-busy="conversationExportBusy" :export-status="conversationExportStatus"

@@ -23,6 +23,9 @@ function load(file){
   const equivalent={...sms,profileId:'b',contactId:'recreated-chat',contactTitle:'Renamed',phone:'+1 213-555-1212'};
   assert.equal(service.customerKey(sms),service.customerKey(equivalent));
   assert.notEqual(service.customerKey(sms),service.customerKey({...sms,phone:'12135551213'}));
+  const apple={...sms,platform:'apple',contactId:'apple:device-a:chat-a:%2B12135551212'};
+  assert.equal(service.customerKey(apple),service.customerKey({...apple,profileId:'apple-other',contactId:'apple:device-b:chat-z:%2B12135551212'}),'Apple customer info follows the actual receiver phone across Apple devices/profiles');
+  assert.equal(service.customerKey(apple),service.customerKey(sms),'Android and Apple customer info reuses the same actual receiver phone');
   for(const platform of ['whatsapp','telegram','signal']){
     const t={platform,profileId:'a',contactId:'stable-id',contactTitle:'Same name'};
     assert.equal(service.customerKey(t),service.customerKey({...t,contactTitle:'Renamed'}));

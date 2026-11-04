@@ -2,11 +2,15 @@ import { readTelegramConversationIdFromDom } from '../electron/shared';
 import { conversationExportDay } from '../electron/conversation-export-dates';
 import type { ConversationExportRow } from '../electron/conversation-export-types';
 export type ExportSnapshot = {contactId:string;contactTitle:string;rows:ConversationExportRow[];top:boolean;loading:boolean;earliestMarked:boolean;expandPending:boolean};
-type ExportCommand={action:'begin'|'snapshot'|'older'|'restore'|'contact';platform:'whatsapp'|'telegram'|'signal'|'opensms';expectedId?:string};
+type ExportCommand={action:'begin'|'snapshot'|'older'|'restore'|'contact';platform:'whatsapp'|'telegram'|'signal'|'opensms'|'apple';expectedId?:string};
 function conversationExportRuntime(command:ExportCommand,readTelegram:()=>string,parseDay:typeof conversationExportDay){
   const w=window as any;
   const platform=command.platform;
   function fail(code:string,message:string):never {throw Object.assign(new Error(message),{exportCode:code});}
+  if(platform==='apple'){
+    if(!w.__dfApple)fail('runtime-unavailable','苹果页面尚未就绪，请稍后重试');
+    return w.__dfApple.apply({action:'export',command});
+  }
   const visible=(n:Element)=>!!n.getClientRects().length&&getComputedStyle(n).display!=='none'&&getComputedStyle(n).visibility!=='hidden';
   const scope=platform==='opensms'?document.querySelector('.im-chat'):platform==='whatsapp'?document.querySelector('#main'):platform==='telegram'?document.querySelector('#MiddleColumn,.chat.active,.middle-column'):document.querySelector('.module-conversation,.ConversationView')||document.querySelector('.CompositionArea')?.parentElement;
   if(!scope)fail('conversation-not-open','请先打开需要导出的联系人会话');

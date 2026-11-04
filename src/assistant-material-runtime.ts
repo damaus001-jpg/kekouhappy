@@ -1,7 +1,7 @@
 import type { AssistantCatalog, AssistantContact, AssistantMaterial, AssistantStagedMaterial, AssistantUsage } from '../electron/assistant-material-types';
 import { assistantUsageMatchesContact } from '../electron/assistant-material-identity';
 export type AssistantRuntimeConfig = {
-  platform: 'whatsapp'|'telegram'|'signal'|'opensms'; catalog: AssistantCatalog;
+  platform: 'whatsapp'|'telegram'|'signal'|'opensms'|'apple'; catalog: AssistantCatalog;
   colors: Record<string,string>; icon: string; usages: AssistantUsage[]; enabled: boolean; showButton?:boolean;
 };
 export type AssistantRuntimeEvent = {
@@ -30,6 +30,7 @@ function assistantRuntime(command: Command, usageMatches: typeof assistantUsageM
     const readContact = () => {
       const platform = state.config?.platform;
       if(platform==='opensms')return w.__dfOpenSms?.apply({action:'contact'}) || {id:'',title:''};
+      if(platform==='apple')return w.__dfApple?.apply({action:'contact'}) || {id:'',title:''};
       let id=''; const root = scope();
       if (platform==='signal') {
         const roots=Array.from(document.querySelectorAll('.CompositionArea[data-df-signal-conversation-id]')).filter(visible);
@@ -60,6 +61,7 @@ function assistantRuntime(command: Command, usageMatches: typeof assistantUsageM
     };
     const composer = () => {
       if(state.config?.platform==='opensms')return w.__dfOpenSms?.editor() || null;
+      if(state.config?.platform==='apple')return w.__dfApple?.editor() || null;
       const candidates = Array.from(document.querySelectorAll<HTMLElement>(
         '#main footer [contenteditable="true"],#main footer [contenteditable="plaintext-only"],.CompositionArea .ql-editor[contenteditable],.CompositionArea [contenteditable="true"],#MiddleColumn [contenteditable="true"],.chat-input-main [contenteditable="true"],.new-message-wrapper [contenteditable="true"],.composer_rich_textarea[contenteditable],.input-message-input[contenteditable],.editable-message-text[contenteditable],#editable-message-text[contenteditable]'));
       const inputs=candidates.filter(n=>visible(n)&&!n.closest('#df-material-root,[role="dialog"],.FunPopover')&&!n.classList.contains('input-message-input-fake'));
@@ -146,9 +148,11 @@ function assistantRuntime(command: Command, usageMatches: typeof assistantUsageM
     const insertText = (text:string,contactId:string) => {
       const input=composer();if(!input || readContact().id!==contactId)return false;
       input.focus();if(!input.isConnected||readContact().id!==contactId||composer()!==input)return false;
-      if(input instanceof HTMLInputElement){
+      if(input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement){
+        if(input.disabled||input.readOnly)return false;
         const before=input.value;
-        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!.call(input,before+text);
+        const prototype=input instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;
+        Object.getOwnPropertyDescriptor(prototype,'value')!.set!.call(input,before+text);
         input.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertFromPaste',data:text}));
         return readContact().id===contactId&&input.isConnected&&input.value===before+text;
       }
@@ -163,6 +167,7 @@ function assistantRuntime(command: Command, usageMatches: typeof assistantUsageM
       return readContact().id===contactId && after!==before && normalizeLines(after).includes(normalizeLines(text));
     };
     const insertImage = async (pending:AssistantStagedMaterial,contactId:string) => {
+      if(state.config.platform==='apple')throw new Error('苹果手机工作台暂未提供图片附件入口，未粘贴图片，也未记录使用');
       const input=composer();if(!input||readContact().id!==contactId||!pending.imageData)return false;
       const bytes=Uint8Array.from(atob(pending.imageData.split(',')[1]),c=>c.charCodeAt(0));
       const transfer=new DataTransfer();transfer.items.add(new File([bytes],pending.name||'素材.png',{type:'image/png'}));
@@ -181,12 +186,12 @@ function assistantRuntime(command: Command, usageMatches: typeof assistantUsageM
     };
     const showModal = (pending:AssistantStagedMaterial,expectedContactId?:string,complete?: (result:any)=>void,cardTitle='') => {
       const contact=readContact();
-      if(state.config?.platform==='opensms'&&!contact.phone){toast('无法识别对方手机号，请先打开号码完整的会话');complete?.(null);return;}
+      if((state.config?.platform==='opensms'||state.config?.platform==='apple')&&!contact.phone){toast('无法识别对方手机号，请先打开号码完整的会话');complete?.(null);return;}
       if(state.modal||!state.config?.enabled||!contact.id||(expectedContactId&&contact.id!==expectedContactId)){complete?.(null);return;}
       const duplicate=used(pending.id);
       const mask=node('div','mask'),dialog=node('section','dialog');dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','false');dialog.setAttribute('aria-label','确认使用素材');
       dialog.appendChild(node('h2','',duplicate?'此素材在当前联系人聊天里已使用':'确认使用素材'));const target=node('p','target',`用于：${contact.title}`);dialog.appendChild(target);
-      if(duplicate){dialog.classList.add('duplicate');const warning=node('p','duplicate-warning',`⚠ 此素材已对当前${state.config.platform==='opensms'?'手机号':'联系人'}使用过！`);warning.setAttribute('role','alert');dialog.appendChild(warning);}
+      if(duplicate){dialog.classList.add('duplicate');const warning=node('p','duplicate-warning',`⚠ 此素材已对当前${state.config.platform==='opensms'||state.config.platform==='apple'?'手机号':'联系人'}使用过！`);warning.setAttribute('role','alert');dialog.appendChild(warning);}
       if(cardTitle)dialog.appendChild(node('p','card-title',`卡片：${cardTitle}`));
       let editor:HTMLTextAreaElement|null=null;
       if(pending.type==='text'){editor=node('textarea') as HTMLTextAreaElement;editor.value=pending.text||'';editor.maxLength=16000;editor.setAttribute('aria-label','修改素材文字');dialog.appendChild(editor);}

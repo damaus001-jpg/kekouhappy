@@ -48,7 +48,7 @@ export async function readAssistantUsage(profileId: string, contact?: AssistantC
       }
     }
     if (changed) await saveAssistantUsage(records);
-    return records.filter(r => profileId === '*' || r.profileId === profileId || (r.platform === 'opensms' && Boolean(r.phone)));
+    return records.filter(r => profileId === '*' || r.profileId === profileId || ((r.platform === 'opensms' || r.platform === 'apple') && Boolean(r.phone)));
   };
   if (!phone) return operation();
   const next = queue.then(operation, operation); queue = next.catch(() => {}); return next;
@@ -58,7 +58,7 @@ export function removeAssistantUsageForProfile(profileId: string): Promise<void>
   const operation = async () => {
     const records = await readAllAssistantUsage();
     // SMS history belongs to the receiver number and survives closing/removing an account.
-    const remaining = records.filter(record => record.profileId !== profileId || record.platform === 'opensms');
+    const remaining = records.filter(record => record.profileId !== profileId || record.platform === 'opensms' || record.platform === 'apple');
     for (const [token, receipt] of receipts) {
       if (receipt.profileId === profileId) receipts.delete(token);
     }
@@ -108,12 +108,13 @@ export function recordAssistantUse(request: AssistantUseRequest): Promise<Assist
   const operation = async () => {
     bounded(request.token, 80, '复制凭据'); bounded(request.profileId, 128, '账号');
     bounded(request.contactTitle || '未命名联系人', 200, '联系人');
-    if (!['whatsapp', 'telegram', 'signal', 'opensms'].includes(request.platform)) throw new Error('平台无效');
-    const valid = request.platform === 'opensms' ? /^sms:[^:\s]{1,720}:[^:\s]{1,384}$/ : request.platform === 'whatsapp' ? /^wa:[\w.+-]+@(c\.us|s\.whatsapp\.net|lid|g\.us)$/
+    if (!['whatsapp', 'telegram', 'signal', 'opensms', 'apple'].includes(request.platform)) throw new Error('平台无效');
+    const valid = request.platform === 'apple' ? /^apple:[^:\s]{1,384}:[^:\s]{1,384}:[^:\s]{1,64}$/ : request.platform === 'opensms' ? /^sms:[^:\s]{1,720}:[^:\s]{1,384}$/ : request.platform === 'whatsapp' ? /^wa:[\w.+-]+@(c\.us|s\.whatsapp\.net|lid|g\.us)$/
       : request.platform === 'telegram' ? /^tg:-?\d+$/ : /^signal:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (!valid.test(request.contactId)) throw new Error('缺少稳定联系人编号，未记录');
-    const phone = request.platform === 'opensms' ? normalizeAssistantPhone(request.phone) : '';
-    if (request.platform === 'opensms' && !phone) throw new Error('缺少对方手机号，未记录素材使用');
+    const phone = request.platform === 'opensms' || request.platform === 'apple' ? normalizeAssistantPhone(request.phone) : '';
+    if ((request.platform === 'opensms' || request.platform === 'apple') && !phone) throw new Error('缺少对方手机号，未记录素材使用');
+    if (request.platform === 'apple' && normalizeAssistantPhone(decodeURIComponent(request.contactId.split(':')[3])) !== phone) throw new Error('素材联系人与手机号不匹配');
     if (request.actualText !== undefined && (typeof request.actualText !== 'string' || request.actualText.length > 16000)) throw new Error('确认文字过长');
     const receipt = receipts.get(request.token);
     if (receipt) {
@@ -127,7 +128,9 @@ export function recordAssistantUse(request: AssistantUseRequest): Promise<Assist
       contactTitle: request.contactTitle || '未命名联系人', materialId: staged.id, usedAt: new Date().toISOString(), confirmation: 'inserted',
       ...(phone ? { phone } : {}),
       ...(staged.type === 'text' ? { actualText: request.actualText || staged.text } : {}) };
-    const index = records.findIndex(r => r.platform === record.platform && r.materialId === record.materialId && (phone ? r.phone === phone : r.profileId === record.profileId && r.contactId === record.contactId));
+    const index = records.findIndex(r => r.materialId === record.materialId && (phone
+      ? (r.platform === 'opensms' || r.platform === 'apple') && r.phone === phone
+      : r.platform === record.platform && r.profileId === record.profileId && r.contactId === record.contactId));
     if (index >= 0) records[index] = record; else records.push(record);
     if (records.length > 100000) throw new Error('素材使用记录超过上限，未保存');
     await saveAssistantUsage(records);

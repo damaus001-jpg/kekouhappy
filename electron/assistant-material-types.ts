@@ -8,7 +8,7 @@ export type AssistantStagedMaterial = AssistantMaterial & {
 };
 export type AssistantContact = { id: string; title: string; phone?: string };
 export type AssistantUsage = {
-  profileId: string; platform: 'whatsapp' | 'telegram' | 'signal' | 'opensms'; contactId: string;
+  profileId: string; platform: 'whatsapp' | 'telegram' | 'signal' | 'opensms' | 'apple'; contactId: string;
   contactTitle: string; materialId: string; usedAt: string; actualText?: string;
   confirmation?: 'inserted'; phone?: string;
 };

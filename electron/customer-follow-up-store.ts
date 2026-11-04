@@ -11,10 +11,10 @@ let queue:Promise<unknown> = Promise.resolve();
 function serial<T>(operation:()=>Promise<T>):Promise<T> { const result=queue.then(operation,operation);queue=result.catch(()=>{});return result; }
 function text(value:unknown,max:number):string { if(typeof value!=='string'||value.length>max||value.includes('\0'))throw new Error('客户资料格式无效或内容过长');return value; }
 export function customerKey(target:CustomerTarget):string {
-  if(!target||!['opensms','whatsapp','telegram','signal'].includes(target.platform))throw new Error('客户平台无效');
+  if(!target||!['opensms','apple','whatsapp','telegram','signal'].includes(target.platform))throw new Error('客户平台无效');
   const profile=text(target.profileId,128);if(!profile)throw new Error('客户账号无效');
   let identity:string[];
-  if(target.platform==='opensms') { const phone=normalizeAssistantPhone(target.phone);if(!phone)throw new Error('无法识别实际收信手机号');identity=['opensms',phone]; }
+  if(target.platform==='opensms'||target.platform==='apple') { const phone=normalizeAssistantPhone(target.phone);if(!phone)throw new Error('无法识别实际收信手机号');identity=['opensms',phone]; }
   else { const id=text(target.contactId,256);if(!id)throw new Error('无法识别联系人');identity=[target.platform,profile,id]; }
   return createHash('sha256').update(JSON.stringify(identity)).digest('hex');
 }

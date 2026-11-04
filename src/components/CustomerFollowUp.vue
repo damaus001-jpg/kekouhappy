@@ -30,7 +30,7 @@ const otherErrors=computed(()=>[...customerWrites.values()].filter(state=>state.
 const missing=computed(()=>customerRequiredFields.filter(name=>!record.value?.values[name]?.trim()||(name==='客户阶段'&&!settings.value.stages.includes(record.value.values[name]))));
 const entries=computed(()=>[...(record.value?.entries||[])].sort((a,b)=>b.createdAt-a.createdAt));
 const stageOptions=computed(()=>settings.value.stages);
-const platformNames={opensms:'打新增',whatsapp:'WhatsApp',telegram:'Telegram',signal:'Signal'};
+const platformNames={opensms:'打新增',apple:'苹果',whatsapp:'WhatsApp',telegram:'Telegram',signal:'Signal'};
 function changed(){if(current.value)changedCustomer(current.value);}
 function flushCurrent(){if(current.value)void flushCustomer(current.value);}
 function commitChanged(){changed();flushCurrent();}
@@ -38,7 +38,7 @@ async function refresh(){
   if(reading||disposed)return;reading=true;const token=generation;
   try{
     const found=await props.resolveTarget();if(disposed||token!==generation)return;
-    const next=JSON.stringify(found.platform==='opensms'?[found.platform,found.phone]:[found.platform,found.profileId,found.contactId]);
+    const next=JSON.stringify(found.platform==='opensms'||found.platform==='apple'?[found.platform,found.phone]:[found.platform,found.profileId,found.contactId]);
     if(next===identity){target.value=found;return;}
     flushCurrent();finishStage(null);current.value=null;target.value=null;loading.value=true;error.value='';settingsOpen.value=false;transferNotice.value='';
     const snapshot=await window.chatTranslator.getCustomer(found);if(disposed||token!==generation)return;
@@ -78,7 +78,7 @@ async function transfer(mode:'import'|'export'){
   const state=current.value;if(!state||!target.value||transferBusy.value||settingsBusy.value||settingsOpen.value)return;
   const captured=JSON.parse(JSON.stringify(target.value)) as CustomerTarget;
   const token=generation;
-  const same=(a:CustomerTarget,b:CustomerTarget)=>a.platform===b.platform&&(a.platform==='opensms'?a.phone===b.phone:a.profileId===b.profileId&&a.contactId===b.contactId);
+  const same=(a:CustomerTarget,b:CustomerTarget)=>a.platform===b.platform&&(a.platform==='opensms'||a.platform==='apple'?a.phone===b.phone:a.profileId===b.profileId&&a.contactId===b.contactId);
   async function check(){const found=await props.resolveTarget();if(disposed||generation!==token||current.value!==state||!same(found,captured))throw new Error('联系人已切换，操作已取消，请在当前联系人下重试');}
   localTransferBusy.value=true;state.transferring=true;error.value='';transferNotice.value='';
   try{
@@ -97,7 +97,7 @@ async function transfer(mode:'import'|'export'){
       if(choice===null){if(!disposed&&current.value===state)transferNotice.value='已取消导入';return;}
       selectedStage=choice;await check();
     }
-    const destination=captured.platform==='opensms'?captured.phone:captured.contactTitle||'当前联系人';
+    const destination=captured.platform==='opensms'||captured.platform==='apple'?captured.phone:captured.contactTitle||'当前联系人';
     if(!window.confirm(`将覆盖当前联系人「${destination}」的客户跟进。\n\n来源姓名：${preview.name}\n跟进记录：${preview.entryCount} 条\n导出时间：${date(preview.exportedAt)}\n\n资料卡、跟进时间线和草稿将全部替换。是否继续？`)){transferNotice.value='已取消导入';return;}
     await check();
     const snapshot=await window.chatTranslator.importCustomer(captured,preview.token,selectedStage);
@@ -124,7 +124,7 @@ const date=(value:number)=>new Date(value).toLocaleString();
     <p v-if="loading" class="customer-empty" role="status">正在读取当前联系人…</p>
     <p v-if="error" class="customer-error" role="alert">{{error}}</p>
     <template v-if="record&&current&&target">
-      <header class="customer-summary"><div><strong>{{target.contactTitle||target.phone||'当前联系人'}}</strong><small>{{platformNames[target.platform]}} · {{target.platform==='opensms'?target.phone:'当前账号'}} · 仅本机</small></div><span :class="{complete:!missing.length}">{{missing.length?`待补充 ${missing.length} 项`:'资料完整'}}</span></header>
+      <header class="customer-summary"><div><strong>{{target.contactTitle||target.phone||'当前联系人'}}</strong><small>{{platformNames[target.platform]}} · {{target.platform==='opensms'||target.platform==='apple'?target.phone:'当前账号'}} · 仅本机</small></div><span :class="{complete:!missing.length}">{{missing.length?`待补充 ${missing.length} 项`:'资料完整'}}</span></header>
       <div class="customer-save-status" role="status"><span v-if="current.error" class="customer-error">保存失败：{{current.error}} <button :disabled="transferBusy" @click="flushCustomer(current)">重试保存</button></span><span v-else>{{current.saving?'正在保存…':current.savedRevision<current.revision?'有待保存修改':record.updatedAt?'已保存到本机':'填写后自动保存草稿'}}</span><div class="customer-transfer-actions"><button :disabled="transferBusy||settingsBusy||settingsOpen" @click="transfer('import')">导入</button><button :disabled="transferBusy||settingsBusy||settingsOpen" @click="transfer('export')">导出</button></div></div>
       <p v-if="transferBusy||transferNotice" class="customer-transfer-notice" role="status">{{transferBusy?'正在处理文件…':transferNotice}}</p>
       <p v-if="settingsNotice" class="customer-transfer-notice" role="status">{{settingsNotice}}</p>

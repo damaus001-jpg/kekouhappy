@@ -19,6 +19,7 @@ import {
   type MessageBoxOptions as ElectronOpenDialogOptions,
   type Session,
 } from 'electron';
+import { workspaceAccessHeaders } from './workspace-access.js';
 import { appendFile, cp, readdir, readFile, writeFile, mkdir, rename, rm, stat } from 'node:fs/promises';
 import { createReadStream, lstatSync, readFileSync, realpathSync, statSync, type Dirent } from 'node:fs';
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
@@ -8118,7 +8119,7 @@ function registerIpc() {
     if (contact) {
       assertSerializedSize(contact, 'Assistant contact', 4096);
       const profile = (await readProfileBackup()).find(p => p.id === profileId);
-      if (profile?.platform !== 'opensms') throw new Error('仅打新增可关联手机号素材记录');
+      if (profile?.platform !== 'opensms' && profile?.platform !== 'apple') throw new Error('仅打新增可关联手机号素材记录');
     }
     return readAssistantUsage(profileId, contact);
   });
@@ -8577,7 +8578,14 @@ function configureSession(profile: ChatProfile) {
       'User-Agent': profile.fingerprint.userAgent
     };
 
-    callback({ requestHeaders });
+    try {
+      callback({ requestHeaders: workspaceAccessHeaders(
+        partitionPolicies.get(profile.partition) || profile.platform,
+        details.method, details.url, requestHeaders) });
+    } catch {
+      // A missing/corrupt credential must never downgrade to an unsigned request.
+      callback({ cancel: true });
+    }
   });
 }
 

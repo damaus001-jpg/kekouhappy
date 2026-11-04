@@ -1,4 +1,4 @@
-export type CustomerTarget = { profileId: string; platform: 'opensms'|'whatsapp'|'telegram'|'signal'; contactId: string; contactTitle: string; phone?: string };
+export type CustomerTarget = { profileId: string; platform: 'opensms'|'apple'|'whatsapp'|'telegram'|'signal'; contactId: string; contactTitle: string; phone?: string };
 export const customerRequiredFields = ['姓名','年龄','城市','职业','兴趣','客户阶段','备注'] as const;
 export const defaultCustomerStages = ['新联系','了解中','持续跟进','已成交','暂缓','停止跟进'];
 export type CustomerSettings = { fields: {id:string;name:string}[]; stages:string[] };

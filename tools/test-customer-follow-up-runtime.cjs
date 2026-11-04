@@ -69,6 +69,11 @@ if(!process.versions.electron){
     await exec(`window.setTarget(${JSON.stringify({...a,profileId:'sms-other',contactId:'recreated',contactTitle:'改名 A'})})`);
     await wait(`document.querySelector('[aria-label="姓名"]')?.value==='客户 A 的资料'`);
     assert.equal(await exec(`document.querySelector('[aria-label="今天聊了什么"]').value`),'未提交草稿','draft restored across accounts for same number');
+    await exec(`window.setTarget(${JSON.stringify({...a,platform:'apple',profileId:'apple-a',contactId:'apple:device-a:chat-a:%2B12135551212'})})`);
+    await wait(`document.querySelector('.customer-summary')?.textContent.includes('苹果')&&document.querySelector('[aria-label="姓名"]')?.value==='客户 A 的资料'`);
+    assert.ok(await exec(`document.querySelector('.customer-summary small').textContent.includes('+12135551212')`),'Apple follow-up displays the actual receiver phone');
+    await input('备注','Apple phone-linked update');await saved();assert.equal((await store.readCustomer(a)).record.values['备注'],'Apple phone-linked update','Apple edits reuse the existing Android receiver record');
+    await exec(`window.setTarget(${JSON.stringify({...a,profileId:'sms-other',contactId:'recreated',contactTitle:'改名 A'})})`);await wait(`document.querySelector('.customer-summary')?.textContent.includes('打新增')&&document.querySelector('[aria-label="备注"]')?.value==='Apple phone-linked update'`);
     await input('下一步做什么','下周联系');await click('添加记录');await saved();
     assert.equal((await store.readCustomer(a)).record.entries.length,1);
     await click('编辑');await input('今天聊了什么','编辑后的聊天摘要');await click('保存记录');await saved();

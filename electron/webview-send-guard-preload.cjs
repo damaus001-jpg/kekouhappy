@@ -57,7 +57,7 @@ const blockedPhonePrompts = new WeakMap();
 // The established WA/TG handlers below remain scoped to their original hosts.
 function guardOpenSmsStartup(event) {
   if (location.origin === 'http://127.0.0.1:8070') {
-    if (document.documentElement?.dataset.dfAppleGuard === '2026-11-02-apple-v1') return;
+    if (document.documentElement?.dataset.dfAppleGuard === '2026-11-02-apple-v2') return;
     const element = event.target?.nodeType === Node.ELEMENT_NODE ? event.target : event.target?.parentElement;
     if ((event.key === 'Enter' && element?.closest?.('#reply-box #reply-zh')) || element?.closest?.('#reply-box #send-reply')) {
       event.preventDefault(); event.stopImmediatePropagation();

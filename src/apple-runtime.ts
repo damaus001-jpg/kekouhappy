@@ -10,7 +10,7 @@ declare const controlOwner: string | null;
 export function appleRuntime(command: any) {
   if (location.origin !== 'http://127.0.0.1:8070' || window.top !== window) return false;
   const w = window as any;
-  const version = '2026-11-02-apple-v1';
+  const version = '2026-11-02-apple-v2';
   if (w.__dfApple?.version !== version) {
     w.__dfApple?.dispose();
     const state: any = { version, enabled: false, signature: '', context: '', input: null, pending: null, ready: null, sensitive: null, writing: false, sending: false, inFlight: false, composing: false, cache: new Map() };
@@ -25,10 +25,44 @@ export function appleRuntime(command: any) {
         if (typeof workspaceDevice !== 'string' || !workspaceDevice || typeof currentConversation === 'undefined' || !currentConversation || typeof currentConversationId !== 'string' || currentConversation.id !== currentConversationId) return { id: '', title: '' };
         const phone = canonical(currentConversation.phone_number);
         if (phone && canonical(document.getElementById('peer-phone')?.textContent) !== phone) return { id: '', title: '' };
-        return { id: ['apple', workspaceDevice, currentConversationId, phone].map(encodeURIComponent).join(':'), title: phone || canonical(currentConversation.contact), phone };
+        let digits = phone.replace(/\D/g, '');
+        const international = phone.startsWith('+') || digits.startsWith('00');
+        if (digits.startsWith('00')) digits = digits.slice(2);
+        if (!international && digits.length === 10) digits = '1' + digits;
+        const normalizedPhone = /^\+?[\d\s().-]+$/.test(phone) && /^[1-9]\d{7,14}$/.test(digits) ? '+' + digits : '';
+        return { id: ['apple', workspaceDevice, currentConversationId, phone].map(encodeURIComponent).join(':'), title: phone || canonical(currentConversation.contact), phone: normalizedPhone };
       } catch { return { id: '', title: '' }; }
     };
     const context = () => contact().id + ':' + (typeof workspaceRevision === 'number' ? workspaceRevision : '') + ':' + (typeof controlOwner === 'string' ? controlOwner : '');
+    const exportConversation = (cmd: any) => {
+      const target = contact(), box = document.getElementById('messages');
+      const fail = (code: string, message: string): never => { throw Object.assign(new Error(message), { exportCode: code }); };
+      if (!target.id || !box) fail('conversation-not-open', '请先打开苹果手机工作台中的联系人会话');
+      if (cmd.expectedId && cmd.expectedId !== target.id) fail('contact-changed', '设备或联系人已切换，导出已停止');
+      if (cmd.action === 'contact') return { contactId: target.id, contactTitle: target.title };
+      if (cmd.action === 'begin') state.exportContext = { id: target.id, stamp: context(), box };
+      else if (!state.exportContext || state.exportContext.id !== target.id || state.exportContext.stamp !== context() || state.exportContext.box !== box) {
+        fail('contact-changed', '设备或会话记录已变化，导出已停止，请重新操作');
+      }
+      if (cmd.action === 'restore') { state.exportContext = null; return true; }
+      if (cmd.action === 'older') return false;
+      // The workbench already holds its saved message window in memory. Reading
+      // it does not scroll, send, or start another phone capture.
+      const saved = Array.isArray(currentConversation.messages) ? currentConversation.messages : [];
+      const rendered = new Map(Array.from(box!.querySelectorAll<HTMLElement>(':scope > .message'), node => [node.dataset.messageId, node]));
+      const rows = saved.map((message: any, index: number) => {
+        const originalText = String(message.text || '').replace(/\r\n?/g, '\n').trim();
+        const timestamp = canonical(message.time);
+        const direction = message.side === 'incoming' || message.side === 'outgoing' ? message.side : 'unknown';
+        const row = rendered.get(String(index));
+        const displayed = canonical(row?.querySelector('.bubble > .original')?.textContent);
+        const chineseText = originalText && displayed === canonical(originalText)
+          ? canonical(row?.querySelector('.df-chat-translation')?.textContent) : '';
+        return { id: 'apple-message:' + index, direction, timestamp, originalText, chineseText,
+          mediaLabel: originalText ? '' : message.kind === 'attachment' ? '[附件消息]' : message.decode_error ? '[正文解析未完成]' : '[无文字内容]' };
+      });
+      return { contactId: target.id, contactTitle: target.title, rows, top: true, loading: false, earliestMarked: false, expandPending: false };
+    };
     const emit = (action: string, text = '', requestId = '') => {
       w.__dfTranslatorQueue ||= [];
       w.__dfTranslatorQueue.push({ action, text, requestId, conversationSignature: contact().id });
@@ -140,6 +174,7 @@ export function appleRuntime(command: any) {
       if (cmd.action === 'bootstrap') return true;
       if (cmd.action === 'enabled') { state.enabled = cmd.enabled === true; if (!state.enabled) reset(); return true; }
       if (cmd.action === 'contact') return contact();
+      if (cmd.action === 'export') return exportConversation(cmd.command);
       if (cmd.action === 'install') { decorate(); return true; }
       if (cmd.action === 'text') return read();
       if (cmd.action === 'focus' || cmd.action === 'focusNative') { editor()?.focus(); return !!contact().id && document.activeElement === editor(); }
@@ -224,6 +259,7 @@ export function appleRuntime(command: any) {
       document.removeEventListener('compositionstart', onCompositionStart, true); document.removeEventListener('compositionend', onCompositionEnd, true);
       style.remove(); document.getElementById('df-apple-composer-status')?.remove(); delete document.documentElement.dataset.dfAppleGuard;
     };
+    state.editor = editor;
     w.__dfApple = state; sync(); document.documentElement.dataset.dfAppleGuard = version;
   }
   if (command.action === 'dispose') { w.__dfApple.dispose(); delete w.__dfApple; return true; }
