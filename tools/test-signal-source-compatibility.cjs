@@ -9,7 +9,7 @@ const readBuffer = relativePath => fs.readFileSync(path.join(root, relativePath)
 const defaultBaselineVersion = '8.17.0';
 const supportedBaselines = Object.freeze({
   '8.17.0': 'B692DD94A5CBE9AC7969B0FF0C51B4DA05B2CE82B5F055A6264889251901CD57',
-  '8.18.0': '95332C3BD5805BBEA5B3FEEEA656749364D2A5CB90A0DA76D28BA75929F0399E'
+  '8.18.0': '66FD642BEDA089526EBCBA83AAD4B602A36236A983F6FD7C57D18084A2CD4692'
 });
 
 function selectBaselineVersion(argv) {
@@ -149,7 +149,7 @@ if (baselineVersion === '8.18.0') {
   });
   expectedPatchSeries.push({
     file: '0008-maoyi-source-smart-reply-request.patch',
-    sha256: '579BBE111DBF5D81018C7016F74FD10E3BD1498A4BE2920FE009B6D70D83FC91'
+    sha256: '5F89AE33FDEBBCC071EE3C4201DD24A5611F7C9332F39C9CB255D37CAA31D865'
   });
   expectedPatchSeries.push({
     file: '0009-maoyi-refresh-real-state.patch',
@@ -181,7 +181,7 @@ if (baselineVersion === '8.18.0') {
   });
   expectedPatchSeries.push({
     file: '0016-maoyi-three-incoming-smart-reply-anchors.patch',
-    sha256: '412F1915C7E58208AD140BBE8F80A75760361AA45F60004BB495686EE569A607'
+    sha256: '15F53EDEF2E9E315FE46C27A30DE62AC4ADBB001E8F594980A7BB0558FF09665'
   });
   expectedPatchSeries.push({
     file: '0017-maoyi-hidden-input-and-chinese-send-guard.patch',
@@ -214,6 +214,14 @@ if (baselineVersion === '8.18.0') {
   expectedPatchSeries.push({
     file: '0024-maoyi-voice-note-local-transcription.patch',
     sha256: 'BD713F4A89EC0288CFD6F5882F50B54678489DF4F4526098FCE0247C8E455C18'
+  });
+  expectedPatchSeries.push({
+    file: '0025-maoyi-chinese-submit-retry-recovery.patch',
+    sha256: '7477AF800CAE41E4098525BEBDFBA409D045103C5DC8E249E9203A9CC449FC87'
+  });
+  expectedPatchSeries.push({
+    file: '0026-maoyi-preserve-existing-refresh-error-wiring.patch',
+    sha256: '5554030A0251A975111D5F1C17CAFF1F7A1773AD578FAF792E76A32534751561'
   });
 }
 assert.deepEqual(patchSeries.patches, expectedPatchSeries);

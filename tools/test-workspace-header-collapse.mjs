@@ -40,10 +40,9 @@ matches(styles, /\.workspace-header-collapsed \.multi-open-tabs\s*\{\s*padding-r
 matches(styles, /\.window-ctrl\.vertical\s*\{[\s\S]*?position:\s*fixed;[\s\S]*?z-index:\s*9999;/, 'window controls remain floating');
 matches(
   styles,
-  /\.runtime-side\s*\{[\s\S]*?grid-template-rows:\s*repeat\(4, 78px\) repeat\(3, 72px\) minmax\(76px, 1fr\);/,
-  'home, lock, remote guard, and toggle remain equal-height; three platforms remain equal-height; bottom custom entry has a flexible row'
+  /\.runtime-side\s*\{[\s\S]*?grid-template-rows:\s*repeat\(4, 78px\) repeat\(4, 72px\) minmax\(76px, 1fr\);/,
+  'home, lock, remote guard, and toggle remain equal-height; four app entries remain equal-height; bottom spacing stays flexible'
 );
-matches(styles, /\.runtime-side \.runtime-customize-button\s*\{[\s\S]*?align-self:\s*end;[\s\S]*?padding:\s*0 0 24px;/, 'bottom custom entry keeps a 24px distance from the workspace edge');
 matches(app, /class="runtime-lock-button"[\s\S]*class="runtime-guard-button"[\s\S]*class="runtime-header-toggle"/, 'remote guard stays between lock and expand/collapse');
 matches(styles, /\.runtime-side \.runtime-header-toggle \.runtime-header-toggle-icon\s*\{[\s\S]*?width:\s*40px;[\s\S]*?height:\s*40px;[\s\S]*?font-size:\s*28px;/, 'enlarged Poké Ball toggle icon');
 matches(styles, /\.runtime-side \.runtime-guard-button\s*\{[\s\S]*?transform:\s*translateY\(2px\);/, 'remote guard icon and labels move down together by 2px');

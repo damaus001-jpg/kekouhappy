@@ -31,6 +31,10 @@ app.whenReady().then(async()=>{
     for(const type of ['keydown','keypress','keyup'])input.dispatchEvent(new KeyboardEvent(type,{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true,cancelable:true}));
     return window.__dfTranslatorQueue.filter(e=>e.action==='send').length;})()`);
   results.push({name:'one-enter-one-send-request',passed:sequence===1,requests:sequence});
+  for(const mode of ['enter','space','both']){
+    const policy=await execute(`(()=>{document.documentElement.dataset.dfInputTrigger=${JSON.stringify(mode)};const input=document.getElementById('input');input.textContent=${JSON.stringify('设置模式中文'+mode)};input.focus();delete input.dataset.dfTranslationPending;window.__dfTranslatorQueue=[];window.nativeChineseEnter=0;input.onkeydown=e=>{if(e.key==='Enter')nativeChineseEnter++};for(const type of ['keydown','keypress','keyup'])input.dispatchEvent(new KeyboardEvent(type,{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true,cancelable:true}));return {translations:__dfTranslatorQueue.filter(e=>e.action==='translate').length,sends:__dfTranslatorQueue.filter(e=>e.action==='send').length,native:nativeChineseEnter};})()`);
+    results.push({name:'page-guard-selected-'+mode,passed:policy.translations===(mode==='space'?0:1)&&policy.sends===0&&policy.native===0});
+  }
   const shadow=await execute(`(()=>{window.__dfTranslatorQueue=[];const root=document.createElement('div');root.id='df-material-root';const shadow=root.attachShadow({mode:'open'});const editor=document.createElement('textarea');editor.value='Material editor';shadow.appendChild(editor);document.body.appendChild(root);editor.focus();editor.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true,composed:true,cancelable:true}));return window.__dfTranslatorQueue.filter(e=>e.action==='send'||e.action==='translate').length;})()`);
   results.push({name:'material-dialog-enter-does-not-send-chat',passed:shadow===0,requests:shadow});
   fs.writeFileSync(path.join(root,'.tmp','telegram-translated-send-results.json'),JSON.stringify(results,null,2));

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import DevelopmentDiagnostics from './DevelopmentDiagnostics.vue';
+import { normalizeInputSettings, buildInputSettingsScript, type InputPlatform, type InputSettings } from './input-settings';
 import RemoteGuardConnections from './components/RemoteGuardConnections.vue';
 import AssistantLibraryPanel from './components/CustomAssistantPanel.vue';
 import { buildAssistantCatalog } from './assistant-material-catalog';
@@ -195,6 +196,15 @@ const reauthorizationMessage = ref('');
 const reauthorizationMessageIsError = ref(false);
 const reauthorizationSucceeded = ref(false);
 const translationCustomizationOpen = ref(false);
+const inputSettingsOpen = ref(false);
+const inputSettings = ref(normalizeInputSettings(null));
+const inputSettingsDraft = ref(normalizeInputSettings(null));
+const inputSettingsBusy = ref(false);
+const inputSettingsMessage = ref('');
+const inputSettingsError = ref(false);
+const inputPlatforms: { key: InputPlatform; label: string }[] = [
+  { key: 'whatsapp', label: 'WhatsApp' }, { key: 'telegram', label: 'Telegram' }, { key: 'signal', label: 'Signal' }
+];
 const translationCustomizationDraft = ref(defaultChineseToEnglishEditablePrompt);
 const translationCustomizationSaved = ref(defaultChineseToEnglishEditablePrompt);
 const translationCustomizationBusy = ref(false);
@@ -624,7 +634,7 @@ const appTiles: AppTile[] = [
   { app: 'opensms', platform: 'opensms', label: '安卓', short: 'SMS', color: '#25bd68', icon: androidIcon },
   { app: 'apple', platform: 'apple', label: '苹果', short: 'iOS', color: '#8594a7', icon: appleIcon }
 ];
-const appEntryTiles = appTiles.filter(tile => tile.app !== 'apple').map(tile => tile.app === 'opensms' ? { ...tile, icon: opensmsIcon } : tile);
+const appEntryTiles = appTiles.filter(tile => tile.app !== 'apple').map(tile => tile.app === 'opensms' ? { ...tile, label: '打新增', icon: opensmsIcon } : tile);
 
 const activeProfile = computed(() => profiles.value.find((profile) => profile.id === activeProfileId.value) ?? null);
 const activeSignalProfile = computed(() => (activeProfile.value?.platform === 'signal' ? activeProfile.value : null));
@@ -639,6 +649,7 @@ const hasBlockingModal = computed(() => Boolean(
   renameTargetProfile.value ||
   reauthorizationDialogOpen.value ||
   translationCustomizationOpen.value ||
+  inputSettingsOpen.value ||
   openSmsEntryOpen.value ||
   eyeCareTranslationDialogOpen.value
 ));
@@ -820,6 +831,54 @@ function setTheme(theme: ThemeName) {
     void executeProfileScript(profile.id, buildInjectedComposerScript('install')).catch(() => undefined);
   }
 }
+
+async function applyInputSettings(profile: ChatProfile) {
+  const platform = appForPlatform(profile.platform);
+  if (platform !== 'whatsapp' && platform !== 'telegram' && platform !== 'signal') return;
+  const runtime = getRuntimeScriptExecutor(profile);
+  if (runtime) await runtime.execute(buildInputSettingsScript(inputSettings.value[platform]));
+}
+
+async function saveInputSettings() {
+  if (inputSettingsBusy.value) return;
+  inputSettingsBusy.value = true;
+  inputSettingsMessage.value = '';
+  inputSettingsError.value = false;
+  try {
+    if (!window.chatTranslator || !configState.value) throw new Error('Settings unavailable');
+    const requested = normalizeInputSettings(inputSettingsDraft.value);
+    await persistWorkspaceConfig(requested);
+    const saved = normalizeInputSettings(configState.value.inputTriggerSettings);
+    if (JSON.stringify(saved) !== JSON.stringify(requested)) throw new Error('开发版主进程尚未更新，请重启开发版后再保存');
+    inputSettings.value = saved;
+    const results = await Promise.allSettled(profiles.value.map(applyInputSettings));
+    if (results.some(result => result.status === 'rejected')) {
+      inputSettingsMessage.value = '已保存，暂未就绪的聊天窗口将在加载后应用';
+    } else inputSettingsMessage.value = '已保存并生效';
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : '未知错误';
+    inputSettingsMessage.value = `保存失败：${detail}`;
+    inputSettingsError.value = true;
+  } finally {
+    inputSettingsBusy.value = false;
+  }
+}
+
+function trapInputSettingsFocus(event: KeyboardEvent) {
+  const controls = Array.from(document.querySelectorAll<HTMLElement>('.input-settings-card button, .input-settings-card select'));
+  const first = controls[0], last = controls[controls.length - 1];
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+}
+watch(inputSettingsOpen, async open => {
+  if (open) {
+    inputSettingsDraft.value = { ...inputSettings.value };
+    inputSettingsMessage.value = '';
+    inputSettingsError.value = false;
+  }
+  await nextTick();
+  document.querySelector<HTMLElement>(open ? '.input-settings-card select' : '.input-settings-button')?.focus();
+});
 
 function buildEyeCareTranslationStyleScript(enabled: boolean, translationColor = eyeCareTranslationColor) {
   return `
@@ -1070,6 +1129,7 @@ function isSignalLegacyBubbleTranslationDisabled(profile?: ChatProfile | null) {
 
 function applyConfig(config: AppConfig) {
   configState.value = config;
+  inputSettings.value = normalizeInputSettings(config.inputTriggerSettings);
   profiles.value = config.profiles;
   profileTabOrder.value = sanitizeProfileTabOrder(config.profiles, config.profileTabOrder);
   lastActiveProfileIds.value = { ...config.lastActiveProfileIds };
@@ -2326,20 +2386,22 @@ async function confirmCloseProfile() {
   }
 }
 
-async function persistWorkspaceConfig() {
+async function persistWorkspaceConfig(inputTriggers?: InputSettings) {
   workspaceConfigSaveQueue = workspaceConfigSaveQueue
     .catch(() => undefined)
     .then(async () => {
       if (!window.chatTranslator || !configState.value) return;
-      const saved = await window.chatTranslator.saveConfig({
+      const snapshot: AppConfig = JSON.parse(JSON.stringify({
         ...configState.value,
         profiles: profiles.value,
         activeProfileId: activeProfileId.value,
         profileTabOrder: profileTabOrder.value,
         lastActiveProfileIds: lastActiveProfileIds.value,
         activeTheme: activeTheme.value,
-        eyeCareTranslationEnabled: eyeCareTranslationEnabled.value
-      });
+        eyeCareTranslationEnabled: eyeCareTranslationEnabled.value,
+        inputTriggerSettings: { ...(inputTriggers || inputSettings.value) }
+      }));
+      const saved = await window.chatTranslator.saveConfig(snapshot);
       configState.value = saved;
     });
   await workspaceConfigSaveQueue;
@@ -3737,7 +3799,7 @@ async function sendConfirmedSensitiveText(profile: ChatProfile, text: string, co
     setComposerStatus(profile.id, sendResult?.submitted ? '手机工作台已接收操作，请核对发送结果，勿重复发送' : '平台未接受发送，请重新确认');
     return;
   }
-  void verifySentMessageIntegrity(profile, text, outgoingKeysBeforeSend, sendIntegrityNotBefore);
+  void verifySentMessageIntegrity(profile, text, outgoingKeysBeforeSend, sendIntegrityNotBefore, normalizedSignature);
   setComposerFeedbackState(profile.id, 'sent');
   setComposerStatus(profile.id, '');
   const stateKey = `sensitive:${profile.id}:${token}`;
@@ -4205,7 +4267,7 @@ async function handleInjectedComposerEvent(
     const existingSentTimer = composerSentStatusTimers.get(stateKey);
     if (existingSentTimer) clearTimeout(existingSentTimer);
     if (sendResult?.ok) {
-      void verifySentMessageIntegrity(profile, text, outgoingKeysBeforeSend, sendIntegrityNotBefore);
+      void verifySentMessageIntegrity(profile, text, outgoingKeysBeforeSend, sendIntegrityNotBefore, expectedSendConversation);
       setComposerFeedbackState(profileId, 'sent');
       const timer = setTimeout(() => {
         composerSentStatusTimers.delete(stateKey);
@@ -4266,7 +4328,8 @@ async function verifySentMessageIntegrity(
   profile: ChatProfile,
   expectedText: string,
   previousKeys: Set<string>,
-  notBefore: number
+  notBefore: number,
+  expectedConversationSignature: string
 ) {
   if (profile.platform === 'signal') {
     const result = await window.chatTranslator.verifySignalSentMessage({
@@ -4288,20 +4351,30 @@ async function verifySentMessageIntegrity(
   }
   const runtime = getRuntimeScriptExecutor(profile);
   if (!runtime) return;
+  const smsConversation = profile.platform === 'opensms'
+    ? normalizeComposerConversationSignature(expectedConversationSignature)
+    : '';
+  if (profile.platform === 'opensms' && !smsConversation) return;
   const expected = canonicalRenderedSendIntegrityText(expectedText);
   let sawNewOutgoing = false;
   let lastNewOutgoing: MessageCandidate[] = [];
   for (const delay of [250, 500, 750, 1500]) {
     await new Promise((resolve) => window.setTimeout(resolve, delay));
-    const candidates = await runtime.execute<MessageCandidate[]>(buildMessageScanScript(appForPlatform(profile.platform), {
-      limit: 60,
-      viewportScreensAbove: 1,
-      viewportScreensBelow: 1,
-      includeAlreadyTranslated: true
-    })).catch(() => []);
+    const options = { limit: 60, viewportScreensAbove: 1, viewportScreensBelow: 1, includeAlreadyTranslated: true };
+    let candidates: MessageCandidate[];
+    if (profile.platform === 'opensms') {
+      const snapshot = await runtime.execute<{ sameConversation: boolean; conversationSignature: string; candidates: MessageCandidate[] }>(
+        buildOpenSmsScript({ action: 'sent-integrity-scan', expectedConversationSignature: smsConversation, options })
+      ).catch(() => null);
+      if (!snapshot?.sameConversation || snapshot.conversationSignature !== smsConversation) return;
+      candidates = snapshot.candidates;
+    } else {
+      candidates = await runtime.execute<MessageCandidate[]>(buildMessageScanScript(appForPlatform(profile.platform), options)).catch(() => []);
+    }
     const newOutgoing = (candidates || []).filter((candidate) =>
       candidate.direction === 'outgoing' &&
       candidate.messagePart !== 'quote' &&
+      (profile.platform !== 'opensms' || candidate.contactId === smsConversation) &&
       !previousKeys.has(candidate.key)
     );
     if (!newOutgoing.length) continue;
@@ -4310,6 +4383,10 @@ async function verifySentMessageIntegrity(
     if (hasMatchingRenderedSendIntegrityText(expected, newOutgoing.map(candidate => candidate.text))) return;
   }
   if (!sawNewOutgoing) return;
+  if (profile.platform === 'opensms') {
+    const current = await runtime.execute<{ id?: string }>(buildOpenSmsScript({ action: 'contact' })).catch(() => null);
+    if (current?.id !== smsConversation) return;
+  }
   void window.chatTranslator?.appendSignalDebugLog?.({
     type: 'send-integrity-mismatch',
     profileId: profile.id,
@@ -4630,7 +4707,7 @@ async function probeWebComposer(profileId: string) {
     }>(buildWebComposerProbeScript());
     const preloadGuard = webviewPreloadGuardStatus.get(profileId);
     const preloadGuardLoaded = Boolean(
-      preloadGuard?.version === '2026-07-24-webview-preload-chinese-send-v1' &&
+      preloadGuard?.version === '2026-11-05-web-telegram-space-input-v6' &&
       Date.now() - preloadGuard.lastSeenAt <= 12_000
     );
     const status = [
@@ -6586,7 +6663,7 @@ ${peekThemeCss}
     requestAnimationFrame(refocus);
     for (const delay of [30, 90, 180]) window.setTimeout(refocus, delay);
   };
-  const telegramPageGuardVersion = '2026-10-11-telegram-stable-conversation-v60';
+  const telegramPageGuardVersion = '2026-11-05-telegram-input-settings-v61';
   const findNativeComposer = () => {
     const mediaCaptionComposer = findVisibleTelegramMediaCaptionComposer();
     if (mediaCaptionComposer) return mediaCaptionComposer;
@@ -7105,6 +7182,15 @@ ${peekThemeCss}
         return signature || window.__dfConversationSignature || '';
       };
       const liveText = getComposerText(target);
+      if (/[\\u3400-\\u9fff]/.test(liveText)) {
+        let trigger = document.documentElement.dataset.dfInputTrigger;
+        try { trigger ||= localStorage.getItem('df-input-trigger-v1'); } catch {}
+        if (trigger === 'space' && (telegramComposerMode || location.hostname === 'web.whatsapp.com' || signalSourceComposer)) {
+          stopSendEvent(event);
+          status.textContent = '请连续按两次空格翻译，英文填回后按回车发送';
+          return true;
+        }
+      }
       const sensitiveToken = target?.dataset?.dfSensitiveSendToken || '';
       if (sensitiveToken) {
         stopSendEvent(event);
@@ -7556,7 +7642,7 @@ ${peekThemeCss}
       ? telegramPageGuardVersion
       : composer.closest('.CompositionArea, .module-composition-area')
         ? '2026-11-02-signal-native-click-v57'
-        : '2026-10-01-web-page-sensitive-input-v56';
+        : '2026-11-05-web-input-settings-v58';
     if (composer.dataset.dfNativeGuard !== nativeGuardVersion) {
       if (composer.__dfNativeInputHandler) composer.removeEventListener('input', composer.__dfNativeInputHandler, true);
       if (composer.__dfNativeKeydownHandler) composer.removeEventListener('keydown', composer.__dfNativeKeydownHandler, true);
@@ -8039,7 +8125,7 @@ function buildEnterTranslateScript() {
 ${buildComposerPlainTextReaderSource()}
 ${buildDirectSendHttpUrlSource()}
   ${buildSignalEmojiPickerScript()};
-  const installVersion = '2026-10-15-signal-emoji-scope-v22';
+  const installVersion = '2026-11-06-signal-native-submit-recovery-v25';
   if (window.__dfEnterTranslateInstalled === installVersion) return true;
   window.__dfEnterTranslateInstalled = installVersion;
   const listenerIsCurrent = () => window.__dfEnterTranslateInstalled === installVersion;
@@ -8391,9 +8477,18 @@ ${buildDirectSendHttpUrlSource()}
     window.__dfTranslatorQueue = Array.isArray(window.__dfTranslatorQueue) ? window.__dfTranslatorQueue : [];
     window.__dfTranslatorQueue.push({ action: 'debug', text: textKey, at: Date.now() });
   };
-  const blockAndTranslate = (event, composer, text = getText(composer).trim()) => {
+  const readInputTrigger = () => {
+    let trigger = document.documentElement.dataset.dfInputTrigger;
+    try { trigger ||= localStorage.getItem('df-input-trigger-v1'); } catch {}
+    return trigger === 'enter' || trigger === 'space' ? trigger : 'both';
+  };
+  const blockAndTranslate = (event, composer, text = getText(composer).trim(), trigger = 'enter') => {
     if (isDirectSendHttpUrl(text)) return false;
     const chineseDraft = hasChinese(text);
+    if (chineseDraft && readInputTrigger() !== 'both' && readInputTrigger() !== trigger) {
+      stopSendEvent(event);
+      return true;
+    }
     const reviewEnabled = readComposerReviewEnabled();
     if (!chineseDraft && (!reviewEnabled || !hasEnglish(text))) return false;
     event.preventDefault();
@@ -8413,6 +8508,54 @@ ${buildDirectSendHttpUrlSource()}
       window.setTimeout(() => { window.__dfTranslatorNativeWrite = false; }, 120);
     }
     return true;
+  };
+  const spaceRuns = new WeakMap();
+  const activeCompositions = new WeakSet();
+  const inputSettingsChanged = () => {
+    if (!listenerIsCurrent()) return;
+    const composer = findComposer();
+    if (composer) spaceRuns.delete(composer);
+  };
+  const nativeChineseSubmitHandler = (event) => {
+    if (!listenerIsCurrent() || isProgrammaticSend() || typeof event.detail !== 'string' || event.detail.length > 24000) return;
+    let request;
+    try { request = JSON.parse(event.detail); } catch { return; }
+    if (!request || typeof request.conversationId !== 'string' || typeof request.text !== 'string' || !hasChinese(request.text)) return;
+    const signature = readSignalConversationSignature();
+    if (!signature || signature !== 'signal:' + request.conversationId.toLowerCase()) return;
+    const composer = findComposer();
+    if (!composer || getText(composer).trim() !== request.text.trim()) return;
+    if (composer.closest('.CompositionArea')?.getAttribute('data-df-signal-conversation-id')?.toLowerCase() !== request.conversationId.toLowerCase()) return;
+    blockAndTranslate(event, composer, request.text, 'enter');
+  };
+  const resetTranslationSpace = (event) => {
+    if (!listenerIsCurrent()) return;
+    const composer = composerForEvent(event);
+    if (!composer) return;
+    if (event.type === 'compositionstart') activeCompositions.add(composer);
+    if (event.type === 'compositionend' || event.type === 'focusout') activeCompositions.delete(composer);
+    if (event.type !== 'input' || event.inputType !== 'insertText' || event.data !== ' ') spaceRuns.delete(composer);
+  };
+  const translationSpaceHandler = (event) => {
+    if (!listenerIsCurrent() || !event.isTrusted || isProgrammaticSend()) return;
+    if (event?.target?.closest?.('.df-composer-review')) return;
+    const composer = composerForEvent(event);
+    if (!composer) return;
+    if (readInputTrigger() === 'enter') { spaceRuns.delete(composer); return; }
+    const space = event.key === ' ' || event.code === 'Space';
+    if (!space || event.isComposing || event.keyCode === 229 || activeCompositions.has(composer) ||
+        event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) {
+      spaceRuns.delete(composer);
+      return;
+    }
+    if (event.repeat) return;
+    if (!hasChinese(getText(composer))) {
+      spaceRuns.delete(composer);
+      return;
+    }
+    const count = (spaceRuns.get(composer) || 0) + 1;
+    spaceRuns.set(composer, count);
+    if (count >= 2) blockAndTranslate(event, composer, getText(composer).trim(), 'space');
   };
   const handler = (event) => {
     if (!listenerIsCurrent()) return;
@@ -8597,6 +8740,14 @@ ${buildDirectSendHttpUrlSource()}
       target.removeEventListener('pointerdown', previous.sendPointerHandler, true);
       target.removeEventListener('click', previous.sendPointerHandler, true);
       target.removeEventListener('input', previous.rememberComposerText, true);
+      if (previous.translationSpaceHandler) target.removeEventListener('keydown', previous.translationSpaceHandler, true);
+      if (previous.inputSettingsChanged) target.removeEventListener('df-input-settings-changed', previous.inputSettingsChanged);
+      if (previous.nativeChineseSubmitHandler) target.removeEventListener('df-signal-chinese-submit-blocked', previous.nativeChineseSubmitHandler, true);
+      if (previous.resetTranslationSpace) {
+        for (const name of ['input', 'compositionstart', 'compositionend', 'focusout', 'pointerdown']) {
+          target.removeEventListener(name, previous.resetTranslationSpace, true);
+        }
+      }
     }
     target.__dfSignalEnterListenersVersion = installVersion;
     target.__dfSignalEnterListeners = {
@@ -8604,7 +8755,11 @@ ${buildDirectSendHttpUrlSource()}
       blockOnlyHandler,
       beforeInputHandler,
       sendPointerHandler,
-      rememberComposerText
+      rememberComposerText,
+      inputSettingsChanged,
+      nativeChineseSubmitHandler,
+      translationSpaceHandler,
+      resetTranslationSpace
     };
     target.addEventListener('keydown', handler, true);
     target.addEventListener('keyup', blockOnlyHandler, true);
@@ -8613,6 +8768,14 @@ ${buildDirectSendHttpUrlSource()}
     target.addEventListener('pointerdown', sendPointerHandler, true);
     target.addEventListener('click', sendPointerHandler, true);
     target.addEventListener('input', rememberComposerText, true);
+    if (target === window) {
+      target.addEventListener('df-signal-chinese-submit-blocked', nativeChineseSubmitHandler, true);
+      target.addEventListener('df-input-settings-changed', inputSettingsChanged);
+      target.addEventListener('keydown', translationSpaceHandler, true);
+      for (const name of ['input', 'compositionstart', 'compositionend', 'focusout', 'pointerdown']) {
+        target.addEventListener(name, resetTranslationSpace, true);
+      }
+    }
   };
   addListeners(window);
   addListeners(document);
@@ -9430,6 +9593,7 @@ function startComposerInstallLoop(profileId: string) {
     if (!runtime) return;
     try {
       await runtime.execute(buildInjectedComposerScript('install'));
+      await applyInputSettings(profile);
       await installAssistantMaterialRuntime(profile);
       if (profile.platform === 'signal') await runtime.execute(buildEnterTranslateScript());
       if (!composerStatus.value[profileId]) setComposerStatus(profileId, '中文输入保护检测中');
@@ -9575,7 +9739,7 @@ function handleWebviewIpcMessage(event: Event, profile: ChatProfile) {
     const platform = String(details.platform || '').slice(0, 20);
     const expectedPlatform = appForPlatform(profile.platform);
     if (
-      version !== '2026-07-24-webview-preload-chinese-send-v1' ||
+      version !== '2026-11-05-web-telegram-space-input-v6' ||
       (platform !== 'whatsapp' && platform !== 'telegram') ||
       platform !== expectedPlatform
     ) return;
@@ -12871,6 +13035,14 @@ onUnmounted(() => {
         <span>皮卡丘翻译器 V{{ clientVersion }}</span>
       </div>
       <nav>
+        <button type="button" class="input-settings-button" aria-label="输入设置" title="输入设置" :aria-expanded="inputSettingsOpen"
+          @click="inputSettingsOpen = true; inputSettingsMessage = ''">
+          <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M17 25H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h22a2 2 0 0 1 2 2v6M7 12h1m4 0h1m4 0h1m4 0h1M7 17h1m4 0h1m4 0h1M9 21h6"/>
+            <circle cx="24" cy="23" r="3"/>
+            <path d="m22 17-.4 1.5-1.4.8-1.5-.4-1 1.8 1.1 1.1v1.6l-1.1 1.1 1 1.8 1.5-.4 1.4.8.4 1.5h2l.4-1.5 1.4-.8 1.5.4 1-1.8-1.1-1.1v-1.6l1.1-1.1-1-1.8-1.5.4-1.4-.8L24 17Z" transform="translate(1 0)"/>
+          </svg>
+        </button>
         <button
           type="button"
           class="eye-care-translation-button"
@@ -13179,6 +13351,32 @@ onUnmounted(() => {
           :disabled="sensitiveDialogBusy"
           @click="respondSensitiveDialog(index)"
         >{{ label }}</button>
+      </div>
+    </section>
+  </div>
+
+  <div v-if="inputSettingsOpen && signedIn && !lockScreenVisible" class="modal-mask input-settings-mask" :class="themeClass"
+    @click.self="!inputSettingsBusy && (inputSettingsOpen = false)" @keydown.esc.stop="!inputSettingsBusy && (inputSettingsOpen = false)" @keydown.tab="trapInputSettingsFocus">
+    <section class="modal-card input-settings-card" role="dialog" aria-modal="true" aria-labelledby="input-settings-title" aria-describedby="input-settings-description">
+      <header class="input-settings-heading">
+        <h3 id="input-settings-title">输入设置</h3>
+        <button type="button" aria-label="关闭输入设置" :disabled="inputSettingsBusy" @click="inputSettingsOpen = false">×</button>
+      </header>
+      <p id="input-settings-description">分别选择输入框中译英的触发方式，点击保存后生效。</p>
+      <label v-for="platform in inputPlatforms" :key="platform.key" class="input-settings-row">
+        <span>{{ platform.label }}</span>
+        <select v-model="inputSettingsDraft[platform.key]" :disabled="inputSettingsBusy">
+          <option value="enter">回车翻译</option>
+          <option value="space">连续两次及以上空格翻译</option>
+          <option value="both">回车或连续两次及以上空格翻译</option>
+        </select>
+      </label>
+      <p class="input-settings-space-tip"><small>提示：电脑配置较旧、经常卡顿时，建议选择空格翻译，先确认英文译文再按回车发送，更保险。</small></p>
+      <p class="input-settings-note">翻译完成后，按回车发送英文。仅选空格翻译时，中文回车会被拦截。输入法选词和单次空格不触发翻译。</p>
+      <p v-if="inputSettingsMessage" role="status" :class="{ 'modal-error': inputSettingsError }">{{ inputSettingsMessage }}</p>
+      <div class="modal-actions">
+        <button type="button" :disabled="inputSettingsBusy" @click="saveInputSettings">{{ inputSettingsBusy ? '保存中…' : '保存' }}</button>
+        <button type="button" :disabled="inputSettingsBusy" @click="inputSettingsOpen = false">关闭</button>
       </div>
     </section>
   </div>

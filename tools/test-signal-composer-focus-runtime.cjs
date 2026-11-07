@@ -13,11 +13,11 @@ if(!process.versions.electron){
   const shared=await import(pathToFileURL(path.join(root,'dist-electron/shared.js')).href);
   const source=baseline?spawnSync('git',['show','HEAD:src/App.vue'],{cwd:root,encoding:'utf8',windowsHide:true}).stdout:fs.readFileSync(path.join(root,'src/App.vue'),'utf8');
   const ast=ts.createSourceFile('App.ts',source.slice(source.indexOf('>')+1,source.indexOf('</script>')),ts.ScriptTarget.Latest,true);
-  const names=['buildComposerPlainTextReaderSource','buildMediaCaptionComposerSource','isMediaCaptionComposerFromDom','buildDirectSendHttpUrlSource','buildInjectedComposerScript','buildEnterTranslateScript'];
+  const names=['buildComposerPlainTextReaderSource','buildMediaCaptionComposerSource','isMediaCaptionComposerFromDom','buildDirectSendHttpUrlSource','buildComposerScript','buildInjectedComposerScript','buildEnterTranslateScript'];
   const declarations=names.map(name=>{const node=ast.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text===name);assert.ok(node,name);return node.getText(ast);}).join('\n');
   const factory=ts.transpileModule(declarations,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
   const recovery=new Function('exports',ts.transpileModule(fs.readFileSync(path.join(root,'src/signal-emoji-picker-runtime.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText+';return exports;')({});
-  const helpers=new Function('activeTheme','readComposerPlainTextFromDom','isDirectSendHttpUrl','readTelegramConversationIdFromDom','buildSignalEmojiPickerScript',factory+';return {buildInjectedComposerScript,buildEnterTranslateScript};')({value:'blackGold'},shared.readComposerPlainTextFromDom,shared.isDirectSendHttpUrl,shared.readTelegramConversationIdFromDom,recovery.buildSignalEmojiPickerScript);
+  const helpers=new Function('activeTheme','readComposerPlainTextFromDom','isDirectSendHttpUrl','readTelegramConversationIdFromDom','buildSignalEmojiPickerScript',factory+';return {buildComposerScript,buildInjectedComposerScript,buildEnterTranslateScript};')({value:'blackGold'},shared.readComposerPlainTextFromDom,shared.isDirectSendHttpUrl,shared.readTelegramConversationIdFromDom,recovery.buildSignalEmojiPickerScript);
   const build=helpers.buildInjectedComposerScript;
   const win=new BrowserWindow({show:false,width:1000,height:800,webPreferences:{sandbox:true,contextIsolation:true,backgroundThrottling:false}});
   const execute=code=>win.webContents.executeJavaScript(code,true);
@@ -56,6 +56,12 @@ if(!process.versions.electron){
    assert.equal(await execute('editor.textContent.includes("PASTE_ONE")'),true,'native editor DOM displays the paste immediately');
    await execute(`quill.setSelection(quill.getLength()-1,0);true;`);await paste('PASTE_TWO');
    assert.equal(await execute('editor.textContent.match(/PASTE_TWO/g)?.length'),1,'paste is handled once');
+   await execute("quill.setText('测试中文原草稿');quill.setSelection(0,0);true;");
+   const translatedWrite=await execute(helpers.buildComposerScript('write','Translated English draft',true));
+   const translatedState=await execute("({model:quill.getText().trim(),dom:editor.textContent.trim()})");
+   console.log('Signal native Quill translated write:',JSON.stringify({result:translatedWrite,...translatedState}));
+   assert.equal(translatedWrite.ok,true);
+   assert.equal(translatedState.model,'Translated English draft','native Quill model must contain translated English before ready');
    console.log('native Signal Quill/clipboard check: both editor model and DOM update without switching contacts; delayed rendering was not reproduced in this isolated case.');
   }
   await fixture('please send the address');let result=await gesture('.ql-editor p');
@@ -83,6 +89,59 @@ if(!process.versions.electron){
   await fixture('US A');const enter=await execute(`(()=>{window.__dfComposerReviewEnabled=true;window.__dfTranslatorQueue=[];const event=new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true});editor.dispatchEvent(event);return {blocked:event.defaultPrevented,actions:window.__dfTranslatorQueue.map(item=>item.action)};})()`);
   assert.equal(enter.blocked,true);assert.ok(enter.actions.includes('translate'),'US A Enter keeps the ordinary English backtranslation review, independently of manual mouse clicks');
   console.log('US A/USA: direct input clicks and edges allowed; English Enter review still works.');
+  const space=async()=>{
+   win.webContents.sendInputEvent({type:'keyDown',keyCode:'Space'});
+   win.webContents.sendInputEvent({type:'char',keyCode:' '});
+   win.webContents.sendInputEvent({type:'keyUp',keyCode:'Space'});
+   await new Promise(resolve=>setTimeout(resolve,30));
+  };
+  await fixture('保留回车翻译');await execute('window.__dfTranslatorQueue=[];true;');
+  win.webContents.sendInputEvent({type:'keyDown',keyCode:'Enter'});win.webContents.sendInputEvent({type:'keyUp',keyCode:'Enter'});
+  await new Promise(resolve=>setTimeout(resolve,30));
+  assert.equal(await execute("__dfTranslatorQueue.filter(e=>e.action==='translate'&&e.text==='保留回车翻译').length"),1,'Signal Chinese Enter must still translate exactly once');
+  assert.equal(await execute("__dfTranslatorQueue.filter(e=>e.action==='send').length"),0,'Signal Chinese Enter must never queue a send');
+  console.log('Signal original Chinese Enter translation preserved');
+  await fixture('双空格中文');await execute('window.__dfTranslatorQueue=[];true;');
+  await space();assert.equal(await execute("__dfTranslatorQueue.filter(e=>e.action==='translate').length"),0,'one physical space must not translate');
+  await space();await space();assert.equal(await execute("__dfTranslatorQueue.filter(e=>e.action==='translate').length"),1,'two or more physical spaces translate once despite listeners on three ancestors');
+  await fixture('重新安装测试');await execute(helpers.buildEnterTranslateScript());await execute('window.__dfTranslatorQueue=[];true;');
+  await space();await space();assert.equal(await execute("__dfTranslatorQueue.filter(e=>e.action==='translate').length"),1,'reinjection must not duplicate space listeners');
+  await fixture('Hello');await execute('window.__dfTranslatorQueue=[];true;');
+  await space();await space();assert.equal(await execute("__dfTranslatorQueue.filter(e=>e.action==='translate').length"),0,'English spaces remain ordinary editing');
+  await fixture('输入法中文');await execute("window.__dfTranslatorQueue=[];editor.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true}));true;");
+  await space();await space();assert.equal(await execute("__dfTranslatorQueue.filter(e=>e.action==='translate').length"),0,'IME candidate spaces must not translate');
+  await execute("editor.dispatchEvent(new CompositionEvent('compositionend',{bubbles:true}));true;");
+  await space();assert.equal(await execute("__dfTranslatorQueue.filter(e=>e.action==='translate').length"),0,'IME spaces must not count toward a later double space');
+  await space();assert.equal(await execute("__dfTranslatorQueue.filter(e=>e.action==='translate').length"),1,'two physical spaces after IME commit translate');
+  await fixture('非连续空格');await execute('window.__dfTranslatorQueue=[];true;');await space();
+  win.webContents.sendInputEvent({type:'keyDown',keyCode:'Left'});win.webContents.sendInputEvent({type:'keyUp',keyCode:'Left'});
+  await space();assert.equal(await execute("__dfTranslatorQueue.filter(e=>e.action==='translate').length"),0,'intervening navigation resets the space run');
+  await fixture('Translated English');await execute("window.__dfTranslatorQueue=[];editor.dataset.dfTranslatedReady='Translated English';editor.dataset.dfTranslatorReadyRequestId='space-test';true;");
+  win.webContents.sendInputEvent({type:'keyDown',keyCode:'Enter'});win.webContents.sendInputEvent({type:'keyUp',keyCode:'Enter'});
+  await new Promise(resolve=>setTimeout(resolve,30));
+  assert.equal(await execute("__dfTranslatorQueue.filter(e=>e.action==='send'&&e.text==='Translated English').length"),1,'English result still uses the guarded Enter send flow');
+  console.log('Signal physical double/triple space, English input and reinjection passed');
+  for(const mode of ['enter','space','both']){
+   await fixture('选择模式中文'+mode);await execute('document.documentElement.dataset.dfInputTrigger='+JSON.stringify(mode)+';window.__dfTranslatorQueue=[];true;');
+   win.webContents.sendInputEvent({type:'keyDown',keyCode:'Enter'});win.webContents.sendInputEvent({type:'keyUp',keyCode:'Enter'});
+   await new Promise(resolve=>setTimeout(resolve,30));
+   assert.equal(await execute("__dfTranslatorQueue.filter(e=>e.action==='translate').length"),mode==='space'?0:1,'Signal selected '+mode+' Enter mode');
+   assert.equal(await execute("__dfTranslatorQueue.filter(e=>e.action==='send').length"),0,'Chinese never enters send queue');
+   await fixture('空格模式中文'+mode);await execute('document.documentElement.dataset.dfInputTrigger='+JSON.stringify(mode)+';window.__dfTranslatorQueue=[];true;');
+   await space();await space();await space();
+   assert.equal(await execute("__dfTranslatorQueue.filter(e=>e.action==='translate').length"),mode==='enter'?0:1,'Signal selected '+mode+' space mode');
+  }
+  console.log('Signal all three selectable input modes passed');
+  for(const mode of ['enter','space','both']){
+   await fixture('原生入口中文');
+   const nativeFallback=await execute(`(()=>{document.documentElement.dataset.dfInputTrigger=${JSON.stringify(mode)};window.__dfTranslatorQueue=[];const detail=JSON.stringify({conversationId:'11111111-1111-4111-8111-111111111111',text:'原生入口中文'});document.dispatchEvent(new CustomEvent('df-signal-chinese-submit-blocked',{detail,bubbles:true,cancelable:true}));return {translations:__dfTranslatorQueue.filter(e=>e.action==='translate').length,sends:__dfTranslatorQueue.filter(e=>e.action==='send').length};})()`);
+   assert.equal(nativeFallback.translations,mode==='space'?0:1,'native Chinese submit fallback follows '+mode+' trigger policy');
+   assert.equal(nativeFallback.sends,0,'native fallback only translates and never sends');
+  }
+  await fixture('当前联系人中文');
+  const staleFallback=await execute(`(()=>{window.__dfTranslatorQueue=[];for(const request of [{conversationId:'22222222-2222-4222-8222-222222222222',text:'当前联系人中文'},{conversationId:'11111111-1111-4111-8111-111111111111',text:'其他草稿'}])document.dispatchEvent(new CustomEvent('df-signal-chinese-submit-blocked',{detail:JSON.stringify(request),bubbles:true,cancelable:true}));return __dfTranslatorQueue.filter(e=>e.action==='translate').length;})()`);
+  assert.equal(staleFallback,0,'stale conversation or draft native events cannot queue translation');
+  console.log('Signal native Chinese-submit fallback respects settings, conversation and draft; no auto-send');
   if(process.argv.includes('--with-native-quill'))await checkNativeClipboard();
   win.destroy();console.log('signal-composer-focus-runtime: draft text, edge/padding clicks, synchronous native editor handling, send protection, picker clicks and reinjection passed');
  }).catch(error=>{console.error(error);process.exitCode=1;}).finally(()=>app.exit(process.exitCode||0));

@@ -46,13 +46,63 @@ if (location.protocol === 'https:' && ['www.opensms.cc', 'opensms.cc'].includes(
   } catch { /* Keep login usable when local encryption or storage is unavailable. */ }
 }
 
-const guardVersion = '2026-10-01-webview-preload-phone-and-chinese-send-v3';
+const guardVersion = '2026-11-05-web-telegram-space-input-v6';
 const chinesePattern = /[\u3400-\u9fff]/;
 const pendingTranslations = new WeakMap();
 const compositionTargets = new WeakSet();
 const blockedEnterTargets = new WeakSet();
 const shiftEnterUntil = new WeakMap();
 const blockedPhonePrompts = new WeakMap();
+const spaceRuns = new WeakMap();
+const spaceRunTexts = new WeakMap();
+const activeCompositions = new WeakSet();
+function readInputTrigger() {
+  let trigger = document.documentElement?.dataset.dfInputTrigger;
+  try { trigger ||= localStorage.getItem('df-input-trigger-v1'); } catch {}
+  return trigger === 'enter' || trigger === 'space' ? trigger : 'both';
+}
+
+// Count physical presses, not key-repeat or the space used to select an IME
+// candidate. Keep this listener on window only so one press is counted once.
+function handleTranslationSpace(event) {
+  if (!event.isTrusted || !platformForPage()) return;
+  const composer = resolveComposer(event.target);
+  if (!composer) return;
+  if (readInputTrigger() === 'enter') { spaceRuns.delete(composer); return; }
+  const space = event.key === ' ' || event.code === 'Space';
+  if (!space || event.isComposing || event.keyCode === 229 ||
+      activeCompositions.has(composer) || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) {
+    spaceRuns.delete(composer);
+    return;
+  }
+  if (event.repeat) return;
+  if (!chinesePattern.test(readComposerPlainText(composer))) {
+    spaceRuns.delete(composer);
+    return;
+  }
+  const count = (spaceRuns.get(composer) || 0) + 1;
+  spaceRuns.set(composer, count);
+  if (count === 1) spaceRunTexts.set(composer, readComposerPlainText(composer).replace(/ /g, ''));
+  if (count < 2) return;
+  stopNativeSend(event);
+  queueChineseTranslation(composer, 'chinese-double-space');
+}
+
+function resetTranslationSpace(event) {
+  const composer = resolveComposer(event.target);
+  if (!composer) return;
+  // Telegram's rich editor replaces native input with a plain Event once its
+  // model is committed. That notification has no data/inputType. Preserve a
+  // physical space run only while the non-space draft remains unchanged.
+  if (platformForPage() === 'telegram' && event.type === 'input' && !event.inputType &&
+      spaceRuns.has(composer) &&
+      spaceRunTexts.get(composer) === readComposerPlainText(composer).replace(/ /g, '')) return;
+  if (event.type === 'compositionstart') activeCompositions.add(composer);
+  if (event.type === 'compositionend' || event.type === 'focusout') activeCompositions.delete(composer);
+  if (event.type !== 'input' || event.inputType !== 'insertText' || event.data !== ' ') {
+    spaceRuns.delete(composer);
+  }
+}
 // Fail closed during document startup, before the page-world SMS guard exists.
 // The established WA/TG handlers below remain scoped to their original hosts.
 function guardOpenSmsStartup(event) {
@@ -232,6 +282,9 @@ function createRequestId() {
 
 function queueChineseTranslation(composer, decision) {
   if (!composer?.isConnected) return false;
+  const trigger = decision === 'chinese-double-space' ? 'space' : 'enter';
+  const selected = readInputTrigger();
+  if (selected !== 'both' && selected !== trigger) return false;
   const text = readComposerPlainText(composer);
   const normalizedText = text.replace(/\r\n?/g, '\n').trim();
   if (!normalizedText || !chinesePattern.test(normalizedText)) return false;
@@ -403,6 +456,14 @@ function handlePointerSend(event) {
   composer.focus?.();
 }
 
+window.addEventListener('keydown', handleTranslationSpace, true);
+window.addEventListener('df-input-settings-changed', () => {
+  const composer = resolveComposer(document.activeElement);
+  if (composer) spaceRuns.delete(composer);
+});
+for (const eventName of ['input', 'compositionstart', 'compositionend', 'focusout', 'pointerdown']) {
+  window.addEventListener(eventName, resetTranslationSpace, true);
+}
 for (const target of [window, document]) {
   target.addEventListener('keydown', handleKeydown, true);
   target.addEventListener('keypress', handleKeydown, true);

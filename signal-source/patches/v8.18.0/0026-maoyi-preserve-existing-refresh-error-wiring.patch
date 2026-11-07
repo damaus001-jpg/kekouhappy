@@ -1,0 +1,66 @@
+diff --git a/ts/components/conversation/Message.dom.tsx b/ts/components/conversation/Message.dom.tsx
+index aa80bf9..ccd6f1b 100644
+--- a/ts/components/conversation/Message.dom.tsx
++++ b/ts/components/conversation/Message.dom.tsx
+@@ -222,6 +222,7 @@ export type PropsData = {
+   conversationId: string;
+   maoyiTranslationText?: string;
+   maoyiTranslationRefreshPending?: boolean;
++  maoyiTranslationRefreshError?: string;
+   maoyiSmartReplySuggestions?: ReadonlyArray<MaoyiSmartReplySuggestion>;
+   maoyiSmartReplyPending?: boolean;
+   displayLimit?: number;
+@@ -2585,6 +2586,7 @@ export class Message extends PureComponent<Props, State> {
+   public renderMaoyiTranslationRefresh(): JSX.Element | null {
+     const {
+       maoyiTranslationRefreshPending,
++      maoyiTranslationRefreshError,
+       i18n,
+       onMaoyiTranslationRefresh,
+     } = this.props;
+@@ -2592,7 +2594,7 @@ export class Message extends PureComponent<Props, State> {
+       return null;
+     }
+ 
+-    const label = i18n('icu:FunPanelGifs__SearchResults__ErrorRetryButton');
++    const label = maoyiTranslationRefreshError || i18n('icu:FunPanelGifs__SearchResults__ErrorRetryButton');
+     return (
+       <button
+         type="button"
+@@ -2609,7 +2611,7 @@ export class Message extends PureComponent<Props, State> {
+           }
+         }}
+       >
+-        {maoyiTranslationRefreshPending ? '...' : '↻'}
++        {maoyiTranslationRefreshPending ? '...' : maoyiTranslationRefreshError ? '重试' : '↻'}
+       </button>
+     );
+   }
+diff --git a/ts/state/smart/TimelineItem.preload.tsx b/ts/state/smart/TimelineItem.preload.tsx
+index 7e069a0..41aab5a 100644
+--- a/ts/state/smart/TimelineItem.preload.tsx
++++ b/ts/state/smart/TimelineItem.preload.tsx
+@@ -56,6 +56,7 @@ import {
+ import {
+   useMaoyiTranslation,
+   useMaoyiTranslationRefreshPending,
++  useMaoyiTranslationRefreshError,
+ } from '../../maoyi/translationRuntime.preload.ts';
+ import {
+   useMaoyiSmartReplies,
+@@ -130,6 +131,7 @@ export const SmartTimelineItem = memo(function SmartTimelineItem(
+   );
+   const maoyiTranslationRefreshPending =
+     useMaoyiTranslationRefreshPending(maoyiMessageProjection);
++  const maoyiTranslationRefreshError = useMaoyiTranslationRefreshError(maoyiMessageProjection);
+   const onMaoyiTranslationRefresh = useCallback(() => {
+     if (maoyiMessageProjection) {
+       void requestMaoyiTranslationRefresh(maoyiMessageProjection);
+@@ -303,6 +305,7 @@ export const SmartTimelineItem = memo(function SmartTimelineItem(
+       id={messageId}
+       maoyiTranslationText={maoyiTranslationText}
+       maoyiTranslationRefreshPending={maoyiTranslationRefreshPending}
++      maoyiTranslationRefreshError={maoyiTranslationRefreshError}
+       onMaoyiTranslationRefresh={
+         maoyiMessageProjection ? onMaoyiTranslationRefresh : undefined
+       }

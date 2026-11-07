@@ -55,7 +55,7 @@ includes(script, 'Ensure-PnpmShim', 'fixed pnpm child-process command shim');
 includes(script, "$SignalVersion = '8.18.0'", 'fixed Signal version');
 includes(
   script,
-  "$SignalPatchSetSha256 = '95332C3BD5805BBEA5B3FEEEA656749364D2A5CB90A0DA76D28BA75929F0399E'",
+  "$SignalPatchSetSha256 = '66FD642BEDA089526EBCBA83AAD4B602A36236A983F6FD7C57D18084A2CD4692'",
   'fixed Signal patch-set hash'
 );
 includes(script, 'Git.Git', 'Git installer');

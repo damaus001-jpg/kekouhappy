@@ -200,7 +200,7 @@ const signalSourceExperimentValue = !app.isPackaged
   : '';
 const supportedSignalSourcePatchSets: Readonly<Record<string, string>> = Object.freeze({
   '8.17.0': 'B692DD94A5CBE9AC7969B0FF0C51B4DA05B2CE82B5F055A6264889251901CD57',
-  '8.18.0': '95332C3BD5805BBEA5B3FEEEA656749364D2A5CB90A0DA76D28BA75929F0399E'
+  '8.18.0': '66FD642BEDA089526EBCBA83AAD4B602A36236A983F6FD7C57D18084A2CD4692'
 });
 const signalSourceOnlyAcceptanceValue =
   process.env.MAOYI_SIGNAL_SOURCE_ONLY_ACCEPTANCE?.trim() || '';
@@ -3879,6 +3879,11 @@ function sanitizeConfig(config: AppConfig): AppConfig {
     lastActiveProfileIds,
     activeTheme: normalizeAppTheme(config.activeTheme),
     eyeCareTranslationEnabled: config.eyeCareTranslationEnabled === true,
+    inputTriggerSettings: {
+      whatsapp: config.inputTriggerSettings?.whatsapp === 'enter' || config.inputTriggerSettings?.whatsapp === 'space' ? config.inputTriggerSettings.whatsapp : 'both',
+      telegram: config.inputTriggerSettings?.telegram === 'enter' || config.inputTriggerSettings?.telegram === 'space' ? config.inputTriggerSettings.telegram : 'both',
+      signal: config.inputTriggerSettings?.signal === 'enter' || config.inputTriggerSettings?.signal === 'space' ? config.inputTriggerSettings.signal : 'both'
+    },
     deepseekModel: normalizeTranslationModel(config.deepseekModel, config.flashDefaultApplied === true),
     flashDefaultApplied: true
   };

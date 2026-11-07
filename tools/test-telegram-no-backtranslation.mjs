@@ -36,7 +36,7 @@ assert.match(pageFlow, /stopSendEvent\(event\);[\s\S]*?queueEvent\(\{ action: 't
 assert.match(pageFlow, /dfTranslatedReady[\s\S]*?queueEvent\(\{ action: 'send', text: translatedReady, requestId, composerKind \}\)/);
 assert.doesNotMatch(sendFlow, /sendTelegramComposerTranslation/);
 assert.match(sendFlow, /authorizeTranslatedSend/);
-assert.match(sendFlow, /sendNativeComposer\(profileId, text\)/);
+assert.match(sendFlow, /sendNativeComposer\(profileId, text, false, expectedSendConversation\)/);
 assert.match(main, /const isWebComposerEnter = request\.reason === 'composer-enter'/);
 assert.match(main, /request\.platform === 'whatsapp'/);
 assert.match(
@@ -44,7 +44,7 @@ assert.match(
   /const approvedText = isWebComposerEnter \|\| isSignalChineseToEnglish[\s\S]*?\? translatedText[\s\S]*?: request\.text;/
 );
 assert.match(app, /if \(telegramComposerMode\) \{[\s\S]*?document\.getElementById\('df-composer-review'\)\?\.remove\(\);/);
-assert.match(app, /const telegramPageGuardVersion = '2026-10-11-telegram-stable-conversation-v60';/);
+assert.match(app, /const telegramPageGuardVersion = '2026-11-05-telegram-input-settings-v61';/);
 assert.match(pageFlow, /window\.__dfTelegramMediaCaptionReady/);
 assert.match(pageFlow, /mediaCaptionReadyMatches/);
 assert.match(pageFlow, /mediaCaptionReady\?\.requestId/);

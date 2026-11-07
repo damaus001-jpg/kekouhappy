@@ -64,8 +64,8 @@ assert.ok(
   (appSource.match(/readComposerPlainText\(/g) || []).length >= 5,
   'composer reads, writes, probes, and Signal injection must share the visual text reader'
 );
-assert.match(appSource, /2026-10-11-telegram-stable-conversation-v60/);
-assert.match(appSource, /2026-10-15-signal-emoji-scope-v22/);
+assert.match(appSource, /2026-11-05-telegram-input-settings-v61/);
+assert.match(appSource, /2026-11-06-signal-native-submit-recovery-v25/);
 assert.ok(
   (appSource.match(/shouldAllowShiftLineBreak\(event,/g) || []).length >= 3,
   'web and Signal beforeinput handlers must allow remembered Shift+Enter line breaks'

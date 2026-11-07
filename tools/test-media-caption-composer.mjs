@@ -38,7 +38,7 @@ assert.match(app, /document\.addEventListener\('beforeinput', window\.__dfNative
 assert.match(app, /const mediaCaptionConfirm = telegramComposerMode[\s\S]*?event\.target\?\.closest\?\.\('\.simple-message-input-confirm'\)/);
 assert.match(app, /if \(mediaCaptionConfirm\) \{[\s\S]*?if \(mediaCaptionComposer && !getComposerText\(mediaCaptionComposer\)\.trim\(\)\) \{[\s\S]*?allowed-empty-media-caption-confirm[\s\S]*?return;[\s\S]*?stopSendEvent\(event\);[\s\S]*?blocked-media-caption-confirm-use-enter/);
 assert.match(app, /if \(window\.__dfTranslatorProgrammaticSend\) return;[\s\S]*?if \(mediaCaptionConfirm\)/);
-assert.match(app, /2026-10-11-telegram-stable-conversation-v60/);
+assert.match(app, /2026-11-05-telegram-input-settings-v61/);
 assert.match(app, /window\.__dfTelegramMediaCaptionReady = \{[\s\S]*?text: payload\.state\.translated[\s\S]*?requestId:/);
 assert.match(app, /if \(!findVisibleTelegramMediaCaptionComposer\(\)\) \{[\s\S]*?delete window\.__dfTelegramMediaCaptionReady;[\s\S]*?delete window\.__dfTelegramMediaCaptionPending;/);
 assert.match(app, /const scheduleTelegramMediaCaptionRefocus = \(expectedText\) => \{[\s\S]*?requestAnimationFrame\(refocus\)[\s\S]*?\[30, 90, 180\]/);

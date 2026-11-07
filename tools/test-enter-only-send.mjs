@@ -15,8 +15,8 @@ const section = (start, end) => {
   return appSource.slice(startAt, endAt);
 };
 
-assert.match(appSource, /2026-10-11-telegram-stable-conversation-v60/);
-assert.match(appSource, /2026-10-15-signal-emoji-scope-v22/);
+assert.match(appSource, /2026-11-05-telegram-input-settings-v61/);
+assert.match(appSource, /2026-11-06-signal-native-submit-recovery-v25/);
 assert.equal(isDirectSendHttpUrl('https://example.com/path?a=1#top'), true);
 assert.equal(isDirectSendHttpUrl('http://example.com'), true);
 assert.equal(isDirectSendHttpUrl('www.example.com/path?a=1'), true);

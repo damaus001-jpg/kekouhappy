@@ -1821,7 +1821,7 @@ select:focus {
 .runtime-side > .runtime-guard-button,
 .runtime-side > .runtime-header-toggle,
 .runtime-side > .app-short {
-  translate: 0 5px;
+  translate: 0 20px;
 }
 
 .runtime-side button span {
@@ -2645,6 +2645,35 @@ select:focus {
 .modal-card label + label {
   margin-top: 16px;
 }
+
+.runtime-header nav .input-settings-button {
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 4px;
+  color: var(--accent-bright);
+}
+.input-settings-button svg { width: 26px; height: 26px; }
+.input-settings-card {
+  width: min(520px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+}
+.input-settings-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 14px; }
+.input-settings-heading h3 { margin: 0; }
+.input-settings-heading button { border: 0; background: transparent; color: var(--muted-strong); font-size: 24px; padding: 2px 8px; }
+.input-settings-card .input-settings-row { grid-template-columns: 88px minmax(0, 1fr); align-items: center; gap: 14px; }
+.input-settings-card .input-settings-row select { width: 100%; min-width: 0; height: 44px; min-height: 44px; border: 1px solid var(--line-strong); border-radius: 7px; padding: 0 10px; color: #000; background: #fff; font-size: 13px; line-height: 1.6; color-scheme: light; box-shadow: none; }
+.input-settings-card .input-settings-row select:focus { color: #000; background: #fff; }
+.input-settings-card .input-settings-row select option { color: #000; background: #fff; font-size: 13px; line-height: 1.6; }
+.input-settings-card .input-settings-space-tip { display: flex; gap: 10px; margin: 18px 0 0; padding: 12px; border: 1px solid rgba(255, 227, 122, 0.45); border-left: 3px solid #ffe37a; border-radius: 8px; color: #ffe37a; background: #3a3017; font-size: 15px; font-weight: 600; line-height: 1.7; }
+.input-settings-space-tip strong { flex-shrink: 0; color: inherit; font-weight: 700; }
+.input-settings-space-tip small { font-size: inherit; }
+.input-settings-card .modal-actions button { color: var(--text); background: var(--panel-muted); border: 1px solid var(--line-strong); }
+.input-settings-row select:focus-visible, .input-settings-card button:focus-visible, .input-settings-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.input-settings-card .input-settings-note { margin: 20px 0 14px; font-size: 13px; line-height: 1.7; }
+@media (max-width: 420px) { .input-settings-card .input-settings-row { grid-template-columns: 1fr; gap: 6px; } }
 
 .opensms-entry-options {
   display: grid;

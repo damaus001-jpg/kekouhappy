@@ -47,6 +47,22 @@ if(!process.versions.electron){
       return text;
     }
     async function send(text,signature){return execute(helpers.buildComposerScript('send',text,true,false,'default','',{platform:'opensms',conversationSignature:signature}));}
+    await fixture();
+    const integrityContact=(await target()).id;
+    const integritySnapshot=await cmd({action:'sent-integrity-scan',expectedConversationSignature:integrityContact,options:{limit:60,includeAlreadyTranslated:true}});
+    assert.equal(integritySnapshot.sameConversation,true);
+    assert.equal(integritySnapshot.conversationSignature,integrityContact);
+    assert.ok(integritySnapshot.candidates.length>0);
+    assert.ok(integritySnapshot.candidates.every(item=>item.contactId===integrityContact));
+    await execute("document.querySelector('.chat-item.active').classList.remove('active');document.querySelector('[data-id=chat-b]').classList.add('active');true;");
+    const otherContactSnapshot=await cmd({action:'sent-integrity-scan',expectedConversationSignature:integrityContact,options:{includeAlreadyTranslated:true}});
+    assert.equal(otherContactSnapshot.sameConversation,false);
+    assert.deepEqual(otherContactSnapshot.candidates,[],'other contact history cannot become the prior send observation');
+    await execute("document.querySelector('.chat-item.active').classList.remove('active');document.querySelector('[data-id=chat-a]').classList.add('active');document.querySelector('.avatar-name').textContent='ACCOUNT_B';true;");
+    const otherAccountSnapshot=await cmd({action:'sent-integrity-scan',expectedConversationSignature:integrityContact,options:{includeAlreadyTranslated:true}});
+    assert.equal(otherAccountSnapshot.sameConversation,false);
+    assert.deepEqual(otherAccountSnapshot.candidates,[],'same contact ID under another account must be rejected');
+    console.log('OpenSMS integrity scans are bound to the original account and contact');
     // Operation counts catch quadratic cache restoration without timing-sensitive thresholds.
     await fixture(300);
     const restored=await execute(`(()=>{
@@ -354,7 +370,7 @@ if(!process.versions.electron){
     assert.equal(config.lastActiveProfileIds.opensms,appleTwo.id,'creating Apple also remembers it for the shared new-contacts entry');
     assert.equal(auth.isAllowedPlatformUrl('apple','http://127.0.0.1:8070/'),true);
     for(const url of ['http://127.0.0.1:8071/','http://localhost:8070/','https://127.0.0.1:8070/','http://127.0.0.1:8070@evil.example/','http://user@127.0.0.1:8070/'])assert.equal(auth.isAllowedPlatformUrl('apple',url),false);
-    assert.ok(source.indexOf('class="app-short sms"')>source.indexOf('class="app-short sg"'));assert.match(source,/:src="opensmsIcon" alt="打新增"/);assert.match(source,/function nextProfileName\(app: RuntimeApp\)[\s\S]*?existingNames\.has\(`打新增 \$\{suffix\}`\)/,'OpenSMS profile names are generated without collisions');assert.match(source,/<button class="add-tab" type="button"[^>]*@click="openCreateProfileDialog">\+/,'OpenSMS exposes the add-profile control');assert.match(source,/<em aria-label="rename"/);assert.match(source,/<i aria-label="close"/);
+    assert.ok(source.indexOf('class="app-short sms"')>source.indexOf('class="app-short sg"'));assert.match(source,/:src="opensmsIcon" alt="打新增"/);assert.match(source,/function nextProfileName\(app: RuntimeApp\)[\s\S]*?existingNames\.has\(`安卓 \$\{suffix\}`\)/,'Android profile names are generated without collisions');assert.match(source,/<button class="add-tab" type="button"[^>]*@click="openCreateProfileDialog">\+/,'OpenSMS exposes the add-profile control');assert.match(source,/<em aria-label="rename"/);assert.match(source,/<i aria-label="close"/);
     // Render the actual application navigation fragment with Vue and the real CSS.
     const navStart=source.indexOf('<button type="button" class="app-short wa"');
     const navEnd=source.lastIndexOf('<button',source.indexOf('class="runtime-customize-button"',navStart));
@@ -368,7 +384,7 @@ if(!process.versions.electron){
     const entryStart=source.lastIndexOf('<div',source.indexOf('class="modal-mask opensms-entry-mask"'));
     const entryEnd=source.indexOf('<AssistantLibraryPanel',entryStart);
     const entry=source.slice(entryStart,entryEnd);
-    const entryFunctionNames=['openAppEntry','openOpenSmsEntry','openCreateProfileDialog','closeOpenSmsEntry','openAndroidWorkspace','openAppleWorkspace','trapOpenSmsEntryFocus','rememberActiveProfile','firstOrderedProfileIdForApp','selectRuntimeApp','selectRuntimeTab','nextProfileName'];
+    const entryFunctionNames=['openAppEntry','openOpenSmsEntry','openCreateProfileDialog','closeOpenSmsEntry','openAndroidWorkspace','openAppleWorkspace','trapOpenSmsEntryFocus','rememberActiveProfile','firstOrderedProfileIdForApp','selectRuntimeApp','selectRuntimeTab','nextProfileName','opensmsProfileDisplayName'];
     const profileListDeclaration=ast.statements.find(n=>ts.isVariableStatement(n)&&n.declarationList.declarations.some(d=>d.name.getText(ast)==='currentAppProfiles')).getText(ast);
     const entryFunctions=ts.transpileModule(entryFunctionNames.map(name=>ast.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text===name).getText(ast)).join('\n')+'\n'+profileListDeclaration,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
     const svg=name=>'data:image/svg+xml;base64,'+fs.readFileSync(path.join(root,'src/assets',name)).toString('base64');

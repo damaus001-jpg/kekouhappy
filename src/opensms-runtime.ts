@@ -3,7 +3,7 @@ import { normalizeAssistantPhone } from '../electron/assistant-material-identity
 export function openSmsRuntime(command: any, normalizePhone: typeof normalizeAssistantPhone) {
   const w = window as any;
   if (!['opensms.cc', 'www.opensms.cc'].includes(location.hostname)) return false;
-  const version = '2026-10-26-opensms-v12';
+  const version = '2026-11-06-opensms-sent-integrity-v13';
   const startupGuardMarker = '2026-10-16-opensms-v1';
   if (w.__dfOpenSms?.version !== version) {
     w.__dfOpenSms?.dispose();
@@ -365,6 +365,13 @@ export function openSmsRuntime(command: any, normalizePhone: typeof normalizeAss
       sync();
       if(cmd.action==='bootstrap'){renderAreaCodeHint();return true;}
       if(cmd.action==='contact')return contact();
+      if(cmd.action==='sent-integrity-scan'){
+        const signature=contact().id;
+        if(!signature||signature!==cmd.expectedConversationSignature)return {sameConversation:false,conversationSignature:signature,candidates:[]};
+        const candidates=state.apply({action:'scan',options:cmd.options});
+        const current=contact().id;
+        return {sameConversation:current===signature,conversationSignature:current,candidates:current===signature?candidates:[]};
+      }
       if(cmd.action==='install'){decorate();return true;}
       if(cmd.action==='enabled'){state.enabled=cmd.enabled;if(!cmd.enabled)reset();return true;}
       if(cmd.action==='text')return read();

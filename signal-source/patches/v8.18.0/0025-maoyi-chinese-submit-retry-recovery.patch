@@ -1,0 +1,44 @@
+diff --git a/ts/components/CompositionInput.dom.tsx b/ts/components/CompositionInput.dom.tsx
+index 0754ebd..d692bcd 100644
+--- a/ts/components/CompositionInput.dom.tsx
++++ b/ts/components/CompositionInput.dom.tsx
+@@ -72,6 +72,7 @@ import { DirectionalBlot } from '../quill/block/blot.dom.tsx';
+ import { getClassNamesFor } from '../util/getClassNamesFor.std.ts';
+ import { isNotNil } from '../util/isNotNil.std.ts';
+ import { createLogger } from '../logging/log.std.ts';
++import { containsMaoyiBlockedChineseText } from '../maoyi/outgoingTextGuard.std.ts';
+ import type { LinkPreviewForUIType } from '../types/message/LinkPreviews.std.ts';
+ import { StagedLinkPreview } from './conversation/StagedLinkPreview.dom.tsx';
+ import type { DraftEditMessageType } from '../model-types.d.ts';
+@@ -383,6 +384,22 @@ export function CompositionInput(props: Props): ReactElement {
+ 
+     const { text, bodyRanges } = getTextAndRanges();
+ 
++    // Reject before setting canSendRef: an async downstream rejection does not
++    // run the normal composer reset and would otherwise block every retry.
++    if (containsMaoyiBlockedChineseText(text)) {
++      log.warn('Maoyi blocked Chinese before submit; composer remains retryable', {
++        textLength: text.length,
++      });
++      document.dispatchEvent(
++        new CustomEvent('df-signal-chinese-submit-blocked', {
++          bubbles: true,
++          cancelable: true,
++          detail: JSON.stringify({ conversationId, text }),
++        })
++      );
++      return;
++    }
++
+     log.info(
+       `Submitting message ${timestamp} with ${bodyRanges.length} ranges`
+     );
+@@ -392,7 +409,7 @@ export function CompositionInput(props: Props): ReactElement {
+     if (!didSend) {
+       canSendRef.current = true;
+     }
+-  }, [onSubmit]);
++  }, [conversationId, onSubmit]);
+ 
+   const hasFocus = useCallback(() => {
+     return quillRef.current?.hasFocus() ?? false;
