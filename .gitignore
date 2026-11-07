@@ -35,3 +35,9 @@ reference-sources/*.zip
 /打新增*统计*.txt
 /打新增账号密码.txt
 /打新增高频首条消息*.txt
+
+# Local diagnostic logs, contact exports and operator screenshots.
+/debuglog.txt
+/debuglog1
+/exports/
+/tmp-android-contacts.png
