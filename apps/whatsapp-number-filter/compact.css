@@ -1,0 +1,14 @@
+[hidden]{display:none!important}body{overflow:hidden}
+aside{display:flex;flex-direction:column;gap:12px;padding:20px;overflow:hidden}aside>*{flex-shrink:0}
+.connection{min-height:16px}
+:root .account-note{display:flex;align-items:flex-start;gap:9px;background:#fff1c8;border:1px solid #e6bc49;border-left:4px solid #dc9400;border-radius:9px;padding:10px;margin:0;box-shadow:0 2px 7px #c69c1a0d}
+.account-note svg{width:22px;height:22px;flex-shrink:0;color:#cd8500;margin-top:1px}.account-note p{margin:0;color:#704700;font-size:12px;font-weight:700;line-height:1.65;overflow-wrap:anywhere}
+.import-card{padding:10px;border-radius:10px}.file-icon{width:30px;height:34px;flex-shrink:0}.file-details p{margin-top:4px}.note{font-size:10px;line-height:1.5;margin:0}
+button{padding:9px 12px}.actions{gap:8px;margin:0}.progress-section{margin:0}.progress-label{line-height:16px}progress{display:block;height:5px;margin:9px 0 7px}
+.stats{grid-template-columns:repeat(4,minmax(0,1fr));gap:7px}.stats>div{padding:10px 8px;border-radius:9px;min-width:0}.stats span{white-space:nowrap;font-size:10px;line-height:14px}.stats strong{font-size:23px;line-height:27px;margin-top:4px;letter-spacing:-.7px}
+.ratio{margin:0;line-height:26px}.ratio strong{font-size:21px}
+.status-area{margin-top:auto;min-height:32px}.message{font-size:11px;line-height:1.7;min-height:0;overflow-wrap:anywhere}.error{margin:0;padding:7px 9px;font-size:11px;line-height:1.6;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}
+.export-actions{flex-direction:row;align-items:center;gap:10px;margin:0}.export-actions .primary{flex:1;min-width:0;width:auto}.export-actions .text-button{flex-shrink:0}.footer-note{font-size:10px;line-height:1.5;margin:0}
+@media(max-height:760px){aside{gap:8px;padding:14px 18px}:root .account-note{padding:7px 9px}.account-note p{font-size:11px;line-height:1.6}.account-note svg{width:19px;height:19px}.stats>div{padding:8px}.stats strong{font-size:21px;line-height:25px}.status-area{min-height:28px}}
+@media(max-height:640px){aside{gap:4px;padding:8px 14px}:root .account-note{gap:7px;padding:6px 8px}.account-note p{font-size:11px;line-height:1.5}.account-note svg{width:18px;height:18px}.import-card{padding:7px 9px}.file-icon{height:30px}.file-details p{font-size:10px;margin-top:3px}.note{line-height:14px}button{padding:7px 11px}.progress-label{font-size:11px;line-height:14px}progress{height:4px;margin:5px 0}.progress-section .note{display:none}.stats>div{padding:6px 7px}.stats span{font-size:9px;line-height:12px}.stats strong{font-size:20px;line-height:23px;margin-top:3px}.ratio{font-size:11px;line-height:24px}.ratio strong{font-size:19px}.status-area{margin-top:auto;min-height:25px}.message{font-size:10px;line-height:1.5}.error{font-size:10px;padding:5px 7px;line-height:1.5}.footer-note{display:none}}
+@media(max-width:1080px){header{padding:0 18px}.header-note{display:none}}

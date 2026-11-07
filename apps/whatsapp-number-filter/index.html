@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"><title>Whatsapp号码筛选</title><link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="compact.css"></head>
+<body>
+<header><div class="brand-mark">W<span>✓</span></div><strong>Whatsapp号码筛选</strong><span class="version">0.0.1</span><span class="header-note">TXT 导入 · 快速筛选 · TXT 导出</span></header>
+<main><section class="browser-placeholder"><p>正在加载 WhatsApp…</p></section><aside>
+<div class="connection"><span id="status-dot" class="dot"></span><span id="connection">等待扫码登录</span><button id="refresh" class="text-button">刷新页面</button></div>
+<div class="account-note"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2.5 20h19L12 3Z" fill="currentColor"/><path d="M12 8v6m0 3v.2" fill="none" stroke="white" stroke-width="2" stroke-linecap="round"/></svg><p>请勿使用正在用的业务Whatsapp，请单独注册一个专门用于筛选，防止封号导致客户丢失。</p></div>
+<section class="import-card"><div class="file-icon">TXT</div><div class="file-details"><strong id="file-name">尚未导入号码文件</strong><p id="file-details">每行一个号码，包含国家区号</p></div><button id="import" class="secondary">导入 TXT</button></section>
+<p id="import-note" class="note">支持 +14155552671 或 14155552671 格式，自动去重。</p>
+<div class="actions"><button id="start" class="primary" disabled>开始筛选</button><button id="stop" class="secondary" disabled>停止</button></div>
+<section class="progress-section"><div class="progress-label"><strong id="progress-title">等待开始</strong><span id="progress-numbers">0 / 0</span></div><progress id="progress" max="1" value="0"></progress><p id="timing" class="note">登录资料独立保存在本机，下次打开可继续使用。</p></section>
+<section class="stats"><div><span>有效号码总数</span><strong id="total">0</strong></div><div class="green"><span>已注册</span><strong id="registered">0</strong></div><div><span>未注册</span><strong id="not-registered">0</strong></div><div><span>未确认</span><strong id="unknown">0</strong></div></section>
+<div class="ratio"><span>已注册占比</span><strong id="ratio">—</strong></div>
+<section class="status-area"><div id="message" class="message" role="status">请先扫码登录 WhatsApp。</div><div id="error" class="error" role="alert" hidden></div></section>
+<div class="export-actions"><button id="export" class="primary" disabled>导出 TXT 结果</button><button id="show-export" class="text-button" hidden>打开结果文件夹</button></div>
+<p class="footer-note">导出 4 份 TXT：已注册、未注册、未确认及统计。</p>
+</aside></main><script src="renderer.js"></script></body></html>

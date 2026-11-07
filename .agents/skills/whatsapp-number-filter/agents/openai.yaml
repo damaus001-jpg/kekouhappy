@@ -1,0 +1,4 @@
+interface:
+  display_name: "Whatsapp号码筛选"
+  short_description: "展开会话号码气泡，快速统计 WhatsApp 注册数量、占比并导出明细"
+  default_prompt: "使用 $whatsapp-number-filter 筛选当前开发版 WhatsApp 指定气泡中的号码，统计已注册数量和占比。"

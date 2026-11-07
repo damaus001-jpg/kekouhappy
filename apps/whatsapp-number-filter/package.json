@@ -1,0 +1,9 @@
+{
+  "name": "whatsapp-number-filter",
+  "productName": "Whatsapp号码筛选",
+  "version": "0.0.1",
+  "description": "导入 TXT，筛选 WhatsApp 已注册号码并导出 TXT 结果",
+  "author": "Pikachu Tools",
+  "main": "main.cjs",
+  "private": true
+}
