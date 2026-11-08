@@ -125,8 +125,10 @@ app.whenReady().then(async()=>{
     assert.equal(await execute('window.finalSendCount'),0,'material confirmation never clicks send or replays Enter');
     results.push({platform,switchTarget:true,editedText:true,rename:true,cancel:true,ordinaryPaste:true,imagePreview:true,imageFailure:true,imageAccepted:true});win.destroy();
   }
-  const stored=await fs.readFile(path.join(directory,'assistant-library','usage.enc'));
-  assert.ok(!stored.includes(Buffer.from('Edited material')));
+  for (const platform of ['whatsapp','telegram','signal']) {
+    const stored=await fs.readFile(path.join(directory,'assistant-library',`usage-${platform}.enc`));
+    assert.ok(!stored.includes(Buffer.from('Edited material')));
+  }
   assert.equal((await store.readAssistantUsage('*')).length,6);
   await store.removeAssistantUsageForProfile('fixture-whatsapp');
   assert.equal((await store.readAssistantUsage('fixture-whatsapp')).length,0,'profile removal clears its persisted material-use history');

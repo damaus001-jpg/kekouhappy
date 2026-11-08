@@ -46,7 +46,7 @@ if (location.protocol === 'https:' && ['www.opensms.cc', 'opensms.cc'].includes(
   } catch { /* Keep login usable when local encryption or storage is unavailable. */ }
 }
 
-const guardVersion = '2026-11-05-web-telegram-space-input-v6';
+const guardVersion = '2026-11-08-telegram-space-recovery-v8';
 const chinesePattern = /[\u3400-\u9fff]/;
 const pendingTranslations = new WeakMap();
 const compositionTargets = new WeakSet();
@@ -55,20 +55,34 @@ const shiftEnterUntil = new WeakMap();
 const blockedPhonePrompts = new WeakMap();
 const spaceRuns = new WeakMap();
 const spaceRunTexts = new WeakMap();
+const spaceRunConversations = new WeakMap();
 const activeCompositions = new WeakSet();
-function readInputTrigger() {
-  let trigger = document.documentElement?.dataset.dfInputTrigger;
-  try { trigger ||= localStorage.getItem('df-input-trigger-v1'); } catch {}
-  return trigger === 'enter' || trigger === 'space' ? trigger : 'both';
+
+function composerConversation(composer) {
+  if (platformForPage() !== 'telegram') return '';
+  const root = composer.closest?.('.chat, #MiddleColumn, .middle-column');
+  const candidates = [
+    root?.getAttribute('data-peer-id'),
+    root?.querySelector('.chat-info[data-peer-id], .chat-header[data-peer-id], .bubbles[data-peer-id], .bubbles-inner[data-peer-id]')?.getAttribute('data-peer-id'),
+    document.querySelector('.chat.active[data-peer-id], #MiddleColumn[data-peer-id], .chatlist-chat.active[data-peer-id], .chatlist-chat.is-active[data-peer-id]')?.getAttribute('data-peer-id'),
+    location.hash.match(/^#(-?\d+)(?:_|$)/)?.[1]
+  ];
+  const id = candidates.find(value => /^-?\d+$/.test(value || ''));
+  return id ? `telegram:${id}` : '';
 }
 
 // Count physical presses, not key-repeat or the space used to select an IME
 // candidate. Keep this listener on window only so one press is counted once.
 function handleTranslationSpace(event) {
   if (!event.isTrusted || !platformForPage()) return;
-  const composer = resolveComposer(event.target);
+  const composer = resolveComposer(event.target) || resolveComposer(document.activeElement);
   if (!composer) return;
-  if (readInputTrigger() === 'enter') { spaceRuns.delete(composer); return; }
+  const conversation = composerConversation(composer);
+  if (spaceRunConversations.has(composer) && spaceRunConversations.get(composer) !== conversation) {
+    spaceRuns.delete(composer);
+    activeCompositions.delete(composer);
+  }
+  spaceRunConversations.set(composer, conversation);
   const space = event.key === ' ' || event.code === 'Space';
   if (!space || event.isComposing || event.keyCode === 229 ||
       activeCompositions.has(composer) || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) {
@@ -76,29 +90,35 @@ function handleTranslationSpace(event) {
     return;
   }
   if (event.repeat) return;
-  if (!chinesePattern.test(readComposerPlainText(composer))) {
+  const text = readComposerPlainText(composer);
+  if (!chinesePattern.test(text)) {
     spaceRuns.delete(composer);
     return;
   }
-  const count = (spaceRuns.get(composer) || 0) + 1;
+  const nonSpaceText = text.replace(/ /g, '');
+  const count = (spaceRunTexts.get(composer) === nonSpaceText ? spaceRuns.get(composer) || 0 : 0) + 1;
   spaceRuns.set(composer, count);
-  if (count === 1) spaceRunTexts.set(composer, readComposerPlainText(composer).replace(/ /g, ''));
+  spaceRunTexts.set(composer, nonSpaceText);
   if (count < 2) return;
   stopNativeSend(event);
   queueChineseTranslation(composer, 'chinese-double-space');
 }
 
 function resetTranslationSpace(event) {
-  const composer = resolveComposer(event.target);
+  const composer = resolveComposer(event.target) || resolveComposer(document.activeElement);
   if (!composer) return;
-  // Telegram's rich editor replaces native input with a plain Event once its
-  // model is committed. That notification has no data/inputType. Preserve a
-  // physical space run only while the non-space draft remains unchanged.
-  if (platformForPage() === 'telegram' && event.type === 'input' && !event.inputType &&
+  // Rich editors re-emit input after committing their model, with missing data,
+  // non-breaking spaces or replacement notifications. These are not new keys.
+  // Preserve only a physical run for the same draft and conversation.
+  if (platformForPage() === 'telegram' && event.type === 'input' && !event.isComposing &&
+      (!event.inputType || event.inputType === 'insertText' || event.inputType === 'insertReplacementText') &&
+      !activeCompositions.has(composer) &&
       spaceRuns.has(composer) &&
+      spaceRunConversations.get(composer) === composerConversation(composer) &&
       spaceRunTexts.get(composer) === readComposerPlainText(composer).replace(/ /g, '')) return;
   if (event.type === 'compositionstart') activeCompositions.add(composer);
-  if (event.type === 'compositionend' || event.type === 'focusout') activeCompositions.delete(composer);
+  if (event.type === 'compositionend' || event.type === 'focusout' || event.type === 'focusin') activeCompositions.delete(composer);
+  spaceRunConversations.set(composer, composerConversation(composer));
   if (event.type !== 'input' || event.inputType !== 'insertText' || event.data !== ' ') {
     spaceRuns.delete(composer);
   }
@@ -107,7 +127,7 @@ function resetTranslationSpace(event) {
 // The established WA/TG handlers below remain scoped to their original hosts.
 function guardOpenSmsStartup(event) {
   if (location.origin === 'http://127.0.0.1:8070') {
-    if (document.documentElement?.dataset.dfAppleGuard === '2026-11-02-apple-v2') return;
+    if (document.documentElement?.dataset.dfAppleGuard === '2026-11-07-apple-unified-input-v3') return;
     const element = event.target?.nodeType === Node.ELEMENT_NODE ? event.target : event.target?.parentElement;
     if ((event.key === 'Enter' && element?.closest?.('#reply-box #reply-zh')) || element?.closest?.('#reply-box #send-reply')) {
       event.preventDefault(); event.stopImmediatePropagation();
@@ -175,11 +195,11 @@ function resolveComposer(target) {
     return composer;
   }
   const candidate = element.closest?.(
-    '.input-message-input[contenteditable="true"]:not(.input-field-input-fake):not(.input-message-input-fake)'
+    '.input-message-input[contenteditable]:not([contenteditable="false"]):not(.input-field-input-fake):not(.input-message-input-fake)'
   ) || null;
   if (!candidate || isFakeTelegramInput(candidate)) return null;
   if (isTelegramMediaCaption(candidate)) return candidate;
-  return candidate.closest?.('.new-message-wrapper, .chat-input-main')
+  return candidate.closest?.('.new-message-wrapper, .chat-input-main, .chat-input')
     ? candidate
     : null;
 }
@@ -282,22 +302,21 @@ function createRequestId() {
 
 function queueChineseTranslation(composer, decision) {
   if (!composer?.isConnected) return false;
-  const trigger = decision === 'chinese-double-space' ? 'space' : 'enter';
-  const selected = readInputTrigger();
-  if (selected !== 'both' && selected !== trigger) return false;
   const text = readComposerPlainText(composer);
   const normalizedText = text.replace(/\r\n?/g, '\n').trim();
   if (!normalizedText || !chinesePattern.test(normalizedText)) return false;
   const previous = pendingTranslations.get(composer);
+  const conversation = composerConversation(composer);
   if (
     previous?.text === normalizedText &&
+    previous.conversation === conversation &&
     Date.now() - previous.at < 15_000
   ) {
     sendGuardDiagnostic(`${decision}-deduplicated`, composer);
     return true;
   }
   const requestId = createRequestId();
-  pendingTranslations.set(composer, { text: normalizedText, at: Date.now(), requestId });
+  pendingTranslations.set(composer, { text: normalizedText, at: Date.now(), requestId, conversation });
   composer.dataset.dfTranslatorRequestId = requestId;
   composer.dataset.dfTranslationPending = normalizedText;
   composer.dataset.dfTranslationPendingAt = String(Date.now());
@@ -307,6 +326,7 @@ function queueChineseTranslation(composer, decision) {
     action: 'translate',
     text,
     requestId,
+    conversationSignature: conversation,
     composerKind: isTelegramMediaCaption(composer) ? 'telegram-media-caption' : 'default',
     reviewEnabled: false
   });
@@ -315,8 +335,9 @@ function queueChineseTranslation(composer, decision) {
 }
 
 function scheduleCompositionTranslation(composer) {
+  const conversation = composerConversation(composer);
   const attempt = () => {
-    if (!composer?.isConnected) return;
+    if (!composer?.isConnected || composerConversation(composer) !== conversation) return;
     queueChineseTranslation(composer, 'composition-enter');
   };
   queueMicrotask(attempt);
@@ -457,11 +478,7 @@ function handlePointerSend(event) {
 }
 
 window.addEventListener('keydown', handleTranslationSpace, true);
-window.addEventListener('df-input-settings-changed', () => {
-  const composer = resolveComposer(document.activeElement);
-  if (composer) spaceRuns.delete(composer);
-});
-for (const eventName of ['input', 'compositionstart', 'compositionend', 'focusout', 'pointerdown']) {
+for (const eventName of ['input', 'compositionstart', 'compositionend', 'focusin', 'focusout', 'pointerdown']) {
   window.addEventListener(eventName, resetTranslationSpace, true);
 }
 for (const target of [window, document]) {

@@ -10,13 +10,13 @@ const store=new Function('exports','require',compile('electron/assistant-materia
  let staged=await store.stageAssistantMaterial(material);
  await store.recordAssistantUse({profileId:'android-a',platform:'opensms',contactId:'sms:android-a:chat-a',contactTitle:'Android receiver',phone:'+12135551212',token:staged.token,actualText:material.text});
  const appleContact={id:'apple:device-a:chat-a:%2B12135551212',title:'Apple receiver',phone:'+12135551212'};
- let records=await store.readAssistantUsage('apple-a',appleContact);assert.equal(records.length,1);assert.equal(identity.assistantUsageMatchesContact(records[0],'apple',appleContact),true,'Apple detects the existing Android material use for this phone');
+ let records=await store.readAssistantUsage('apple-a',appleContact);assert.equal(records.length,0,'Apple never reads Android history for the same phone');
  staged=await store.stageAssistantMaterial(material);
  const request={profileId:'apple-a',platform:'apple',contactId:appleContact.id,contactTitle:appleContact.title,phone:appleContact.phone,token:staged.token,actualText:'Edited Apple text'};
  const used=await store.recordAssistantUse(request);assert.equal(used.platform,'apple');assert.equal(used.actualText,'Edited Apple text');
  assert.deepEqual(await store.recordAssistantUse(request),used,'replaying a confirmed receipt never records a second use');
- records=await store.readAssistantUsage('*');assert.equal(records.length,1,'the same phone/material is shared across Android and Apple');
- assert.equal(identity.assistantUsageMatchesContact(records[0],'opensms',{id:'sms:another:chat-z',title:'Renamed',phone:appleContact.phone}),true);
+ records=await store.readAssistantUsage('*');assert.equal(records.length,2,'Android and Apple keep independent uses for the same phone/material');
+ assert.equal(identity.assistantUsageMatchesContact(used,'opensms',{id:'sms:another:chat-z',title:'Renamed',phone:appleContact.phone}),false,'Apple history never marks an Android material as used');
  assert.equal(identity.assistantUsageMatchesContact(records[0],'apple',{...appleContact,phone:'+12135551213'}),false);
  assert.equal(identity.assistantUsageMatchesContact(records[0],'whatsapp',{id:used.contactId,title:'Same display name',phone:appleContact.phone}),false);
  await assert.rejects(store.recordAssistantUse({...request,contactId:'apple:device-b:chat-b:%2B12135551213',phone:'+12135551213'}),/其他会话/);
@@ -24,6 +24,6 @@ const store=new Function('exports','require',compile('electron/assistant-materia
  await assert.rejects(store.recordAssistantUse({...request,token:staged.token,phone:''}),/缺少对方手机号/);
  await assert.rejects(store.recordAssistantUse({...request,token:staged.token,phone:'+12135551213'}),/手机号不匹配/);
  await assert.rejects(store.recordAssistantUse({...request,token:staged.token,contactId:'name:Apple receiver'}),/稳定联系人编号/);
- await store.removeAssistantUsageForProfile('apple-a');assert.equal((await store.readAssistantUsage('*')).length,1,'removing a multi-open profile preserves the actual-phone usage history');
- console.log('apple-assistant-store: Android/Apple phone sharing, deduplication, confirmed receipt binding, missing/mismatched phone rejection and profile removal preservation passed; clipboard/encryption mocked');
+ await store.removeAssistantUsageForProfile('apple-a');assert.equal((await store.readAssistantUsage('*')).length,2,'removing a multi-open profile preserves the actual-phone usage history');
+ console.log('apple-assistant-store: Android/Apple independent storage, deduplication, confirmed receipt binding, missing/mismatched phone rejection and profile removal preservation passed; clipboard/encryption mocked');
 })().catch(error=>{console.error(error);process.exitCode=1;});

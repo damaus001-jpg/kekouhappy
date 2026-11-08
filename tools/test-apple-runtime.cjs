@@ -77,7 +77,41 @@ if (!process.versions.electron) {
     // The production preload blocks native submission before the page guard is installed.
     await type('启动中文'); await enter(); await clickSend(); assert.equal(await nativeCount(), 0);
     await cmd({ action: 'install' }); await cmd({ action: 'enabled', enabled: true }); await events();
-    assert.equal(await execute(`document.documentElement.dataset.dfAppleGuard`), '2026-11-02-apple-v2');
+    assert.equal(await execute(`document.documentElement.dataset.dfAppleGuard`), '2026-11-07-apple-unified-input-v3');
+
+    const physicalSpace = async () => {
+      win.webContents.sendInputEvent({type:'keyDown',keyCode:'Space'});
+      win.webContents.sendInputEvent({type:'char',keyCode:' '});
+      win.webContents.sendInputEvent({type:'keyUp',keyCode:'Space'});
+      await new Promise(resolve=>setTimeout(resolve,30));
+    };
+    const spaceEvents = () => events();
+    for (const legacy of ['enter','space','both']) {
+      await type('连续空格中文'+legacy); await events();
+      await execute(`document.documentElement.dataset.dfInputTrigger=${JSON.stringify(legacy)};localStorage.setItem('df-input-trigger-v1',${JSON.stringify(legacy)});true;`);
+      await physicalSpace();
+      assert.equal((await spaceEvents()).filter(e=>e.action==='translate').length,0,'single space must not translate');
+      await physicalSpace();await physicalSpace();
+      const batch=await spaceEvents();
+      assert.equal(batch.filter(e=>e.action==='translate').length,1,'double/triple spaces translate once despite legacy mode '+legacy);
+      assert.equal(batch.filter(e=>e.action==='send').length,0,'spaces never send');
+      await type('回车中文'+legacy);await events();await enter();
+      assert.equal((await events()).filter(e=>e.action==='translate').length,1,'Enter ignores legacy mode '+legacy);
+    }
+    await type('English draft');await events();await physicalSpace();await physicalSpace();
+    assert.equal((await events()).filter(e=>e.action==='translate'||e.action==='send').length,0,'English spaces only edit');
+    await type('输入法选词中文');await events();
+    await execute(`document.querySelector('#reply-zh').dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true}));true;`);
+    await physicalSpace();await physicalSpace();
+    assert.equal((await events()).filter(e=>e.action==='translate').length,0,'IME spaces do not translate');
+    await execute(`document.querySelector('#reply-zh').dispatchEvent(new CompositionEvent('compositionend',{bubbles:true}));true;`);
+    await physicalSpace();assert.equal((await events()).filter(e=>e.action==='translate').length,0,'IME spaces do not count after commit');
+    await physicalSpace();assert.equal((await events()).filter(e=>e.action==='translate').length,1,'fresh double space works after IME');
+    await type('不连续中文');await events();await physicalSpace();
+    win.webContents.sendInputEvent({type:'keyDown',keyCode:'Left'});win.webContents.sendInputEvent({type:'keyUp',keyCode:'Left'});
+    await physicalSpace();assert.equal((await events()).filter(e=>e.action==='translate').length,0,'navigation breaks space run');
+    console.log('Apple: fixed Enter, physical double/triple spaces, English spaces, IME and legacy settings passed');
+    await change();
     const scanned = await execute(helpers.buildMessageScanScript('apple', { limit: 20, includeAlreadyTranslated: true }));
     assert.equal(scanned.length, 4); assert.ok(scanned.every(item => item.contactId.startsWith('apple:device-a:chat-a:')));
     assert.ok(scanned.every(item => item.text.startsWith('English message')), 'only right-side message originals are scanned');
@@ -149,6 +183,8 @@ if (!process.versions.electron) {
     await execute(`(()=>{const shadow=document.querySelector('#df-material-root').shadowRoot;shadow.querySelector('.dialog textarea').value='US A 素材';shadow.querySelector('.dialog .primary').click();return true;})()`);await pause(20);
     let confirmation=await material({command:'confirmation-status',token:pending.token});assert.equal(confirmation.status,'inserted');assert.equal(confirmation.contactId,contact.id);assert.equal(confirmation.actualText,'US A 素材');assert.equal(await execute(`document.querySelector('#reply-zh').value`),'Existing draft US A 素材');assert.equal(await nativeCount(),5,'using a material fills the native draft without sending');
     await material({command:'usages',usages:[{profileId:'android-profile',platform:'opensms',phone:contact.phone,contactId:'sms:android-profile:chat-z',materialId:pending.id,usedAt:'now',confirmation:'inserted'}]});
+    await material({command:'confirm',pending:{...pending,token:'android-independent'},contactId:contact.id});assert.equal(await execute(`!!document.querySelector('#df-material-root').shadowRoot.querySelector('.duplicate-warning')`),false,'Android usage never produces an Apple duplicate warning');await material({command:'cancel-confirmation'});
+    await material({command:'usages',usages:[{profileId:'apple-profile',platform:'apple',phone:contact.phone,contactId:contact.id,materialId:pending.id,usedAt:'now',confirmation:'inserted'}]});
     await material({command:'confirm',pending:{...pending,token:'duplicate'},contactId:contact.id});assert.ok(await execute(`document.querySelector('#df-material-root').shadowRoot.querySelector('.duplicate-warning')?.textContent.includes('手机号')`),'duplicate warnings follow the confirmed Apple phone across devices');
     await change('device-b','chat-b');await pause(240);assert.equal((await material({command:'confirmation-status',token:'duplicate'})).status,'cancelled','switching device/contact cancels the material confirmation');
     await change();await material({command:'confirm',pending:{...pending,token:'disabled'},contactId:contact.id});await execute(`document.querySelector('#reply-zh').disabled=true;document.querySelector('#df-material-root').shadowRoot.querySelector('.dialog .primary').click();true`);await pause(20);assert.equal((await material({command:'confirmation-status',token:'disabled'})).status,'pending');assert.ok(await execute(`!!document.querySelector('#df-material-root').shadowRoot.querySelector('.dialog .error').textContent`));await material({command:'cancel-confirmation'});await execute(`document.querySelector('#reply-zh').disabled=false;true`);

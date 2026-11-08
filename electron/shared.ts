@@ -71,7 +71,6 @@ export type AppConfig = {
   lastActiveProfileIds: LastActiveProfileIds;
   activeTheme: AppTheme;
   eyeCareTranslationEnabled: boolean;
-  inputTriggerSettings?: Record<'whatsapp' | 'telegram' | 'signal', 'enter' | 'space' | 'both'>;
   deepseekModel: string;
   flashDefaultApplied?: boolean;
 };

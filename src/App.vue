@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import DevelopmentDiagnostics from './DevelopmentDiagnostics.vue';
-import { normalizeInputSettings, buildInputSettingsScript, type InputPlatform, type InputSettings } from './input-settings';
 import RemoteGuardConnections from './components/RemoteGuardConnections.vue';
 import AssistantLibraryPanel from './components/CustomAssistantPanel.vue';
 import { buildAssistantCatalog } from './assistant-material-catalog';
@@ -151,7 +150,7 @@ type EyeCareTranslationApplyResult = {
 };
 
 type TranslationQueueReason = 'manual-refresh' | 'composer-enter' | 'visible-message' | 'history-backfill';
-type ComposerFeedbackState = '' | 'typing' | 'translating' | 'ready' | 'sent';
+type ComposerFeedbackState = '' | 'typing' | 'translating' | 'ready' | 'sent' | 'error';
 type ComposerKind = 'default' | 'telegram-media-caption';
 type SensitiveSendPending = {
   token: string;
@@ -196,15 +195,6 @@ const reauthorizationMessage = ref('');
 const reauthorizationMessageIsError = ref(false);
 const reauthorizationSucceeded = ref(false);
 const translationCustomizationOpen = ref(false);
-const inputSettingsOpen = ref(false);
-const inputSettings = ref(normalizeInputSettings(null));
-const inputSettingsDraft = ref(normalizeInputSettings(null));
-const inputSettingsBusy = ref(false);
-const inputSettingsMessage = ref('');
-const inputSettingsError = ref(false);
-const inputPlatforms: { key: InputPlatform; label: string }[] = [
-  { key: 'whatsapp', label: 'WhatsApp' }, { key: 'telegram', label: 'Telegram' }, { key: 'signal', label: 'Signal' }
-];
 const translationCustomizationDraft = ref(defaultChineseToEnglishEditablePrompt);
 const translationCustomizationSaved = ref(defaultChineseToEnglishEditablePrompt);
 const translationCustomizationBusy = ref(false);
@@ -649,7 +639,6 @@ const hasBlockingModal = computed(() => Boolean(
   renameTargetProfile.value ||
   reauthorizationDialogOpen.value ||
   translationCustomizationOpen.value ||
-  inputSettingsOpen.value ||
   openSmsEntryOpen.value ||
   eyeCareTranslationDialogOpen.value
 ));
@@ -723,6 +712,7 @@ const activeComposerFeedbackText = computed(() => {
   if (state === 'translating') return '正在翻译...';
   if (state === 'ready') return '已完成自然美式口语化翻译，已保持原意和语气；\n已适当缩写单词，已去除对应符号 ；- .\n回车后即可发送英文。';
   if (state === 'sent') return '已发送';
+  if (state === 'error') return activeComposerStatus.value || '输入翻译暂不可用，请重试';
   return '';
 });
 const activeSensitiveSendPending = computed(() => {
@@ -831,54 +821,6 @@ function setTheme(theme: ThemeName) {
     void executeProfileScript(profile.id, buildInjectedComposerScript('install')).catch(() => undefined);
   }
 }
-
-async function applyInputSettings(profile: ChatProfile) {
-  const platform = appForPlatform(profile.platform);
-  if (platform !== 'whatsapp' && platform !== 'telegram' && platform !== 'signal') return;
-  const runtime = getRuntimeScriptExecutor(profile);
-  if (runtime) await runtime.execute(buildInputSettingsScript(inputSettings.value[platform]));
-}
-
-async function saveInputSettings() {
-  if (inputSettingsBusy.value) return;
-  inputSettingsBusy.value = true;
-  inputSettingsMessage.value = '';
-  inputSettingsError.value = false;
-  try {
-    if (!window.chatTranslator || !configState.value) throw new Error('Settings unavailable');
-    const requested = normalizeInputSettings(inputSettingsDraft.value);
-    await persistWorkspaceConfig(requested);
-    const saved = normalizeInputSettings(configState.value.inputTriggerSettings);
-    if (JSON.stringify(saved) !== JSON.stringify(requested)) throw new Error('开发版主进程尚未更新，请重启开发版后再保存');
-    inputSettings.value = saved;
-    const results = await Promise.allSettled(profiles.value.map(applyInputSettings));
-    if (results.some(result => result.status === 'rejected')) {
-      inputSettingsMessage.value = '已保存，暂未就绪的聊天窗口将在加载后应用';
-    } else inputSettingsMessage.value = '已保存并生效';
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : '未知错误';
-    inputSettingsMessage.value = `保存失败：${detail}`;
-    inputSettingsError.value = true;
-  } finally {
-    inputSettingsBusy.value = false;
-  }
-}
-
-function trapInputSettingsFocus(event: KeyboardEvent) {
-  const controls = Array.from(document.querySelectorAll<HTMLElement>('.input-settings-card button, .input-settings-card select'));
-  const first = controls[0], last = controls[controls.length - 1];
-  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
-  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
-}
-watch(inputSettingsOpen, async open => {
-  if (open) {
-    inputSettingsDraft.value = { ...inputSettings.value };
-    inputSettingsMessage.value = '';
-    inputSettingsError.value = false;
-  }
-  await nextTick();
-  document.querySelector<HTMLElement>(open ? '.input-settings-card select' : '.input-settings-button')?.focus();
-});
 
 function buildEyeCareTranslationStyleScript(enabled: boolean, translationColor = eyeCareTranslationColor) {
   return `
@@ -1129,7 +1071,6 @@ function isSignalLegacyBubbleTranslationDisabled(profile?: ChatProfile | null) {
 
 function applyConfig(config: AppConfig) {
   configState.value = config;
-  inputSettings.value = normalizeInputSettings(config.inputTriggerSettings);
   profiles.value = config.profiles;
   profileTabOrder.value = sanitizeProfileTabOrder(config.profiles, config.profileTabOrder);
   lastActiveProfileIds.value = { ...config.lastActiveProfileIds };
@@ -2386,7 +2327,7 @@ async function confirmCloseProfile() {
   }
 }
 
-async function persistWorkspaceConfig(inputTriggers?: InputSettings) {
+async function persistWorkspaceConfig() {
   workspaceConfigSaveQueue = workspaceConfigSaveQueue
     .catch(() => undefined)
     .then(async () => {
@@ -2398,8 +2339,7 @@ async function persistWorkspaceConfig(inputTriggers?: InputSettings) {
         profileTabOrder: profileTabOrder.value,
         lastActiveProfileIds: lastActiveProfileIds.value,
         activeTheme: activeTheme.value,
-        eyeCareTranslationEnabled: eyeCareTranslationEnabled.value,
-        inputTriggerSettings: { ...(inputTriggers || inputSettings.value) }
+        eyeCareTranslationEnabled: eyeCareTranslationEnabled.value
       }));
       const saved = await window.chatTranslator.saveConfig(snapshot);
       configState.value = saved;
@@ -4707,7 +4647,7 @@ async function probeWebComposer(profileId: string) {
     }>(buildWebComposerProbeScript());
     const preloadGuard = webviewPreloadGuardStatus.get(profileId);
     const preloadGuardLoaded = Boolean(
-      preloadGuard?.version === '2026-11-05-web-telegram-space-input-v6' &&
+      preloadGuard?.version === '2026-11-08-telegram-space-recovery-v8' &&
       Date.now() - preloadGuard.lastSeenAt <= 12_000
     );
     const status = [
@@ -6663,7 +6603,7 @@ ${peekThemeCss}
     requestAnimationFrame(refocus);
     for (const delay of [30, 90, 180]) window.setTimeout(refocus, delay);
   };
-  const telegramPageGuardVersion = '2026-11-05-telegram-input-settings-v61';
+  const telegramPageGuardVersion = '2026-11-07-telegram-unified-input-v62';
   const findNativeComposer = () => {
     const mediaCaptionComposer = findVisibleTelegramMediaCaptionComposer();
     if (mediaCaptionComposer) return mediaCaptionComposer;
@@ -7182,15 +7122,6 @@ ${peekThemeCss}
         return signature || window.__dfConversationSignature || '';
       };
       const liveText = getComposerText(target);
-      if (/[\\u3400-\\u9fff]/.test(liveText)) {
-        let trigger = document.documentElement.dataset.dfInputTrigger;
-        try { trigger ||= localStorage.getItem('df-input-trigger-v1'); } catch {}
-        if (trigger === 'space' && (telegramComposerMode || location.hostname === 'web.whatsapp.com' || signalSourceComposer)) {
-          stopSendEvent(event);
-          status.textContent = '请连续按两次空格翻译，英文填回后按回车发送';
-          return true;
-        }
-      }
       const sensitiveToken = target?.dataset?.dfSensitiveSendToken || '';
       if (sensitiveToken) {
         stopSendEvent(event);
@@ -7641,8 +7572,8 @@ ${peekThemeCss}
     const nativeGuardVersion = telegramComposerMode
       ? telegramPageGuardVersion
       : composer.closest('.CompositionArea, .module-composition-area')
-        ? '2026-11-02-signal-native-click-v57'
-        : '2026-11-05-web-input-settings-v58';
+        ? '2026-11-07-signal-unified-input-v58'
+        : '2026-11-07-web-unified-input-v59';
     if (composer.dataset.dfNativeGuard !== nativeGuardVersion) {
       if (composer.__dfNativeInputHandler) composer.removeEventListener('input', composer.__dfNativeInputHandler, true);
       if (composer.__dfNativeKeydownHandler) composer.removeEventListener('keydown', composer.__dfNativeKeydownHandler, true);
@@ -8125,7 +8056,7 @@ function buildEnterTranslateScript() {
 ${buildComposerPlainTextReaderSource()}
 ${buildDirectSendHttpUrlSource()}
   ${buildSignalEmojiPickerScript()};
-  const installVersion = '2026-11-06-signal-native-submit-recovery-v25';
+  const installVersion = '2026-11-08-signal-independent-input-v27';
   if (window.__dfEnterTranslateInstalled === installVersion) return true;
   window.__dfEnterTranslateInstalled = installVersion;
   const listenerIsCurrent = () => window.__dfEnterTranslateInstalled === installVersion;
@@ -8477,18 +8408,9 @@ ${buildDirectSendHttpUrlSource()}
     window.__dfTranslatorQueue = Array.isArray(window.__dfTranslatorQueue) ? window.__dfTranslatorQueue : [];
     window.__dfTranslatorQueue.push({ action: 'debug', text: textKey, at: Date.now() });
   };
-  const readInputTrigger = () => {
-    let trigger = document.documentElement.dataset.dfInputTrigger;
-    try { trigger ||= localStorage.getItem('df-input-trigger-v1'); } catch {}
-    return trigger === 'enter' || trigger === 'space' ? trigger : 'both';
-  };
-  const blockAndTranslate = (event, composer, text = getText(composer).trim(), trigger = 'enter') => {
+  const blockAndTranslate = (event, composer, text = getText(composer).trim()) => {
     if (isDirectSendHttpUrl(text)) return false;
     const chineseDraft = hasChinese(text);
-    if (chineseDraft && readInputTrigger() !== 'both' && readInputTrigger() !== trigger) {
-      stopSendEvent(event);
-      return true;
-    }
     const reviewEnabled = readComposerReviewEnabled();
     if (!chineseDraft && (!reviewEnabled || !hasEnglish(text))) return false;
     event.preventDefault();
@@ -8511,11 +8433,6 @@ ${buildDirectSendHttpUrlSource()}
   };
   const spaceRuns = new WeakMap();
   const activeCompositions = new WeakSet();
-  const inputSettingsChanged = () => {
-    if (!listenerIsCurrent()) return;
-    const composer = findComposer();
-    if (composer) spaceRuns.delete(composer);
-  };
   const nativeChineseSubmitHandler = (event) => {
     if (!listenerIsCurrent() || isProgrammaticSend() || typeof event.detail !== 'string' || event.detail.length > 24000) return;
     let request;
@@ -8526,7 +8443,7 @@ ${buildDirectSendHttpUrlSource()}
     const composer = findComposer();
     if (!composer || getText(composer).trim() !== request.text.trim()) return;
     if (composer.closest('.CompositionArea')?.getAttribute('data-df-signal-conversation-id')?.toLowerCase() !== request.conversationId.toLowerCase()) return;
-    blockAndTranslate(event, composer, request.text, 'enter');
+    blockAndTranslate(event, composer, request.text);
   };
   const resetTranslationSpace = (event) => {
     if (!listenerIsCurrent()) return;
@@ -8541,7 +8458,6 @@ ${buildDirectSendHttpUrlSource()}
     if (event?.target?.closest?.('.df-composer-review')) return;
     const composer = composerForEvent(event);
     if (!composer) return;
-    if (readInputTrigger() === 'enter') { spaceRuns.delete(composer); return; }
     const space = event.key === ' ' || event.code === 'Space';
     if (!space || event.isComposing || event.keyCode === 229 || activeCompositions.has(composer) ||
         event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) {
@@ -8555,7 +8471,7 @@ ${buildDirectSendHttpUrlSource()}
     }
     const count = (spaceRuns.get(composer) || 0) + 1;
     spaceRuns.set(composer, count);
-    if (count >= 2) blockAndTranslate(event, composer, getText(composer).trim(), 'space');
+    if (count >= 2) blockAndTranslate(event, composer, getText(composer).trim());
   };
   const handler = (event) => {
     if (!listenerIsCurrent()) return;
@@ -8704,6 +8620,7 @@ ${buildDirectSendHttpUrlSource()}
       delete composer.dataset.dfSensitiveReviewPending;
       delete composer.dataset.dfSensitiveDispatchPending;
       window.__dfSetComposerReviewState?.('hidden', '');
+      queueTyping(getText(composer));
     }
   };
   const blockOnlyHandler = (event) => {
@@ -8741,7 +8658,6 @@ ${buildDirectSendHttpUrlSource()}
       target.removeEventListener('click', previous.sendPointerHandler, true);
       target.removeEventListener('input', previous.rememberComposerText, true);
       if (previous.translationSpaceHandler) target.removeEventListener('keydown', previous.translationSpaceHandler, true);
-      if (previous.inputSettingsChanged) target.removeEventListener('df-input-settings-changed', previous.inputSettingsChanged);
       if (previous.nativeChineseSubmitHandler) target.removeEventListener('df-signal-chinese-submit-blocked', previous.nativeChineseSubmitHandler, true);
       if (previous.resetTranslationSpace) {
         for (const name of ['input', 'compositionstart', 'compositionend', 'focusout', 'pointerdown']) {
@@ -8756,7 +8672,6 @@ ${buildDirectSendHttpUrlSource()}
       beforeInputHandler,
       sendPointerHandler,
       rememberComposerText,
-      inputSettingsChanged,
       nativeChineseSubmitHandler,
       translationSpaceHandler,
       resetTranslationSpace
@@ -8770,7 +8685,6 @@ ${buildDirectSendHttpUrlSource()}
     target.addEventListener('input', rememberComposerText, true);
     if (target === window) {
       target.addEventListener('df-signal-chinese-submit-blocked', nativeChineseSubmitHandler, true);
-      target.addEventListener('df-input-settings-changed', inputSettingsChanged);
       target.addEventListener('keydown', translationSpaceHandler, true);
       for (const name of ['input', 'compositionstart', 'compositionend', 'focusout', 'pointerdown']) {
         target.addEventListener(name, resetTranslationSpace, true);
@@ -8788,6 +8702,7 @@ ${buildDirectSendHttpUrlSource()}
     }
     const text = getText(composer).trim();
     const now = Date.now();
+    queueTyping(text);
     if (!hasChinese(text)) {
       window.__dfSignalComposerPollState = { text: '', since: 0, queued: '' };
       return;
@@ -8797,7 +8712,6 @@ ${buildDirectSendHttpUrlSource()}
       window.__dfSignalComposerPollState = { text, since: now, queued: '' };
       return;
     }
-    queueTyping(text);
     window.__dfSignalComposerPollState = { text, since: state.since || now, queued: state.queued || '' };
   }, 360);
   return true;
@@ -9586,16 +9500,32 @@ function resetWebTranslationRuntime(profileId: string) {
 
 function startComposerInstallLoop(profileId: string) {
   if (composerInstallIntervals.has(profileId)) return;
+  let installing = false;
   const install = async () => {
+    if (installing) return;
     const profile = profiles.value.find((item) => item.id === profileId);
     if (!profile) return;
     const runtime = getRuntimeScriptExecutor(profile);
     if (!runtime) return;
+    installing = true;
+    let signalInputReady = false;
     try {
+      // Input translation must not depend on optional material/UI setup.
+      if (profile.platform === 'signal') {
+        const installed = await runtime.execute(buildEnterTranslateScript());
+        if (installed !== true) throw new Error('Signal 输入监听安装未确认');
+        signalInputReady = true;
+        if (composerFeedbackStates.value[profileId] === 'error') {
+          setComposerFeedbackState(profileId, '');
+          setComposerStatus(profileId, '');
+        }
+        if (!signalComposerInstallLogged.has(profileId)) {
+          signalComposerInstallLogged.add(profileId);
+          setSignalDiagnosticStatus(profileId, 'Signal 输入监听已安装');
+        }
+      }
       await runtime.execute(buildInjectedComposerScript('install'));
-      await applyInputSettings(profile);
       await installAssistantMaterialRuntime(profile);
-      if (profile.platform === 'signal') await runtime.execute(buildEnterTranslateScript());
       if (!composerStatus.value[profileId]) setComposerStatus(profileId, '中文输入保护检测中');
       if (appForPlatform(profile.platform) !== 'signal') {
         startWebComposerProbe(profileId);
@@ -9603,12 +9533,17 @@ function startComposerInstallLoop(profileId: string) {
           scheduleSmartReplyUiRefresh(profileId, 40);
         }
       }
-      if (profile.platform === 'signal' && !signalComposerInstallLogged.has(profileId)) {
-        signalComposerInstallLogged.add(profileId);
-        setSignalDiagnosticStatus(profileId, 'Signal 输入监听已安装');
+    } catch (error) {
+      if (profile.platform === 'signal') {
+        const status = runtimeFailureStatus(error, signalInputReady ? 'Signal 辅助功能初始化失败：' : 'Signal 输入监听安装失败：', 'Signal 正在连接，请稍后重试');
+        setSignalDiagnosticStatus(profileId, status);
+        if (!signalInputReady) {
+          setComposerStatus(profileId, status);
+          setComposerFeedbackState(profileId, 'error');
+        }
       }
-    } catch {
-      // The page may be navigating; the next loop will retry.
+    } finally {
+      installing = false;
     }
   };
   void install();
@@ -9739,7 +9674,7 @@ function handleWebviewIpcMessage(event: Event, profile: ChatProfile) {
     const platform = String(details.platform || '').slice(0, 20);
     const expectedPlatform = appForPlatform(profile.platform);
     if (
-      version !== '2026-11-05-web-telegram-space-input-v6' ||
+      version !== '2026-11-08-telegram-space-recovery-v8' ||
       (platform !== 'whatsapp' && platform !== 'telegram') ||
       platform !== expectedPlatform
     ) return;
@@ -13032,17 +12967,9 @@ onUnmounted(() => {
       <div class="runtime-brand">
         <div class="brand-mark small"></div>
         <strong>皮卡丘翻译器</strong>
-        <span>皮卡丘翻译器 V{{ clientVersion }}</span>
+        <span>V{{ clientVersion }}</span>
       </div>
       <nav>
-        <button type="button" class="input-settings-button" aria-label="输入设置" title="输入设置" :aria-expanded="inputSettingsOpen"
-          @click="inputSettingsOpen = true; inputSettingsMessage = ''">
-          <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M17 25H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h22a2 2 0 0 1 2 2v6M7 12h1m4 0h1m4 0h1m4 0h1M7 17h1m4 0h1m4 0h1M9 21h6"/>
-            <circle cx="24" cy="23" r="3"/>
-            <path d="m22 17-.4 1.5-1.4.8-1.5-.4-1 1.8 1.1 1.1v1.6l-1.1 1.1 1 1.8 1.5-.4 1.4.8.4 1.5h2l.4-1.5 1.4-.8 1.5.4 1-1.8-1.1-1.1v-1.6l1.1-1.1-1-1.8-1.5.4-1.4-.8L24 17Z" transform="translate(1 0)"/>
-          </svg>
-        </button>
         <button
           type="button"
           class="eye-care-translation-button"
@@ -13355,31 +13282,6 @@ onUnmounted(() => {
     </section>
   </div>
 
-  <div v-if="inputSettingsOpen && signedIn && !lockScreenVisible" class="modal-mask input-settings-mask" :class="themeClass"
-    @click.self="!inputSettingsBusy && (inputSettingsOpen = false)" @keydown.esc.stop="!inputSettingsBusy && (inputSettingsOpen = false)" @keydown.tab="trapInputSettingsFocus">
-    <section class="modal-card input-settings-card" role="dialog" aria-modal="true" aria-labelledby="input-settings-title" aria-describedby="input-settings-description">
-      <header class="input-settings-heading">
-        <h3 id="input-settings-title">输入设置</h3>
-        <button type="button" aria-label="关闭输入设置" :disabled="inputSettingsBusy" @click="inputSettingsOpen = false">×</button>
-      </header>
-      <p id="input-settings-description">分别选择输入框中译英的触发方式，点击保存后生效。</p>
-      <label v-for="platform in inputPlatforms" :key="platform.key" class="input-settings-row">
-        <span>{{ platform.label }}</span>
-        <select v-model="inputSettingsDraft[platform.key]" :disabled="inputSettingsBusy">
-          <option value="enter">回车翻译</option>
-          <option value="space">连续两次及以上空格翻译</option>
-          <option value="both">回车或连续两次及以上空格翻译</option>
-        </select>
-      </label>
-      <p class="input-settings-space-tip"><small>提示：电脑配置较旧、经常卡顿时，建议选择空格翻译，先确认英文译文再按回车发送，更保险。</small></p>
-      <p class="input-settings-note">翻译完成后，按回车发送英文。仅选空格翻译时，中文回车会被拦截。输入法选词和单次空格不触发翻译。</p>
-      <p v-if="inputSettingsMessage" role="status" :class="{ 'modal-error': inputSettingsError }">{{ inputSettingsMessage }}</p>
-      <div class="modal-actions">
-        <button type="button" :disabled="inputSettingsBusy" @click="saveInputSettings">{{ inputSettingsBusy ? '保存中…' : '保存' }}</button>
-        <button type="button" :disabled="inputSettingsBusy" @click="inputSettingsOpen = false">关闭</button>
-      </div>
-    </section>
-  </div>
 
   <div
     v-if="eyeCareTranslationDialogOpen"

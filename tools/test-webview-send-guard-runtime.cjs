@@ -144,18 +144,18 @@ app.whenReady().then(async () => {
       window.webContents.sendInputEvent({type:'keyUp',keyCode:'Enter'});
       await new Promise(resolve=>setTimeout(resolve,30));
       const enterResult=await window.webContents.executeJavaScript("({count:guardMessages.filter(m=>m.action==='translate').length,native:nativeEnters})");
-      if(enterResult.native!==0||enterResult.count!==(mode==='space'?0:1))throw new Error(platform+' '+mode+' Chinese Enter policy failed');
-      await window.webContents.executeJavaScript(`document.querySelector('[contenteditable]').textContent=${JSON.stringify('另一段中文' + mode)};guardMessages=[];window.dispatchEvent(new Event('df-input-settings-changed'));`);
+      if(enterResult.native!==0||enterResult.count!==1)throw new Error(platform+' '+mode+' Chinese Enter policy failed');
+      await window.webContents.executeJavaScript(`document.querySelector('[contenteditable]').textContent=${JSON.stringify('另一段中文' + mode)};guardMessages=[];document.querySelector('[contenteditable]').dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertReplacementText'}));`);
       await space();await space();await space();
       const spaceCount=await window.webContents.executeJavaScript("guardMessages.filter(m=>m.action==='translate').length");
-      if(spaceCount!==(mode==='enter'?0:1))throw new Error(platform+' '+mode+' space policy failed');
-      console.log('PASS '+platform+'-selectable-'+mode+'-mode');
+      if(spaceCount!==1)throw new Error(platform+' '+mode+' space policy failed');
+      console.log('PASS '+platform+'-ignores-legacy-'+mode+'-mode');
     }
     if(platform==='telegram'){
       await window.webContents.executeJavaScript(`(() => {
         document.documentElement.dataset.dfInputTrigger='space';
         const input=document.querySelector('[contenteditable]');input.textContent='编辑器重发输入事件';guardMessages=[];
-        window.dispatchEvent(new Event('df-input-settings-changed'));
+        document.querySelector('[contenteditable]').dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertReplacementText'}));
         // Telegram K's editor emits a replacement plain Event after the
         // native input is committed; it has no inputType or data fields.
         input.addEventListener('input',event=>{if(event.isTrusted)queueMicrotask(()=>input.dispatchEvent(new Event('input',{bubbles:true,cancelable:true})));});
@@ -164,7 +164,7 @@ app.whenReady().then(async () => {
       const count=await window.webContents.executeJavaScript("guardMessages.filter(m=>m.action==='translate').length");
       if(count!==1)throw new Error('Telegram replacement input event resets the double-space run: translations='+count);
       console.log('PASS telegram-editor-replacement-input-double-space');
-      await window.webContents.executeJavaScript(`(()=>{const input=document.querySelector('[contenteditable]');input.textContent='开始新草稿';guardMessages=[];window.dispatchEvent(new Event('df-input-settings-changed'));})()`);
+      await window.webContents.executeJavaScript(`(()=>{const input=document.querySelector('[contenteditable]');input.textContent='开始新草稿';guardMessages=[];document.querySelector('[contenteditable]').dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertReplacementText'}));})()`);
       await space();
       await window.webContents.executeJavaScript(`(()=>{const input=document.querySelector('[contenteditable]');input.textContent='外部替换了中文';input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
       await space();

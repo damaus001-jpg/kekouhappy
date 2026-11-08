@@ -95,7 +95,8 @@ if(!process.versions.electron){
    win.webContents.sendInputEvent({type:'keyUp',keyCode:'Space'});
    await new Promise(resolve=>setTimeout(resolve,30));
   };
-  await fixture('保留回车翻译');await execute('window.__dfTranslatorQueue=[];true;');
+  await fixture('保留回车翻译');await execute('window.__dfTranslatorQueue=[];editor.dispatchEvent(new InputEvent("input",{bubbles:true,inputType:"insertText",data:"译"}));true;');
+  assert.ok(await execute("__dfTranslatorQueue.some(e=>e.action==='typing'&&e.text==='保留回车翻译')"),'Signal reports Chinese typing immediately without auxiliary UI or waiting for its polling timer');
   win.webContents.sendInputEvent({type:'keyDown',keyCode:'Enter'});win.webContents.sendInputEvent({type:'keyUp',keyCode:'Enter'});
   await new Promise(resolve=>setTimeout(resolve,30));
   assert.equal(await execute("__dfTranslatorQueue.filter(e=>e.action==='translate'&&e.text==='保留回车翻译').length"),1,'Signal Chinese Enter must still translate exactly once');
@@ -125,23 +126,23 @@ if(!process.versions.electron){
    await fixture('选择模式中文'+mode);await execute('document.documentElement.dataset.dfInputTrigger='+JSON.stringify(mode)+';window.__dfTranslatorQueue=[];true;');
    win.webContents.sendInputEvent({type:'keyDown',keyCode:'Enter'});win.webContents.sendInputEvent({type:'keyUp',keyCode:'Enter'});
    await new Promise(resolve=>setTimeout(resolve,30));
-   assert.equal(await execute("__dfTranslatorQueue.filter(e=>e.action==='translate').length"),mode==='space'?0:1,'Signal selected '+mode+' Enter mode');
+   assert.equal(await execute("__dfTranslatorQueue.filter(e=>e.action==='translate').length"),1,'Signal selected '+mode+' Enter mode');
    assert.equal(await execute("__dfTranslatorQueue.filter(e=>e.action==='send').length"),0,'Chinese never enters send queue');
    await fixture('空格模式中文'+mode);await execute('document.documentElement.dataset.dfInputTrigger='+JSON.stringify(mode)+';window.__dfTranslatorQueue=[];true;');
    await space();await space();await space();
-   assert.equal(await execute("__dfTranslatorQueue.filter(e=>e.action==='translate').length"),mode==='enter'?0:1,'Signal selected '+mode+' space mode');
+   assert.equal(await execute("__dfTranslatorQueue.filter(e=>e.action==='translate').length"),1,'Signal selected '+mode+' space mode');
   }
-  console.log('Signal all three selectable input modes passed');
+  console.log('Signal Enter and spaces ignore all legacy modes');
   for(const mode of ['enter','space','both']){
    await fixture('原生入口中文');
    const nativeFallback=await execute(`(()=>{document.documentElement.dataset.dfInputTrigger=${JSON.stringify(mode)};window.__dfTranslatorQueue=[];const detail=JSON.stringify({conversationId:'11111111-1111-4111-8111-111111111111',text:'原生入口中文'});document.dispatchEvent(new CustomEvent('df-signal-chinese-submit-blocked',{detail,bubbles:true,cancelable:true}));return {translations:__dfTranslatorQueue.filter(e=>e.action==='translate').length,sends:__dfTranslatorQueue.filter(e=>e.action==='send').length};})()`);
-   assert.equal(nativeFallback.translations,mode==='space'?0:1,'native Chinese submit fallback follows '+mode+' trigger policy');
+   assert.equal(nativeFallback.translations,1,'native Chinese submit fallback follows '+mode+' trigger policy');
    assert.equal(nativeFallback.sends,0,'native fallback only translates and never sends');
   }
   await fixture('当前联系人中文');
   const staleFallback=await execute(`(()=>{window.__dfTranslatorQueue=[];for(const request of [{conversationId:'22222222-2222-4222-8222-222222222222',text:'当前联系人中文'},{conversationId:'11111111-1111-4111-8111-111111111111',text:'其他草稿'}])document.dispatchEvent(new CustomEvent('df-signal-chinese-submit-blocked',{detail:JSON.stringify(request),bubbles:true,cancelable:true}));return __dfTranslatorQueue.filter(e=>e.action==='translate').length;})()`);
   assert.equal(staleFallback,0,'stale conversation or draft native events cannot queue translation');
-  console.log('Signal native Chinese-submit fallback respects settings, conversation and draft; no auto-send');
+  console.log('Signal native Chinese-submit fallback ignores legacy settings and checks conversation and draft; no auto-send');
   if(process.argv.includes('--with-native-quill'))await checkNativeClipboard();
   win.destroy();console.log('signal-composer-focus-runtime: draft text, edge/padding clicks, synchronous native editor handling, send protection, picker clicks and reinjection passed');
  }).catch(error=>{console.error(error);process.exitCode=1;}).finally(()=>app.exit(process.exitCode||0));

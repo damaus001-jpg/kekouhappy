@@ -26,7 +26,7 @@ assert.ok(packageJson.build.files.includes('dist-electron/main.js'));
 assert.ok(!packageJson.build.files.includes('dist-electron/profile-data-cleanup.js'));
 assert.ok(appSource.includes("import { clientVersion } from './client-version';"));
 assert.ok(appSource.includes('<span>V{{ clientVersion }}</span>'));
-assert.ok(appSource.includes('皮卡丘翻译器 V{{ clientVersion }}'));
+assert.match(appSource, /<strong>皮卡丘翻译器<\/strong>\s*<span>V\{\{ clientVersion \}\}<\/span>/);
 assert.ok(appSource.includes('皮卡丘翻译器 v{{ clientVersion }}'));
 assert.doesNotMatch(appSource, /V0\.1\.2/);
 assert.equal(clientBuilder.match(/buildVersion: '([^']+)'/)?.[1], expectedVersion);

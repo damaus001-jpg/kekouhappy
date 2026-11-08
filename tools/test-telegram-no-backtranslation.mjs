@@ -44,7 +44,7 @@ assert.match(
   /const approvedText = isWebComposerEnter \|\| isSignalChineseToEnglish[\s\S]*?\? translatedText[\s\S]*?: request\.text;/
 );
 assert.match(app, /if \(telegramComposerMode\) \{[\s\S]*?document\.getElementById\('df-composer-review'\)\?\.remove\(\);/);
-assert.match(app, /const telegramPageGuardVersion = '2026-11-05-telegram-input-settings-v61';/);
+assert.match(app, /const telegramPageGuardVersion = '2026-11-07-telegram-unified-input-v62';/);
 assert.match(pageFlow, /window\.__dfTelegramMediaCaptionReady/);
 assert.match(pageFlow, /mediaCaptionReadyMatches/);
 assert.match(pageFlow, /mediaCaptionReady\?\.requestId/);

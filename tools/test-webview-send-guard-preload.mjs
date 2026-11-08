@@ -10,7 +10,7 @@ const app = fs.readFileSync(path.join(projectRoot, 'src', 'App.vue'), 'utf8');
 const packageJson = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8'));
 const clientSuiteBuilder = fs.readFileSync(path.join(projectRoot, 'electron-builder.client-suite.cjs'), 'utf8');
 
-assert.match(guard, /2026-11-05-web-telegram-space-input-v6/);
+assert.match(guard, /2026-11-08-telegram-space-recovery-v8/);
 assert.match(guard, /conversation-compose-box-input/);
 assert.match(guard, /media-caption-input-container/);
 assert.match(guard, /simple-message-input-input/);

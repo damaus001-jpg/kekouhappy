@@ -11,32 +11,51 @@ let clipboardImageCheckedAt=0,clipboardImageMatches=false;
 let queue: Promise<unknown> = Promise.resolve();
 const receipts = new Map<string, AssistantUsage>();
 const directory = () => join(app.getPath('userData'), 'assistant-library');
-const filename = () => join(directory(), 'usage.enc');
+const usagePlatforms = ['whatsapp', 'telegram', 'signal', 'opensms', 'apple'] as const;
+type UsagePlatform = AssistantUsage['platform'];
+const filename = (platform: UsagePlatform) => join(directory(), `usage-${platform}.enc`);
 const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
 function bounded(value: unknown, max: number, label: string) {
   if (typeof value !== 'string' || !value.trim() || value.length > max || /[\u0000-\u001f]/.test(value)) throw new Error(`${label}无效`);
   return value;
 }
-async function readAllAssistantUsage(): Promise<AssistantUsage[]> {
-  let bytes: Buffer;
-  try { bytes = await readFile(filename()); } catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return []; throw e; }
+function decodeAssistantUsage(bytes: Buffer): AssistantUsage[] {
   if (!safeStorage.isEncryptionAvailable()) throw new Error('素材使用记录保护不可用');
   const data = JSON.parse(safeStorage.decryptString(bytes));
   if (data.schemaVersion !== 1 || !Array.isArray(data.records)) throw new Error('素材使用记录损坏');
   return data.records;
 }
-async function saveAssistantUsage(records: AssistantUsage[]) {
+async function readPlatformAssistantUsage(platform: UsagePlatform): Promise<AssistantUsage[]> {
+  try {
+    const records = decodeAssistantUsage(await readFile(filename(platform)));
+    if (records.some(record => record.platform !== platform)) throw new Error('素材使用记录平台不匹配');
+    return records;
+  } catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e; }
+  // Preserve the legacy file. Once a platform file exists, never reimport it.
+  let records: AssistantUsage[] = [];
+  try { records = decodeAssistantUsage(await readFile(join(directory(), 'usage.enc'))).filter(record => record.platform === platform); }
+  catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e; }
+  await saveAssistantUsage(records, platform);
+  return records;
+}
+async function readAllAssistantUsage(platform?: UsagePlatform): Promise<AssistantUsage[]> {
+  return platform ? readPlatformAssistantUsage(platform) : (await Promise.all(usagePlatforms.map(readPlatformAssistantUsage))).flat();
+}
+async function saveAssistantUsage(records: AssistantUsage[], platform: UsagePlatform) {
   if (!safeStorage.isEncryptionAvailable()) throw new Error('素材使用记录保护不可用');
+  if (!usagePlatforms.includes(platform) || records.some(record => record.platform !== platform)) throw new Error('素材使用记录平台不匹配');
   await mkdir(directory(), { recursive: true });
-  const temp = join(directory(), `usage-${randomUUID()}.tmp`);
-  try { await writeFile(temp, safeStorage.encryptString(JSON.stringify({ schemaVersion: 1, records }))); await rename(temp, filename()); }
+  const temp = join(directory(), `usage-${platform}-${randomUUID()}.tmp`);
+  try { await writeFile(temp, safeStorage.encryptString(JSON.stringify({ schemaVersion: 1, records }))); await rename(temp, filename(platform)); }
   finally { await unlink(temp).catch(() => {}); }
 }
-export async function readAssistantUsage(profileId: string, contact?: AssistantContact): Promise<AssistantUsage[]> {
+export async function readAssistantUsage(profileId: string, contact?: AssistantContact, platform?: UsagePlatform): Promise<AssistantUsage[]> {
   bounded(profileId, 128, '账号');
+  platform ??= contact?.id.startsWith('sms:') ? 'opensms' : contact?.id.startsWith('apple:') ? 'apple' : undefined;
+  if (platform && !usagePlatforms.includes(platform)) throw new Error('平台无效');
   const phone = normalizeAssistantPhone(contact?.phone);
   const operation = async () => {
-    const records = await readAllAssistantUsage();
+    const records = await readAllAssistantUsage(platform);
     // Older records only have the account/session ID. Bind them when that session's
     // actual receiver number is available; never guess a number from its display name.
     let changed = false;
@@ -47,23 +66,23 @@ export async function readAssistantUsage(profileId: string, contact?: AssistantC
         }
       }
     }
-    if (changed) await saveAssistantUsage(records);
-    return records.filter(r => profileId === '*' || r.profileId === profileId || ((r.platform === 'opensms' || r.platform === 'apple') && Boolean(r.phone)));
+    if (changed) await saveAssistantUsage(records, 'opensms');
+    return records.filter(r => profileId === '*' || r.profileId === profileId || ((platform === 'opensms' || platform === 'apple') && r.platform === platform && Boolean(r.phone)));
   };
-  if (!phone) return operation();
   const next = queue.then(operation, operation); queue = next.catch(() => {}); return next;
 }
 export function removeAssistantUsageForProfile(profileId: string): Promise<void> {
   bounded(profileId, 128, '账号');
   const operation = async () => {
-    const records = await readAllAssistantUsage();
-    // SMS history belongs to the receiver number and survives closing/removing an account.
-    const remaining = records.filter(record => record.profileId !== profileId || record.platform === 'opensms' || record.platform === 'apple');
+    // Phone history survives closing an account, within its own platform.
+    for (const platform of usagePlatforms) {
+      const records = await readAllAssistantUsage(platform);
+      const remaining = records.filter(record => record.profileId !== profileId || platform === 'opensms' || platform === 'apple');
+      if (remaining.length !== records.length) await saveAssistantUsage(remaining, platform);
+    }
     for (const [token, receipt] of receipts) {
       if (receipt.profileId === profileId) receipts.delete(token);
     }
-    if (remaining.length === records.length) return;
-    await saveAssistantUsage(remaining);
   };
   const next = queue.then(operation, operation);
   queue = next.catch(() => {});
@@ -123,17 +142,17 @@ export function recordAssistantUse(request: AssistantUseRequest): Promise<Assist
     }
     if (!staged || staged.token !== request.token || staged.expiresAt < Date.now()) throw new Error('素材复制已失效，请重新复制');
     if (!safeStorage.isEncryptionAvailable()) throw new Error('素材使用记录保护不可用');
-    const records = await readAllAssistantUsage();
+    const records = await readAllAssistantUsage(request.platform);
     const record: AssistantUsage = { profileId: request.profileId, platform: request.platform, contactId: request.contactId,
       contactTitle: request.contactTitle || '未命名联系人', materialId: staged.id, usedAt: new Date().toISOString(), confirmation: 'inserted',
       ...(phone ? { phone } : {}),
       ...(staged.type === 'text' ? { actualText: request.actualText || staged.text } : {}) };
     const index = records.findIndex(r => r.materialId === record.materialId && (phone
-      ? (r.platform === 'opensms' || r.platform === 'apple') && r.phone === phone
+      ? r.platform === record.platform && r.phone === phone
       : r.platform === record.platform && r.profileId === record.profileId && r.contactId === record.contactId));
     if (index >= 0) records[index] = record; else records.push(record);
     if (records.length > 100000) throw new Error('素材使用记录超过上限，未保存');
-    await saveAssistantUsage(records);
+    await saveAssistantUsage(records, request.platform);
     receipts.set(request.token, record);
     if(staged?.token===request.token)staged=null;
     if (receipts.size > 1000) receipts.delete(receipts.keys().next().value!);

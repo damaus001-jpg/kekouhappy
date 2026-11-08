@@ -12,8 +12,8 @@ const section = (start, end) => {
   return appSource.slice(startAt, endAt);
 };
 
-assert.match(appSource, /2026-11-05-telegram-input-settings-v61/);
-assert.match(appSource, /2026-11-06-signal-native-submit-recovery-v25/);
+assert.match(appSource, /2026-11-07-telegram-unified-input-v62/);
+assert.match(appSource, /2026-11-08-signal-independent-input-v27/);
 
 const sharedQueue = section('function enqueueComposerTranslation(', 'function enqueueMessageTranslationTask(');
 assert.doesNotMatch(appSource, /function enqueueTelegramComposerTranslation/);

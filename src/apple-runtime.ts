@@ -10,7 +10,7 @@ declare const controlOwner: string | null;
 export function appleRuntime(command: any) {
   if (location.origin !== 'http://127.0.0.1:8070' || window.top !== window) return false;
   const w = window as any;
-  const version = '2026-11-02-apple-v2';
+  const version = '2026-11-07-apple-unified-input-v3';
   if (w.__dfApple?.version !== version) {
     w.__dfApple?.dispose();
     const state: any = { version, enabled: false, signature: '', context: '', input: null, pending: null, ready: null, sensitive: null, writing: false, sending: false, inFlight: false, composing: false, cache: new Map() };
@@ -158,7 +158,37 @@ export function appleRuntime(command: any) {
         state.pending = state.ready; state.ready = null; emit('send', text, state.pending.requestId);
       }
     };
+    let spaceRun: { input: HTMLElement; signature: string; text: string; count: number } | null = null;
+    let spaceComposing = false;
+    const clearSpaceRun = () => { spaceRun = null; };
+    const onSpaceComposition = (event: Event) => {
+      if (event.target !== editor()) return;
+      spaceComposing = event.type === 'compositionstart'; clearSpaceRun();
+    };
+    const onSpaceInput = (event: Event) => {
+      if (event.target !== editor()) return;
+      const inputEvent = event as InputEvent;
+      if (inputEvent.inputType === 'insertText' && inputEvent.data === ' ') return;
+      // Some editors re-emit input without InputEvent fields.
+      if (!inputEvent.inputType && spaceRun && spaceRun.text === read().replace(/ /g, '')) return;
+      clearSpaceRun();
+    };
+    const handleSpace = (event: KeyboardEvent) => {
+      const input = editor();
+      if (!input || !(event.target instanceof Node) || !(event.target === input || input.contains(event.target))) { clearSpaceRun(); return false; }
+      if (event.key !== ' ' && event.code !== 'Space') { clearSpaceRun(); return false; }
+      if (spaceComposing || event.isComposing || event.keyCode === 229 || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) { clearSpaceRun(); return true; }
+      if (event.repeat) return true;
+      const text = read(), signature = context();
+      if (!/[\u3400-\u9fff]/.test(text) || directUrl(text)) { clearSpaceRun(); return true; }
+      const normalized = text.replace(/ /g, '');
+      const count = spaceRun?.input === input && spaceRun.signature === signature && spaceRun.text === normalized ? spaceRun.count + 1 : 1;
+      spaceRun = { input, signature, text: normalized, count };
+      if (count >= 2) { stop(event); submit(event); }
+      return true;
+    };
     const onKey = (event: KeyboardEvent) => {
+      if (handleSpace(event)) return;
       if (event.key !== 'Enter' || event.target !== editor()) return;
       if (state.composing || event.isComposing || event.keyCode === 229) { stop(event); return; }
       if (event.repeat || event.ctrlKey || event.metaKey) { stop(event); return; }
@@ -166,7 +196,7 @@ export function appleRuntime(command: any) {
       submit(event);
     };
     const onClick = (event: Event) => { const send = button(); if (send && event.target instanceof Element && event.target.closest('#reply-box #send-reply') === send) submit(event); };
-    const onInput = (event: Event) => { if (event.target !== editor() || state.writing) return; sync(); reset(); emit('typing', read()); hint(/[\u3400-\u9fff]/.test(read()) ? '按 Enter 先翻译，再次按 Enter 发送英文' : ''); };
+    const onInput = (event: Event) => { if (event.target !== editor() || state.writing) return; sync(); reset(); emit('typing', read()); hint(/[\u3400-\u9fff]/.test(read()) ? '按 Enter 或连续两次空格翻译，再按 Enter 发送英文' : ''); };
     const onCompositionStart = (event: Event) => { if (event.target === editor()) state.composing = true; };
     const onCompositionEnd = (event: Event) => { if (event.target === editor()) state.composing = false; };
     state.apply = (cmd: any): any => {
@@ -243,6 +273,9 @@ export function appleRuntime(command: any) {
     const style = document.createElement('style'); style.id = 'df-apple-translation-style';
     style.textContent = '#messages .df-chat-translation{box-sizing:border-box;max-width:100%;margin-top:7px;padding-top:6px;border-top:1px solid #94a3b866;font-size:14px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;color:#176040}#df-apple-composer-status{padding:6px 10px;font-size:12px;line-height:1.4;color:#176040}';
     document.head?.append(style);
+    document.addEventListener('input', onSpaceInput, true);
+    for (const name of ['focusout', 'pointerdown']) document.addEventListener(name, clearSpaceRun, true);
+    for (const name of ['compositionstart', 'compositionend']) document.addEventListener(name, onSpaceComposition, true);
     window.addEventListener('keydown', onKey, true); window.addEventListener('click', onClick, true); document.addEventListener('input', onInput, true);
     document.addEventListener('compositionstart', onCompositionStart, true); document.addEventListener('compositionend', onCompositionEnd, true);
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -255,7 +288,7 @@ export function appleRuntime(command: any) {
     const interval = setInterval(sync, 1500);
     state.dispose = () => {
       observer.disconnect(); clearInterval(interval); if (timer) clearTimeout(timer);
-      window.removeEventListener('keydown', onKey, true); window.removeEventListener('click', onClick, true); document.removeEventListener('input', onInput, true);
+      document.removeEventListener('input', onSpaceInput, true); for (const name of ['focusout', 'pointerdown']) document.removeEventListener(name, clearSpaceRun, true); for (const name of ['compositionstart', 'compositionend']) document.removeEventListener(name, onSpaceComposition, true); window.removeEventListener('keydown', onKey, true); window.removeEventListener('click', onClick, true); document.removeEventListener('input', onInput, true);
       document.removeEventListener('compositionstart', onCompositionStart, true); document.removeEventListener('compositionend', onCompositionEnd, true);
       style.remove(); document.getElementById('df-apple-composer-status')?.remove(); delete document.documentElement.dataset.dfAppleGuard;
     };

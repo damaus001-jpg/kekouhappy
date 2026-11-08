@@ -3879,11 +3879,6 @@ function sanitizeConfig(config: AppConfig): AppConfig {
     lastActiveProfileIds,
     activeTheme: normalizeAppTheme(config.activeTheme),
     eyeCareTranslationEnabled: config.eyeCareTranslationEnabled === true,
-    inputTriggerSettings: {
-      whatsapp: config.inputTriggerSettings?.whatsapp === 'enter' || config.inputTriggerSettings?.whatsapp === 'space' ? config.inputTriggerSettings.whatsapp : 'both',
-      telegram: config.inputTriggerSettings?.telegram === 'enter' || config.inputTriggerSettings?.telegram === 'space' ? config.inputTriggerSettings.telegram : 'both',
-      signal: config.inputTriggerSettings?.signal === 'enter' || config.inputTriggerSettings?.signal === 'space' ? config.inputTriggerSettings.signal : 'both'
-    },
     deepseekModel: normalizeTranslationModel(config.deepseekModel, config.flashDefaultApplied === true),
     flashDefaultApplied: true
   };
@@ -8121,12 +8116,14 @@ function registerIpc() {
   trustedHandle('assistant:image', true, (_event,id:string) => { assertAssistantUnlocked();return readAssistantImage(id); });
   trustedHandle('assistant:usage', true, async (_event, profileId: string, contact?: import('./assistant-material-types.js').AssistantContact) => {
     assertAssistantUnlocked(); assertProfileId(profileId);
+    const profile = (await readProfileBackup()).find(p => p.id === profileId);
+    if (!profile) throw new Error('素材使用账号不存在');
+    const platform = profile.platform === 'telegram-a' || profile.platform === 'telegram-k' ? 'telegram' : profile.platform;
     if (contact) {
       assertSerializedSize(contact, 'Assistant contact', 4096);
-      const profile = (await readProfileBackup()).find(p => p.id === profileId);
       if (profile?.platform !== 'opensms' && profile?.platform !== 'apple') throw new Error('仅打新增可关联手机号素材记录');
     }
-    return readAssistantUsage(profileId, contact);
+    return readAssistantUsage(profileId, contact, platform);
   });
   trustedHandle('assistant:use', true, async (_event, value: AssistantUseRequest) => {
     assertAssistantUnlocked(); assertSerializedSize(value, 'Assistant use', 100 * 1024); assertProfileId(value.profileId);

@@ -48,6 +48,40 @@ if(!process.versions.electron){
     }
     async function send(text,signature){return execute(helpers.buildComposerScript('send',text,true,false,'default','',{platform:'opensms',conversationSignature:signature}));}
     await fixture();
+
+    const physicalSpace = async () => {
+      win.webContents.sendInputEvent({type:'keyDown',keyCode:'Space'});
+      win.webContents.sendInputEvent({type:'char',keyCode:' '});
+      win.webContents.sendInputEvent({type:'keyUp',keyCode:'Space'});
+      await new Promise(resolve=>setTimeout(resolve,30));
+    };
+    const spaceEvents = () => events();
+    for (const legacy of ['enter','space','both']) {
+      await type('连续空格中文'+legacy); await events();
+      await execute(`document.documentElement.dataset.dfInputTrigger=${JSON.stringify(legacy)};localStorage.setItem('df-input-trigger-v1',${JSON.stringify(legacy)});true;`);
+      await physicalSpace();
+      assert.equal((await spaceEvents()).filter(e=>e.action==='translate').length,0,'single space must not translate');
+      await physicalSpace();await physicalSpace();
+      const batch=await spaceEvents();
+      assert.equal(batch.filter(e=>e.action==='translate').length,1,'double/triple spaces translate once despite legacy mode '+legacy);
+      assert.equal(batch.filter(e=>e.action==='send').length,0,'spaces never send');
+      await type('回车中文'+legacy);await events();await enter();
+      assert.equal((await events()).filter(e=>e.action==='translate').length,1,'Enter ignores legacy mode '+legacy);
+    }
+    await type('English draft');await events();await physicalSpace();await physicalSpace();
+    assert.equal((await events()).filter(e=>e.action==='translate'||e.action==='send').length,0,'English spaces only edit');
+    await type('输入法选词中文');await events();
+    await execute(`window.__dfOpenSms.editor().dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true}));true;`);
+    await physicalSpace();await physicalSpace();
+    assert.equal((await events()).filter(e=>e.action==='translate').length,0,'IME spaces do not translate');
+    await execute(`window.__dfOpenSms.editor().dispatchEvent(new CompositionEvent('compositionend',{bubbles:true}));true;`);
+    await physicalSpace();assert.equal((await events()).filter(e=>e.action==='translate').length,0,'IME spaces do not count after commit');
+    await physicalSpace();assert.equal((await events()).filter(e=>e.action==='translate').length,1,'fresh double space works after IME');
+    await type('不连续中文');await events();await physicalSpace();
+    win.webContents.sendInputEvent({type:'keyDown',keyCode:'Left'});win.webContents.sendInputEvent({type:'keyUp',keyCode:'Left'});
+    await physicalSpace();assert.equal((await events()).filter(e=>e.action==='translate').length,0,'navigation breaks space run');
+    console.log('OpenSMS: fixed Enter, physical double/triple spaces, English spaces, IME and legacy settings passed');
+    await fixture();
     const integrityContact=(await target()).id;
     const integritySnapshot=await cmd({action:'sent-integrity-scan',expectedConversationSignature:integrityContact,options:{limit:60,includeAlreadyTranslated:true}});
     assert.equal(integritySnapshot.sameConversation,true);
@@ -278,7 +312,7 @@ if(!process.versions.electron){
     await execute(`window.__dfOpenSms.editor().focus=()=>{document.querySelector('[data-id="chat-a"]').classList.remove('active');document.querySelector('[data-id="chat-b"]').classList.add('active');};true`);
     assert.equal((await execute(helpers.buildComposerScript('write','Wrong focus',true,false,'default',request.requestId))).ok,false);
     await fixture();await type('快捷键测试');await enter({shiftKey:true});await enter({ctrlKey:true});await enter({metaKey:true});await enter({altKey:true,shiftKey:true});await enter({isComposing:true});await enter({repeat:true});assert.equal((await events()).filter(e=>e.action==='translate').length,0);assert.equal((await execute('window.nativeSends')).length,0);
-    await execute(`localStorage.setItem('sendKey','alt+enter')`);await enter();assert.equal((await events()).filter(e=>e.action==='translate').length,0);await enter({altKey:true});assert.ok((await events()).find(e=>e.action==='translate'));
+    await execute(`localStorage.setItem('sendKey','alt+enter')`);await enter();assert.equal((await events()).filter(e=>e.action==='translate').length,1,'Chinese plain Enter always translates despite native send-key preference');await enter({altKey:true});assert.equal((await events()).filter(e=>e.action==='translate').length,0,'pending translation must not be duplicated');
     await fixture();await type('https://example.com/中文路径');await enter();assert.equal((await events()).filter(e=>e.action==='translate').length,0,'a whole URL must not consume a translation request');assert.equal((await execute('window.nativeSends'))[0].text,'https://example.com/中文路径');
     await fixture();await type('1234567890123456');await enter();assert.ok((await events()).find(e=>e.action==='sensitive-prepare'));assert.equal((await execute('window.nativeSends')).length,0);const identity=await target();await execute(helpers.buildInjectedComposerScript('state',{sensitiveToken:'trusted-token',sensitiveText:'1234567890123456',conversationSignature:identity.id}));await enter();assert.ok((await events()).find(e=>e.action==='sensitive-send'));
     await fixture();await execute(`const bar=document.createElement('div');bar.className='mms-preview-bar';bar.innerHTML='<img src="data:image/png;base64,abc"><span class="mms-title-input"><input></span>';document.querySelector('.im-chat-footer').before(bar);bar.querySelector('input').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.isComposing)window.nativeSend();});`);
@@ -324,7 +358,7 @@ if(!process.versions.electron){
       assert.equal(await execute(`document.querySelector('#df-material-root').shadowRoot.querySelector('h2').textContent`),'此素材在当前联系人聊天里已使用');await dialogAction('.dialog .actions button');
     }
     await store.removeAssistantUsageForProfile(profileId);
-    assert.ok((await store.readAssistantUsage('new-profile-after-removal')).some(u=>u.materialId===textUsage.materialId&&u.phone===textUsage.phone),'removing the original account retains number history');
+    assert.ok((await store.readAssistantUsage('new-profile-after-removal',undefined,'opensms')).some(u=>u.materialId===textUsage.materialId&&u.phone===textUsage.phone),'removing the original account retains number history');
     await execute(`document.querySelector('.chat-item.active .address-name').textContent='14235551212';true`);
     assert.equal(materialIdentity.assistantUsageMatchesContact(textUsage,'opensms',await target()),false,'same display name with a different number is unused');
     await execute(`document.querySelector('.chat-item.active .address-name').textContent='Unknown';true`);
@@ -332,14 +366,14 @@ if(!process.versions.electron){
     assert.equal((await material({command:'confirmation-status',token:staged.token})).status,'cancelled','missing receiver number prevents untracked use');
     await assert.rejects(store.recordAssistantUse({profileId,platform:'opensms',token:staged.token,contactId:materialScope,contactTitle:'Contact A'}),/手机号/);
 
-    const usageFile=path.join(app.getPath('userData'),'assistant-library','usage.enc');
+    const usageFile=path.join(app.getPath('userData'),'assistant-library','usage-opensms.enc');
     const {safeStorage}=require('electron');
     const usageData=JSON.parse(safeStorage.decryptString(fs.readFileSync(usageFile)));
     const legacy={...textUsage,profileId:'legacy-sms-profile',contactId:'sms:OLD_ACCOUNT:old-row',materialId:`legacy-material-${profileId}`,phone:undefined};
     usageData.records.push(legacy);fs.writeFileSync(usageFile,safeStorage.encryptString(JSON.stringify(usageData)));
-    assert.equal((await store.readAssistantUsage('other-profile')).some(u=>u.materialId===legacy.materialId),false,'unmapped legacy sessions are not guessed');
+    assert.equal((await store.readAssistantUsage('other-profile',undefined,'opensms')).some(u=>u.materialId===legacy.materialId),false,'unmapped legacy sessions are not guessed');
     await store.readAssistantUsage('legacy-sms-profile',{id:legacy.contactId,title:'A remark',phone:'4234631871'});
-    assert.ok((await store.readAssistantUsage('other-profile')).some(u=>u.materialId===legacy.materialId&&u.phone===textUsage.phone),'opening an old session migrates its number association');
+    assert.ok((await store.readAssistantUsage('other-profile',undefined,'opensms')).some(u=>u.materialId===legacy.materialId&&u.phone===textUsage.phone),'opening an old session migrates its number association');
     await fixture();await cmd({action:'enabled',enabled:false});await type('锁屏时禁止发送');await enter();assert.equal((await events()).filter(e=>e.action==='translate').length,0);assert.equal((await execute('window.nativeSends')).length,0);
     // Execute the actual startup preload with an IPC stub; no real SMS traffic.
     await fixture();await execute(`window.__dfOpenSms.dispose();delete window.__dfOpenSms`);

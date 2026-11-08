@@ -1,0 +1,22 @@
+const fs=require('node:fs'),ts=require('typescript'),assert=require('node:assert/strict');
+const source=fs.readFileSync('src/App.vue','utf8');
+const ast=ts.createSourceFile('App.ts',source.slice(source.indexOf('>')+1,source.indexOf('</script>')),ts.ScriptTarget.Latest,true);
+const fn=ast.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='startComposerInstallLoop');
+const code=ts.transpileModule(fn.getText(ast),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+const flush=()=>new Promise(r=>setImmediate(r));
+(async()=>{
+ const calls=[],profile={id:'signal-a',platform:'signal'};let tick,coreError=false,coreResult=true,materialError=true;
+ const states={value:{}},statuses={value:{}};
+ const ctx={composerInstallIntervals:new Map(),profiles:{value:[profile]},getRuntimeScriptExecutor:()=>({execute:async script=>{calls.push(script);if(script==='core'){if(coreError)throw Error('control unavailable');return coreResult;}return true;}}),buildEnterTranslateScript:()=> 'core',buildInjectedComposerScript:()=> 'ui',installAssistantMaterialRuntime:async()=>{calls.push('material');if(materialError)throw Error('Signal operation script is too large');},composerStatus:statuses,composerFeedbackStates:states,setComposerStatus:(id,value)=>statuses.value[id]=value,setComposerFeedbackState:(id,value)=>states.value[id]=value,signalComposerInstallLogged:new Set(),setSignalDiagnosticStatus:(_id,value)=>calls.push(value),runtimeFailureStatus:(error,prefix)=>prefix+error.message,appForPlatform:p=>p,startWebComposerProbe:()=>{},activeProfileId:{value:profile.id},signedIn:{value:true},activePanel:{value:'session'},scheduleSmartReplyUiRefresh:()=>{},scheduleComposerEventPoll:()=>calls.push('poll'),setInterval:fn=>{tick=fn;return 1;}};
+ const start=new Function('ctx',`const {${Object.keys(ctx).join(',')}}=ctx;${code};return startComposerInstallLoop;`)(ctx);
+ start(profile.id);await flush();
+ assert.equal(calls[0],'core','Signal input installs before common UI and materials');
+ assert.ok(calls.includes('material'));assert.ok(calls.includes('poll'));assert.notEqual(states.value[profile.id],'error','optional material failure never disables input');
+ calls.length=0;coreError=true;tick();await flush();
+ assert.equal(states.value[profile.id],'error','core install errors remain visible beneath memory status');assert.ok(statuses.value[profile.id].includes('control unavailable'));
+ assert.ok(!calls.includes('material'),'never report core install success when the control channel fails');
+ calls.length=0;coreError=false;coreResult=false;tick();await flush();assert.equal(states.value[profile.id],'error','a false acknowledgement is not success');
+ coreResult=true;materialError=false;tick();await flush();assert.equal(states.value[profile.id],'','successful retry clears the install error');
+ const interval=ctx.composerInstallIntervals.get(profile.id);start(profile.id);assert.equal(ctx.composerInstallIntervals.get(profile.id),interval,'reopening does not add a second install loop');
+ console.log('signal-composer-install-loop: core installs before materials, auxiliary failure isolation, visible errors, acknowledgement and retry recovery passed');
+})().catch(e=>{console.error(e);process.exitCode=1;});

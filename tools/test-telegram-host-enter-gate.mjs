@@ -19,7 +19,7 @@ assert.doesNotMatch(diagnosticBlock, /preventDefault|webContents\.send|executeJa
 assert.doesNotMatch(main, /telegram:media-caption-enter|telegram:media-caption-state/);
 assert.doesNotMatch(preload, /telegram:media-caption-enter|telegram:media-caption-state/);
 
-assert.match(app, /const telegramPageGuardVersion = '2026-11-05-telegram-input-settings-v61';/);
+assert.match(app, /const telegramPageGuardVersion = '2026-11-07-telegram-unified-input-v62';/);
 assert.match(app, /const beginTelegramEnterTrace = \(event\) => \{/);
 assert.match(app, /window\.__dfTelegramEnterCount = sequence/);
 assert.match(app, /action: 'telegram-enter-debug'/);

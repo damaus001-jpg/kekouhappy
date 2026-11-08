@@ -1,8 +1,8 @@
 {
   "name": "maoyi",
   "productName": "皮卡丘翻译器",
-  "version": "1.16.25",
-  "shortVersionWindows": "1.16.25",
+  "version": "1.16.26",
+  "shortVersionWindows": "1.16.26",
   "private": true,
   "description": "皮卡丘翻译器多账号聊天翻译工作台。",
   "main": "dist-electron/main.js",
@@ -20,6 +20,8 @@
     "test:custom-assistant-runtime": "node tools/test-custom-assistant-runtime.cjs",
     "test:custom-assistant-copy": "node tools/test-custom-assistant-copy.mjs",
     "test:assistant-material": "node tools/run-assistant-material-runtime.cjs",
+    "test:assistant-platform-isolation": "node tools/test-assistant-platform-isolation.cjs",
+    "test:signal-composer-install": "node tools/test-signal-composer-install-loop.cjs",
     "test:opensms": "npm run test:opensms-area-codes && node tools/test-opensms-runtime.cjs",
     "test:apple": "node tools/test-apple-runtime.cjs",
     "test:apple-assistant-store": "node tools/test-apple-assistant-store.cjs",
@@ -65,6 +67,7 @@
     "test:enter-only-send": "node tools/test-enter-only-send.mjs",
     "test:webview-send-guard-preload": "node tools/test-webview-send-guard-preload.mjs",
     "test:webview-send-guard-runtime": "node tools/run-webview-send-guard-runtime.cjs",
+    "test:telegram-space-recovery": "node tools/test-telegram-space-recovery.cjs",
     "test:translation-scan-coalescing": "node tools/test-translation-scan-coalescing.cjs",
     "test:atomic-file-writes": "node tools/test-atomic-file-writes.cjs",
     "test:composer-event-queue": "node tools/test-composer-event-queue.mjs",
@@ -154,7 +157,7 @@
     "wait-on": "^8.0.3"
   },
   "build": {
-    "buildVersion": "1.16.25",
+    "buildVersion": "1.16.26",
     "appId": "com.maoyi.translator",
     "productName": "皮卡丘翻译器",
     "executableName": "maoyi",

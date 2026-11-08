@@ -3,7 +3,7 @@ import { normalizeAssistantPhone } from '../electron/assistant-material-identity
 export function openSmsRuntime(command: any, normalizePhone: typeof normalizeAssistantPhone) {
   const w = window as any;
   if (!['opensms.cc', 'www.opensms.cc'].includes(location.hostname)) return false;
-  const version = '2026-11-06-opensms-sent-integrity-v13';
+  const version = '2026-11-07-opensms-unified-input-v14';
   const startupGuardMarker = '2026-10-16-opensms-v1';
   if (w.__dfOpenSms?.version !== version) {
     w.__dfOpenSms?.dispose();
@@ -336,7 +336,37 @@ export function openSmsRuntime(command: any, normalizePhone: typeof normalizeAss
         state.ready=null;state.pending={signature,input,text,context:draftContext(),requestId:ready.requestId};emit('send',text,ready.requestId);
       }
     };
+    let spaceRun: { input: HTMLElement; signature: string; text: string; count: number } | null = null;
+    let spaceComposing = false;
+    const clearSpaceRun = () => { spaceRun = null; };
+    const onSpaceComposition = (event: Event) => {
+      if (event.target !== editor()) return;
+      spaceComposing = event.type === 'compositionstart'; clearSpaceRun();
+    };
+    const onSpaceInput = (event: Event) => {
+      if (event.target !== editor()) return;
+      const inputEvent = event as InputEvent;
+      if (inputEvent.inputType === 'insertText' && inputEvent.data === ' ') return;
+      // Some editors re-emit input without InputEvent fields.
+      if (!inputEvent.inputType && spaceRun && spaceRun.text === read(editor()).replace(/ /g, '')) return;
+      clearSpaceRun();
+    };
+    const handleSpace = (event: KeyboardEvent) => {
+      const input = editor();
+      if (!input || !(event.target instanceof Node) || !(event.target === input || input.contains(event.target))) { clearSpaceRun(); return false; }
+      if (event.key !== ' ' && event.code !== 'Space') { clearSpaceRun(); return false; }
+      if (spaceComposing || event.isComposing || event.keyCode === 229 || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) { clearSpaceRun(); return true; }
+      if (event.repeat) return true;
+      const text = read(editor()), signature = contact().id + ':' + draftContext();
+      if (!/[\u3400-\u9fff]/.test(text) || directUrl(text)) { clearSpaceRun(); return true; }
+      const normalized = text.replace(/ /g, '');
+      const count = spaceRun?.input === input && spaceRun.signature === signature && spaceRun.text === normalized ? spaceRun.count + 1 : 1;
+      spaceRun = { input, signature, text: normalized, count };
+      if (count >= 2) { stop(event); submit(event); }
+      return true;
+    };
     const onKey=(event:KeyboardEvent)=>{
+      if (handleSpace(event)) return;
       if(event.key!=='Enter')return;
       const input=editor(),target=event.target instanceof Element?event.target:null;
       const targetMatches=!!input&&!!target&&(input===target||input.contains(target));
@@ -350,7 +380,7 @@ export function openSmsRuntime(command: any, normalizePhone: typeof normalizeAss
       if(input instanceof HTMLInputElement){if(event.shiftKey||event.ctrlKey||event.metaKey){trace('modified-enter-ignored');stop(event);return;}trace('submit-input');submit(event);return;}
       if(event.ctrlKey||event.metaKey){trace('modified-enter-blocked');stop(event);hint('请使用 Enter 或设置的 Alt+Enter 发送');return;}
       if(event.shiftKey){trace('shift-enter');if(event.altKey)stop(event);return;}
-      if(sendKey==='alt+enter'&&!event.altKey){trace('waiting-for-alt-enter');return;}
+      if(sendKey==='alt+enter'&&!event.altKey&&!/[\u3400-\u9fff]/.test(text)){trace('waiting-for-alt-enter');return;}
       trace('submit-composer');
       submit(event);
     };
@@ -358,7 +388,7 @@ export function openSmsRuntime(command: any, normalizePhone: typeof normalizeAss
     const onPointer=(event:Event)=>{if(state.sending)return;const button=event.target instanceof Element?event.target.closest('button'):null;if(button&&mainButton().includes(button as HTMLButtonElement))submit(event);};
     const onInput=(event:Event)=>{
       const input=editor();if(state.writing||!input||event.target!==input)return;
-      reset();emit('typing',read(input));hint(/[\u3400-\u9fff]/.test(read(input))?'按发送键先翻译，再次按发送键发送英文':'');
+      reset();emit('typing',read(input));hint(/[\u3400-\u9fff]/.test(read(input))?'按 Enter 或连续两次空格翻译，再按发送键发送英文':'');
     };
     const focus=()=>{const input=editor();if(!input)return false;const id=contact().id;input.focus();return input.isConnected&&editor()===input&&contact().id===id;};
     state.apply=(cmd:any):any=>{
@@ -438,6 +468,9 @@ export function openSmsRuntime(command: any, normalizePhone: typeof normalizeAss
       }
       return false;
     };
+    document.addEventListener('input', onSpaceInput, true);
+    for (const name of ['focusout', 'pointerdown']) document.addEventListener(name, clearSpaceRun, true);
+    for (const name of ['compositionstart', 'compositionend']) document.addEventListener(name, onSpaceComposition, true);
     document.addEventListener('keydown',onKey,true);document.addEventListener('click',onPointer,true);document.addEventListener('input',onInput,true);
     let syncTimer:number|undefined;let decorateTimer:number|undefined;
     const scheduleSync=()=>{if(syncTimer!==undefined)return;syncTimer=window.setTimeout(()=>{syncTimer=undefined;sync(true);},120);};
@@ -456,7 +489,7 @@ export function openSmsRuntime(command: any, normalizePhone: typeof normalizeAss
       }
       if(needsSync)scheduleSync();if(needsDecorate)scheduleDecorate();
     });observer.observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['class','data-id','title']});
-    state.dispose=()=>{observer.disconnect();clearInterval(timer);if(syncTimer!==undefined)clearTimeout(syncTimer);if(decorateTimer!==undefined)clearTimeout(decorateTimer);document.removeEventListener('keydown',onKey,true);document.removeEventListener('click',onPointer,true);document.removeEventListener('input',onInput,true);delete document.documentElement.dataset.dfOpenSmsGuard;};
+    state.dispose=()=>{document.removeEventListener('input', onSpaceInput, true); for (const name of ['focusout', 'pointerdown']) document.removeEventListener(name, clearSpaceRun, true); for (const name of ['compositionstart', 'compositionend']) document.removeEventListener(name, onSpaceComposition, true); observer.disconnect();clearInterval(timer);if(syncTimer!==undefined)clearTimeout(syncTimer);if(decorateTimer!==undefined)clearTimeout(decorateTimer);document.removeEventListener('keydown',onKey,true);document.removeEventListener('click',onPointer,true);document.removeEventListener('input',onInput,true);delete document.documentElement.dataset.dfOpenSmsGuard;};
     state.editor=editor;w.__dfOpenSms=state;
   }
   return w.__dfOpenSms.apply(command);
