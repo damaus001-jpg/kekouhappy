@@ -344,6 +344,7 @@ export type SmartReplySpeaker = 'self' | 'other';
 export type SmartReplyMessage = {
   speaker: SmartReplySpeaker;
   text: string;
+  timestamp?: string;
 };
 
 export type OpenSmsAreaContext = {
@@ -817,6 +818,7 @@ export type ElectronApi = {
   exportDiagnostics: () => Promise<string>;
   probeDiagnostics: () => Promise<{ state: string; elapsedMs: number }>;
   getInitialTheme: () => AppTheme;
+  openWhatsAppNumberFilter: () => Promise<{ opened: boolean }>;
   getClientAuthorizationStatus: () => Promise<ClientAuthorizationStatus>;
   setClientUsername: (username: string) => Promise<ClientAuthorizationResult>;
   activateClientLicense: (licenseCode: string) => Promise<ClientAuthorizationResult>;

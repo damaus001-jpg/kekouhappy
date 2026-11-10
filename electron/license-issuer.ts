@@ -16,6 +16,7 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes, scryptSync, 
 import { dirname, isAbsolute, join, relative, resolve } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { issueLicenseCode, parseLicenseCode, type LicenseSuitePrivateConfig } from './license-core.js';
+import { issueFilterBusinessCode } from './filter-business-license.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const preloadPath = join(__dirname, '../electron/license-issuer-preload.cjs');
@@ -494,6 +495,10 @@ function registerIpc() {
   });
   issuerHandle('issuer:copy-text', (_event, text: string) => {
     clipboard.writeText(issuerText(text, '复制内容', 32 * 1024, true));
+  });
+  issuerHandle('issuer:issue-filter-business', async (_event, machineCode: string) => {
+    const suite = await loadSuite();
+    return issueFilterBusinessCode(suite, issuerText(machineCode, '筛选业务本机码', 4096).trim());
   });
   issuerHandle('issuer:save-license-dat', async (_event, licenseCode: string) => {
     if (!authenticated) throw new Error('请先登录授权程序');

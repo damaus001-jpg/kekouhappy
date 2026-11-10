@@ -6,7 +6,9 @@ const asar = require('@electron/asar');
 const projectRoot = path.resolve(__dirname, '..');
 const workRoot = path.join(projectRoot, '.tmp', 'signal-gpt-context-patch');
 const oldFunctions = 'function d(e,t,n){let r=new Set;for(let n of t){let t=n.messageId.toLowerCase();if(n.conversationId!==e||r.has(t))return[];r.add(t)}let i=f(e,t),a=n??t.at(-1);if(!a||!i.includes(a.messageId))return[];let o=t.findIndex(e=>u(e,a));return o<0?[]:t.slice(Math.max(0,o-8+1),o+1)}function f(e,t){let n=new Set;for(let r of t){let t=r.messageId.toLowerCase();if(r.conversationId!==e||n.has(t))return[];n.add(t)}return t.filter(e=>e.direction===`incoming`).slice(-3).map(e=>e.messageId)}';
-const newFunctions = 'function isCurrentLocalCalendarDay(e){let t=new Date(e),n=new Date;return Number.isFinite(t.getTime())&&t.getFullYear()===n.getFullYear()&&t.getMonth()===n.getMonth()&&t.getDate()===n.getDate()}function d(e,t,n){let r=new Set;for(let n of t){let t=n.messageId.toLowerCase();if(n.conversationId!==e||r.has(t))return[];r.add(t)}let i=f(e,t),a=n??t.at(-1);if(!a||!i.includes(a.messageId))return[];let o=t.findIndex(e=>u(e,a));return o<0?[]:t.slice(0,o+1).filter(e=>isCurrentLocalCalendarDay(e.timestamp)).slice(-18)}function f(e,t){let n=new Set;for(let r of t){let t=r.messageId.toLowerCase();if(r.conversationId!==e||n.has(t))return[];n.add(t)}return t.filter(e=>e.direction===`incoming`&&isCurrentLocalCalendarDay(e.timestamp)).slice(-3).map(e=>e.messageId)}';
+const previousFunctions = 'function isCurrentLocalCalendarDay(e){let t=new Date(e),n=new Date;return Number.isFinite(t.getTime())&&t.getFullYear()===n.getFullYear()&&t.getMonth()===n.getMonth()&&t.getDate()===n.getDate()}function d(e,t,n){let r=new Set;for(let n of t){let t=n.messageId.toLowerCase();if(n.conversationId!==e||r.has(t))return[];r.add(t)}let i=f(e,t),a=n??t.at(-1);if(!a||!i.includes(a.messageId))return[];let o=t.findIndex(e=>u(e,a));return o<0?[]:t.slice(0,o+1).filter(e=>isCurrentLocalCalendarDay(e.timestamp)).slice(-18)}function f(e,t){let n=new Set;for(let r of t){let t=r.messageId.toLowerCase();if(r.conversationId!==e||n.has(t))return[];n.add(t)}return t.filter(e=>e.direction===`incoming`&&isCurrentLocalCalendarDay(e.timestamp)).slice(-3).map(e=>e.messageId)}';
+
+const newFunctions = "function isGptEnglishMessage(e){return(e.direction===`incoming`||e.direction===`outgoing`)&&typeof e.sourceText===`string`&&e.sourceText.trim().length>0&&e.sourceText.length<=4000&&/[A-Za-z]{2,}/.test(e.sourceText)&&!/[\\u3400-\\u9fff]/.test(e.sourceText)}function d(e,t,n){let r=new Set;for(let n of t){let t=n.messageId.toLowerCase();if(n.conversationId!==e||r.has(t))return[];r.add(t)}let i=f(e,t),a=n??t.at(-1);if(!a||!i.includes(a.messageId))return[];let o=t.findIndex(e=>u(e,a));return o<0?[]:t.slice(0,o+1).filter(isGptEnglishMessage).slice(-18)}function f(e,t){let n=new Set;for(let r of t){let t=r.messageId.toLowerCase();if(r.conversationId!==e||n.has(t))return[];n.add(t)}return t.filter(e=>e.direction===`incoming`&&isGptEnglishMessage(e)).slice(-3).map(e=>e.messageId)}";
 
 function patchSmartReplyRequestLimit(source) {
   const start = source.indexOf('case`smartReply.request`:');
@@ -66,8 +68,9 @@ async function patchSignalGptContext(archivePath) {
   const bridgePath = path.join(chunks, candidates[0]);
   const source = await fs.readFile(bridgePath, 'utf8');
   const contextPatched = source.includes(newFunctions);
-  const firstIndex = source.indexOf(oldFunctions);
-  if (!contextPatched && (firstIndex < 0 || source.indexOf(oldFunctions, firstIndex + oldFunctions.length) >= 0)) {
+  const originalFunctions = source.includes(previousFunctions) ? previousFunctions : oldFunctions;
+  const firstIndex = source.indexOf(originalFunctions);
+  if (!contextPatched && (firstIndex < 0 || source.indexOf(originalFunctions, firstIndex + originalFunctions.length) >= 0)) {
     throw new Error('Signal message bridge context selector does not match the expected 8-message source.');
   }
   const requestCandidates = (await fs.readdir(chunks)).filter(name => /^messageBridge\.main-.+\.js$/.test(name));
@@ -76,7 +79,7 @@ async function patchSignalGptContext(archivePath) {
   const requestSource = await fs.readFile(requestPath, 'utf8');
   const patchedRequestSource = patchSmartReplyRequestLimit(requestSource);
   if (contextPatched && requestSource === patchedRequestSource) {
-    console.log('Signal GPT context and request parser already support up to 18 messages today.');
+    console.log('Signal GPT context and request parser already support up to 18 English messages across dates.');
     return false;
   }
   const oldHeaderHash = asarHeaderHash(targetArchive);
@@ -88,7 +91,7 @@ async function patchSignalGptContext(archivePath) {
       throw new Error('Signal.exe and app.asar were already out of sync before the GPT context patch.');
     }
   }
-  if (!contextPatched) await fs.writeFile(bridgePath, source.replace(oldFunctions, newFunctions), 'utf8');
+  if (!contextPatched) await fs.writeFile(bridgePath, source.replace(originalFunctions, newFunctions), 'utf8');
   await fs.writeFile(requestPath, patchedRequestSource, 'utf8');
   await asar.createPackageWithOptions(extracted, packed, {
     unpack: '*.node',
@@ -132,4 +135,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { patchSignalGptContext, patchSmartReplyRequestLimit, oldFunctions, newFunctions, asarHeaderHash };
+module.exports = { patchSignalGptContext, patchSmartReplyRequestLimit, oldFunctions, previousFunctions, newFunctions, asarHeaderHash };

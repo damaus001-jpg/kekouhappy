@@ -13,6 +13,7 @@ module.exports = {
   files: [
     'dist-electron/license-issuer.js',
     'dist-electron/license-core.js',
+    'dist-electron/filter-business-license.js',
     'dist-electron/issuer-suite-key.json',
     'license-issuer/**/*',
     'electron/license-issuer-preload.cjs',

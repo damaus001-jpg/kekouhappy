@@ -1,7 +1,7 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"><title>Whatsapp号码筛选</title><link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="compact.css"></head>
+<html lang="zh-CN" data-theme="blackGold"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"><title>WhatsApp 号码筛选</title><link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="compact.css"><link rel="stylesheet" href="themes.css"></head>
 <body>
-<header><div class="brand-mark">W<span>✓</span></div><strong>Whatsapp号码筛选</strong><span class="version">0.0.1</span><span class="header-note">TXT 导入 · 快速筛选 · TXT 导出</span></header>
+<header><img class="pikachu-brand" src="brand.png" alt="皮卡丘"><strong>WhatsApp 号码筛选</strong><span class="version">0.0.1</span><button id="authorization-open" class="authorization-chip" type="button">导出试用 3 / 3 · 业务授权</button><div class="pikachu-window-actions"><button id="window-minimize" type="button" title="最小化" aria-label="最小化"><span class="control-minimize" aria-hidden="true"></span></button><button id="window-maximize" type="button" title="最大化" aria-label="最大化"><span class="control-maximize" aria-hidden="true"></span></button><button id="window-close" type="button" title="关闭" aria-label="关闭"><span class="control-close" aria-hidden="true"></span></button></div></header>
 <main><section class="browser-placeholder"><p>正在加载 WhatsApp…</p></section><aside>
 <div class="connection"><span id="status-dot" class="dot"></span><span id="connection">等待扫码登录</span><button id="refresh" class="text-button">刷新页面</button></div>
 <div class="account-note"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2.5 20h19L12 3Z" fill="currentColor"/><path d="M12 8v6m0 3v.2" fill="none" stroke="white" stroke-width="2" stroke-linecap="round"/></svg><p>请勿使用正在用的业务Whatsapp，请单独注册一个专门用于筛选，防止封号导致客户丢失。</p></div>
@@ -14,4 +14,15 @@
 <section class="status-area"><div id="message" class="message" role="status">请先扫码登录 WhatsApp。</div><div id="error" class="error" role="alert" hidden></div></section>
 <div class="export-actions"><button id="export" class="primary" disabled>导出 TXT 结果</button><button id="show-export" class="text-button" hidden>打开结果文件夹</button></div>
 <p class="footer-note">导出 4 份 TXT：已注册、未注册、未确认及统计。</p>
-</aside></main><script src="renderer.js"></script></body></html>
+</aside></main>
+<dialog id="business-auth-dialog" aria-labelledby="business-auth-title">
+ <div class="auth-heading"><h2 id="business-auth-title">WhatsApp 筛选业务授权</h2><button id="authorization-close" type="button" aria-label="关闭">×</button></div>
+ <p id="authorization-trials" class="note"></p>
+ <p class="note">将业务本机码交给授权方，在对应套装授权程序中生成 4 位业务授权码。</p>
+ <label>业务本机码<textarea id="business-machine-code" rows="3" readonly></textarea></label>
+ <button id="copy-machine-code" type="button" class="secondary">复制本机码</button>
+ <label>4 位业务授权码<input id="business-code" inputmode="numeric" maxlength="4" autocomplete="off" placeholder="请输入 4 位数字"></label>
+ <p id="authorization-error" class="error" hidden></p>
+ <button id="activate-business" type="button" class="primary">激活筛选业务</button>
+</dialog>
+<script src="renderer.js"></script></body></html>

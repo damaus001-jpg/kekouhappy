@@ -21,6 +21,32 @@ export type SmartReplyUiInstallResult = {
   conversationSignature: string;
 };
 
+// Keep platform time labels intact when their date or timezone is ambiguous.
+export function readGptMessageTimestamp(bubble: Element): string {
+  const clean = (value: string | null | undefined) => String(value || '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 256);
+  const prePlain = bubble.matches('[data-pre-plain-text]') ? bubble : bubble.querySelector('[data-pre-plain-text]');
+  const bracket = prePlain?.getAttribute('data-pre-plain-text')?.match(/\[([^\]]+)\]/)?.[1];
+  if (bracket) return clean(bracket);
+  const nodes = [bubble, ...Array.from(bubble.querySelectorAll('time, [datetime], [data-timestamp], .time, .time-inner, .message-time, .MessageMeta'))];
+  for (const attribute of ['datetime', 'data-timestamp', 'title']) {
+    for (const node of nodes) {
+      // A bubble's title may be message text; only time nodes provide titles.
+      if (attribute === 'title' && node === bubble) continue;
+      const value = clean(node.getAttribute(attribute));
+      if (!value) continue;
+      if (/^\d{10}(?:\d{3})?$/.test(value)) {
+        const date = new Date(Number(value) * (value.length === 10 ? 1000 : 1));
+        if (Number.isFinite(date.getTime())) return date.toISOString();
+      }
+      return value;
+    }
+  }
+  const time = clean(bubble.querySelector('time, .time-inner, .message-time, .time')?.textContent);
+  const group = bubble.closest('[data-date], .date-group, .message-date-group');
+  const day = clean(group?.getAttribute('data-date') || group?.querySelector('.date, .date-header')?.textContent);
+  return clean([day, time].filter(Boolean).join(' '));
+}
+
 export function buildSmartReplyUiInstallScript(app: WorkspaceApp) {
   const platform = JSON.stringify(app);
   return `
@@ -32,47 +58,7 @@ export function buildSmartReplyUiInstallScript(app: WorkspaceApp) {
   const smartConversationSignature = () => normalize(window.__dfConversationSignature || '').split('::')[0].slice(0, 360);
   const hasEnglish = (value) => /[A-Za-z]{2,}/.test(value || '');
   const hasChinese = (value) => /[\\u4e00-\\u9fff]/.test(value || '');
-  const currentDayKey = (() => {
-    const now = new Date();
-    return [now.getFullYear(), String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0')].join('-');
-  })();
-  const dateKey = (value) => {
-    const text = normalize(value);
-    if (!text) return '';
-    const iso = text.match(/(?:^|\\D)(\\d{4})[-/.年](\\d{1,2})[-/.月](\\d{1,2})(?:日|\\b|(?=T|\\s|$))/);
-    if (iso) {
-      const year = Number(iso[1]), month = Number(iso[2]), day = Number(iso[3]);
-      const date = new Date(year, month - 1, day);
-      if (date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day) {
-        return [year, String(month).padStart(2, '0'), String(day).padStart(2, '0')].join('-');
-      }
-    }
-    const us = text.match(/(?:^|\\D)(\\d{1,2})[/.](\\d{1,2})[/.](\\d{2,4})(?:\\D|$)/);
-    if (us) {
-      const year = Number(us[3]) < 100 ? 2000 + Number(us[3]) : Number(us[3]);
-      const month = Number(us[1]), day = Number(us[2]);
-      const date = new Date(year, month - 1, day);
-      if (date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day) {
-        return [year, String(month).padStart(2, '0'), String(day).padStart(2, '0')].join('-');
-      }
-    }
-    const parsed = new Date(text);
-    if (Number.isNaN(parsed.getTime())) return '';
-    return [parsed.getFullYear(), String(parsed.getMonth() + 1).padStart(2, '0'), String(parsed.getDate()).padStart(2, '0')].join('-');
-  };
-  const bubbleDayKey = (bubble) => {
-    const prePlain = bubble.querySelector?.('[data-pre-plain-text]')?.getAttribute?.('data-pre-plain-text') || '';
-    const bracketDate = prePlain.match(/\\[([^\\]]+)\\]/)?.[1] || '';
-    const candidates = [bracketDate];
-    for (const node of Array.from(bubble.querySelectorAll?.('time[datetime], [data-timestamp], [datetime], .time[title], [class*="time"][title]') || [])) {
-      candidates.push(node.getAttribute?.('datetime') || node.getAttribute?.('data-timestamp') || node.getAttribute?.('title') || '');
-    }
-    for (const candidate of candidates) {
-      const day = dateKey(candidate);
-      if (day) return day;
-    }
-    return '';
-  };
+  const bubbleTimestamp = (${readGptMessageTimestamp.toString()});
   const isRendered = (element) => {
     const style = window.getComputedStyle(element);
     const rect = element.getBoundingClientRect();
@@ -256,9 +242,9 @@ export function buildSmartReplyUiInstallScript(app: WorkspaceApp) {
       text,
       direction: exactDirection(bubble),
       key: bubbleKey(bubble, text),
-      dayKey: bubbleDayKey(bubble)
+      timestamp: bubbleTimestamp(bubble)
     };
-  }).filter((row) => row.dayKey === currentDayKey);
+  });
   const removeAll = () => {
     for (const node of Array.from(document.querySelectorAll(uiSelector))) node.remove();
   };
@@ -288,7 +274,7 @@ export function buildSmartReplyUiInstallScript(app: WorkspaceApp) {
     const context = contextRows.map((row, index) => ({
       seq: index + 1,
       speaker: row.direction === 'incoming' ? 'other' : 'self',
-      text: row.text
+      text: row.text, timestamp: row.timestamp
     }));
     let totalLength = context.reduce((sum, item) => sum + item.text.length, 0);
     while (context.length > 1 && totalLength > 72_000) {
@@ -333,7 +319,7 @@ export function buildSmartReplyUiInstallScript(app: WorkspaceApp) {
       button.style.opacity = '.82';
     }
     button.title = contextReady
-      ? '以此气泡为终点，向上读取当天最多 18 条英文气泡'
+      ? '以此气泡为终点，不限日期，向上读取最多 18 条有效英文气泡（含双方消息和时间）'
       : '这条对方消息没有可用的英文上下文';
     if (button.dataset.dfSmartReplyBound !== anchor.key) {
       button.dataset.dfSmartReplyBound = anchor.key;
@@ -341,11 +327,11 @@ export function buildSmartReplyUiInstallScript(app: WorkspaceApp) {
         event.preventDefault();
         event.stopPropagation();
         event.stopImmediatePropagation();
-        if (button.disabled) return;
+        if (button.disabled || !anchor.bubble.isConnected || smartConversationSignature() !== conversationSignature) return;
         const liveRows = uniqueBubbles.map((bubble) => {
           const liveText = extractText(bubble);
-          return { bubble, text: liveText, direction: exactDirection(bubble), key: bubbleKey(bubble, liveText), dayKey: bubbleDayKey(bubble) };
-        }).filter((row) => row.dayKey === currentDayKey);
+          return { bubble, text: liveText, direction: exactDirection(bubble), key: bubbleKey(bubble, liveText), timestamp: bubbleTimestamp(bubble) };
+        });
         const liveAnchorIndex = liveRows.findIndex((row) => row.key === anchor.key);
         const liveAnchor = liveRows[liveAnchorIndex];
         const liveEligible = liveRows.filter((row) => row.direction === 'incoming').slice(-3);
@@ -356,7 +342,7 @@ export function buildSmartReplyUiInstallScript(app: WorkspaceApp) {
         ).slice(-18).map((row, index) => ({
           seq: index + 1,
           speaker: row.direction === 'incoming' ? 'other' : 'self',
-          text: row.text
+          text: row.text, timestamp: row.timestamp
         }));
         let liveTotal = liveContext.reduce((sum, item) => sum + item.text.length, 0);
         while (liveContext.length > 1 && liveTotal > 72_000) {

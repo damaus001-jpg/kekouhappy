@@ -51,7 +51,8 @@ if (!process.versions.electron) {
       assert.equal(payload.messages.length, 18);
       assert.equal(payload.messages[0].text, 'Message 9, how was your day?');
       assert.equal(payload.messages.at(-1).speaker, 'other');
-      const request = { messages:payload.messages.map(({speaker,text})=>({speaker,text})), latestSpeaker:'other',replyCount:3,outputLanguage:'en-US',allowSensitiveEcho:false };
+      assert.ok(payload.messages.every(message=>message.timestamp.includes('10:00')), 'each bubble carries its platform timestamp');
+      const request = { messages:payload.messages.map(({speaker,text,timestamp})=>({speaker,text,timestamp})), latestSpeaker:'other',replyCount:3,outputLanguage:'en-US',allowSensitiveEcho:false };
       let copied = '', opened = false;
       await handoffChatToGpt(request, {
         writeClipboard(value) {copied=value;},
@@ -74,9 +75,20 @@ if (!process.versions.electron) {
       assert.equal((await execute(web.buildSmartReplyUiInstallScript(platform))).state,'eligible');
       await execute(`(() => {const b=Array.from(document.querySelectorAll('.df-smart-reply-button')).at(-1);b.dispatchEvent(new Event('pointerdown',{bubbles:true}));b.click();return true;})()`);
       const fewerPayload=JSON.parse((await execute('window.__dfTranslatorQueue[0].text')));
-      assert.equal(fewerPayload.messages.length,9,'fewer than eighteen messages today includes all of today');
-      assert.equal(fewerPayload.messages[0].text,'Recent 4, how was your day?');
+      assert.equal(fewerPayload.messages.length,12,'fewer than eighteen includes previous dates');
+      assert.equal(fewerPayload.messages[0].text,'Recent 1, how was your day?');
+      assert.ok(fewerPayload.messages[0].timestamp.includes(dayOffset(-1)));
+      await execute(web.buildSmartReplyUiStateScript({latestMessageKey:fewerPayload.latestMessageKey,conversationSignature:'test-contact-fewer',state:'idle'}));
+      await execute(`window.__dfTranslatorQueue=[];Array.from(document.querySelectorAll('.df-smart-reply-button'))[0].click();true`);
+      const middle=JSON.parse(await execute('window.__dfTranslatorQueue[0].text'));
+      assert.equal(middle.messages.at(-1).text,'Recent 8, how was your day?','clicked earlier anchor excludes later messages');
+      assert.equal(middle.messages.length,8);
     }
+    await execute(`document.body.innerHTML='<div id="epoch" data-timestamp="1794250800"></div><div id="unknown"><span>Hello there</span></div><div id="clock"><span class="time">10:15 AM</span></div>';true`);
+    const timeReader = web.readGptMessageTimestamp.toString();
+    assert.equal(await execute(`(${timeReader})(document.querySelector('#epoch'))`),new Date(1794250800000).toISOString(),'epoch seconds become an unambiguous ISO timestamp');
+    assert.equal(await execute(`(${timeReader})(document.querySelector('#unknown'))`),'','missing times stay unknown');
+    assert.equal(await execute(`(${timeReader})(document.querySelector('#clock'))`),'10:15 AM','clock-only labels never acquire an invented date');
     // Native bubble hit testing must survive the large-to-compact layout transition.
     const asar = require('@electron/asar');
     const signalArchive = path.join(root,'.package-staging/signal/resources/app.asar');
@@ -123,7 +135,7 @@ if (!process.versions.electron) {
     await execute(`new Promise(resolve=>requestAnimationFrame(()=>{document.querySelector('.sensitive-dialog-mask').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));resolve(true);}))`);
     assert.equal(await execute(`window.dialogTest.responses.at(-1)`),1,'Escape keeps copied text and cancels browser prompt');
     win.destroy();
-    console.log('gpt-handoff-runtime: web clicks, latest-18-today messages, role labels, instruction, cancel, Signal label lifecycle, actual Vue dialog in four themes and Escape passed; system clipboard and browser untouched');
+    console.log('gpt-handoff-runtime: cross-date latest-18 context, clicked anchor cutoff, timestamps/unknown/epoch, roles, instruction, cancel, Signal labels and four-theme Vue dialog passed; system clipboard and browser untouched');
     clearTimeout(timer);
     app.exit(0);
   }).catch(error => {console.error(error);clearTimeout(timer);app.exit(1);});

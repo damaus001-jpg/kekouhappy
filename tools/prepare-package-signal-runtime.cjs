@@ -115,8 +115,8 @@ async function main() {
   const stagedProjection = stagedProjectionEntry
     ? Buffer.from(await asar.extractFile(stagedAsar, stagedProjectionEntry.replace(/^[/\\]/, ''))).toString('utf8')
     : '';
-  if (!stagedProjection.includes('isCurrentLocalCalendarDay') || !stagedProjection.includes('.slice(-18)')) {
-    throw new Error('Staged Signal GPT context is missing the current-day 18-message selector.');
+  if (!stagedProjection.includes('isGptEnglishMessage') || !stagedProjection.includes('.slice(-18)')) {
+    throw new Error('Staged Signal GPT context is missing the cross-date 18-message English selector.');
   }
   const stagedBridge = asar.extractFile(stagedAsar, bridgeEntry.replace(/^[/\\]/, '')).toString('utf8');
   const { patchSmartReplyRequestLimit } = require('./patch-signal-gpt-context.cjs');

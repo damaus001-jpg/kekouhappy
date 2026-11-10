@@ -291,7 +291,8 @@ if(!process.versions.electron){
     assert.match(buildGptClipboardText({platform:'opensms',messages:transcript.messages,openSmsAreaContext:transcript.openSmsAreaContext,latestSpeaker:'other',replyCount:3,outputLanguage:'en-US',allowSensitiveEcho:false}),/当前识别对方区号是423，位于田纳西州，代表城市是查塔努加/);
     assert.match(buildGptClipboardText({platform:'opensms',messages:transcript.messages,openSmsAreaContext:transcript.openSmsAreaContext,latestSpeaker:'other',replyCount:3,outputLanguage:'en-US',allowSensitiveEcho:false}),/必须先核对聊天记录是否与该地区一致/);
     await fixture(13,3);await execute(`document.querySelector('#m-12 .df-smart-reply-host').click()`);
-    const fewer=(await events()).find(e=>e.action==='smart-reply-request');assert.ok(fewer);assert.equal(JSON.parse(fewer.text).messages.length,10,'fewer than eighteen messages today includes all of today');
+    const fewer=(await events()).find(e=>e.action==='smart-reply-request');assert.ok(fewer);assert.equal(JSON.parse(fewer.text).messages.length,13,'fewer than eighteen includes previous dates');
+    assert.ok(JSON.parse(fewer.text).messages[0].timestamp.includes(dayOffset(-1)),'previous-date timestamps survive');
     await fixture();await type('你好，最近怎么样');assert.equal(await enter(),true);
     let enterEvents=await events();let request=enterEvents.find(e=>e.action==='translate');assert.ok(request);assert.equal(JSON.parse(enterEvents.find(e=>e.action==='debug').text).decision,'submit-composer');assert.equal((await execute('window.nativeSends')).length,0);
     await enter();assert.equal((await events()).filter(e=>e.action==='translate').length,0,'pending translation cannot repeat');

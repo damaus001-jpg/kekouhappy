@@ -5,6 +5,19 @@ const asar = require('@electron/asar');
 const { asarHeaderHash, patchSignalGptContext, oldFunctions } = require('./patch-signal-gpt-context.cjs');
 
 async function main() {
+  const {newFunctions}=require('./patch-signal-gpt-context.cjs');
+  const {select,anchors}=new Function('u',newFunctions+';return {select:d,anchors:f};')((a,b)=>a===b);
+  const messages=Array.from({length:26},(_,i)=>({messageId:String(i),conversationId:'chat',direction:i%2?'incoming':'outgoing',sourceText:i===20?'中文消息':'English bubble '+i,timestamp:Date.parse(i<20?'2026-11-08T23:55:00-08:00':'2026-11-09T00:15:00-08:00')}));
+  const context=select('chat',messages,messages[21]);
+  assert.equal(context.length,18);
+  assert.equal(context[0].sourceText,'English bubble 3');
+  assert.equal(context.at(-1).sourceText,'English bubble 21');
+  assert.deepEqual(anchors('chat',messages),['21','23','25']);
+  assert.ok(context.some(m=>m.direction==='outgoing'));
+  assert.equal(context[0].timestamp,messages[3].timestamp);
+  assert.equal(select('other-chat',messages,messages[21]).length,0);
+  assert.equal(select('chat',[...messages,messages[0]],messages[21]).length,0,'duplicate IDs fail closed');
+  assert.equal(select('chat',messages,messages[19]).length,0,'stale anchor is rejected');
   const root = path.resolve('.tmp/test-signal-gpt-context-integrity');
   const signalRoot = path.join(root, 'signal');
   const archive = path.join(signalRoot, 'resources', 'app.asar');
@@ -33,7 +46,7 @@ async function main() {
   assert.equal(await patchSignalGptContext(archive), false, 'patching both chunks is idempotent');
 
   // Upgrade an archive produced by the older context-only patch as well.
-  await fs.writeFile(bridge, require('./patch-signal-gpt-context.cjs').newFunctions);
+  await fs.writeFile(bridge, require('./patch-signal-gpt-context.cjs').previousFunctions);
   await asar.createPackage(sourceRoot, archive);
   await fs.writeFile(executable, Buffer.from(asarHeaderHash(archive), 'utf8'));
   assert.equal(await patchSignalGptContext(archive), true);

@@ -1,0 +1,37 @@
+const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto'),assert=require('node:assert/strict');
+const asar=require('@electron/asar');
+const {getCurrentFuseWire,FuseV1Options:F,FuseState}=require('@electron/fuses');
+async function main(){
+ const root=path.resolve(__dirname,'..'),output=path.join(root,'release/1.16.26-complete-upgrade'),resources=path.join(output,'win-unpacked/resources');
+ const archive=path.join(resources,'app.asar'),filterArchive=path.join(resources,'whatsapp-filter/resources/app.asar');
+ const extract=(archive,entry)=>asar.extractFile(archive,path.normalize(entry));
+ const metadata=JSON.parse(extract(archive,'package.json'));assert.equal(metadata.version,'1.16.26');
+ const suite=JSON.parse(fs.readFileSync(path.join(resources,'license-suite-public.json'),'utf8'));
+ const oldSuite=JSON.parse(fs.readFileSync('D:/fanyiqi/maoyi/resources/license-suite-public.json','utf8'));
+ for(const field of ['suiteId','keyId','publicKeyPem'])assert.equal(suite[field],oldSuite[field],'keep the installed delivery suite');
+ assert.equal(suite.suiteId,'572987197');
+ assert.ok(extract(archive,'dist-electron/main.js').equals(fs.readFileSync(path.join(root,'dist-electron/main.js'))));
+ const scripts=asar.listPackage(archive).map(name=>name.replaceAll('\\','/')).filter(name=>/^\/dist\/assets\/index-[^/]+\.js$/.test(name));assert.equal(scripts.length,1);
+ const frontend=extract(archive,scripts[0].slice(1)).toString();
+ assert.ok(frontend.includes('让私域生意，走向世界')&&frontend.includes('runtime-drag-label')&&frontend.includes('filter-app-menu'));
+ assert.ok(Buffer.from(frontend).equals(fs.readFileSync(path.join(root,scripts[0].slice(1)))));
+ const filterIdentity=JSON.parse(extract(filterArchive,'filter-license-public.json'));
+ assert.equal(filterIdentity.suiteId,suite.suiteId);assert.equal(filterIdentity.keyId,suite.keyId);
+ assert.deepEqual(Object.keys(filterIdentity).sort(),['encryptionPublicKey','keyId','suiteId']);
+ const expected=['package.json','main.cjs','preload.cjs','data.cjs','permissions.cjs','launcher-bridge.cjs','business-access.cjs','business-crypto.cjs','filter-license-public.json','page.cjs','index.html','styles.css','compact.css','themes.css','brand.png','renderer.js','icon.ico'];
+ const entries=asar.listPackage(filterArchive).map(name=>name.replaceAll('\\','/').replace(/^\//,''));assert.deepEqual(entries.sort(),expected.sort());
+ for(const file of expected)assert.ok(extract(filterArchive,file).equals(fs.readFileSync(path.join(root,'.package-staging/whatsapp-number-filter/app',file))),'matching packaged filter '+file);
+ const filterMain=extract(filterArchive,'main.cjs').toString();assert.ok(filterMain.includes("titleBarStyle:'hidden'")&&filterMain.includes("type:'ready',visible"));
+ const filterExe=path.join(resources,'whatsapp-filter/whatsapp-number-filter.exe'),fuses=await getCurrentFuseWire(filterExe);
+ for(const [key,value]of [[F.RunAsNode,FuseState.DISABLE],[F.EnableNodeOptionsEnvironmentVariable,FuseState.DISABLE],[F.EnableEmbeddedAsarIntegrityValidation,FuseState.ENABLE],[F.OnlyLoadAppFromAsar,FuseState.ENABLE]])assert.equal(fuses[key],value);
+ const dataReport=JSON.parse(fs.readFileSync(path.join(root,'.tmp/upgrade-data-copy-iYVskJ/verification.json'),'utf8'));
+ assert.equal(dataReport.newArchiveSha256,crypto.createHash('sha256').update(fs.readFileSync(archive)).digest('hex'),'data compatibility report must belong to this exact package');
+ const nsisReport=JSON.parse(fs.readFileSync(path.join(root,'.tmp/nsis-upgrade-qa-ZW4Mrh/verification.json'),'utf8'));
+ const files=['pikaqiufanyiqi-1.16.26-Setup.exe','win-unpacked/resources/app.asar','win-unpacked/resources/whatsapp-filter/resources/app.asar'];
+ const artifacts=files.map(file=>{const target=path.join(output,file);return{file,bytes:fs.statSync(target).size,sha256:crypto.createHash('sha256').update(fs.readFileSync(target)).digest('hex').toUpperCase()};});
+ const report={version:'1.16.26',buildId:'2026-11-09-complete-upgrade',suiteId:suite.suiteId,verifiedAt:new Date().toISOString(),checks:{packagedSecurityAndStartup:true,allCurrentFrontendAndFilterFiles:true,independentFilterSameSuite:true,framelessVisibleFilter:true,filterFuses:true},upgradeDataCopy:dataReport,sameVersionNsisQa:nsisReport,limitations:['Original production AppID installer was not executed on the host; no Windows sandbox was available.','Live platform accounts were not opened; session file preservation was verified.'],artifacts};
+ fs.writeFileSync(path.join(output,'verification.json'),JSON.stringify(report,null,2)+'\n');
+ fs.writeFileSync(path.join(output,'upgrade-verification.json'),JSON.stringify({dataCopy:dataReport,nsisQa:nsisReport,limitations:report.limitations},null,2)+'\n');
+ console.log(JSON.stringify({version:report.version,buildId:report.buildId,suiteId:report.suiteId,artifacts},null,2));
+}
+main().catch(error=>{console.error(error);process.exitCode=1;});

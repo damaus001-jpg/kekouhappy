@@ -10,7 +10,16 @@ const request = {
 };
 const text = buildGptClipboardText(request);
 const transcript = JSON.parse(text.slice(0, text.indexOf('\n\n')));
-assert.deepEqual(transcript.messages, request.messages);
+assert.deepEqual(transcript.messages, request.messages.map(message => ({...message, timestamp:null})));
+const timed = buildGptClipboardText({...request, platform:'apple', messages:[
+  {speaker:'self',text:'Are you still there?',timestamp:'2026-11-08T23:58:00-08:00'},
+  {speaker:'other',text:'Yes, just got home',timestamp:'2026-11-09T00:18:00-08:00'}
+]});
+assert.equal(JSON.parse(timed.split('\n\n')[0]).messages[1].timestamp, '2026-11-09T00:18:00-08:00');
+assert.match(timed, /不要把缺失日期当成今天/);
+for (const timestamp of [{}, 123, 'bad\ntime', 'x'.repeat(257)]) {
+  assert.throws(() => buildGptClipboardText({...request,messages:[{speaker:'other',text:'Hello there',timestamp}]}), /timestamp/);
+}
 assert.equal(transcript.schema_version, 'df.smart_reply.input.v1');
 assert.equal(transcript.latest_speaker, 'other');
 assert.equal(transcript.reply_count, 3);
@@ -20,7 +29,7 @@ assert.ok(text.includes('self 表示我方，other 表示对方'));
 assert.ok(text.endsWith('\n\n请结合以上聊天记录，翻译对方的最后几句话并揣摩其中的意思向我用中文表达清楚。并在记忆功能可用时参考你在 ChatGPT 个性化设置中保存的记忆，为我方生成三组自然、符合上下文的美式英文回复。每组附上忠实、简洁的中文释义。不要编造聊天记录中没有的信息，回复长度和语气要适合当前对话。'));
 assert.equal(gptReplyInstruction, '请结合以上聊天记录，翻译对方的最后几句话并揣摩其中的意思向我用中文表达清楚。并在记忆功能可用时参考你在 ChatGPT 个性化设置中保存的记忆，为我方生成三组自然、符合上下文的美式英文回复。每组附上忠实、简洁的中文释义。不要编造聊天记录中没有的信息，回复长度和语气要适合当前对话。');
 
-for (const platform of ['whatsapp', 'telegram-a', 'telegram-k', 'signal', 'opensms']) {
+for (const platform of ['whatsapp', 'telegram-a', 'telegram-k', 'signal', 'opensms', 'apple']) {
   const events = [];
   await handoffChatToGpt({...request, platform}, {
     writeClipboard(value) { events.push(['clipboard', value]); },

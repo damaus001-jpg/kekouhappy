@@ -10,7 +10,7 @@ module.exports={
   electronVersion:'43.1.0',
   electronDist:path.join(root,'node_modules/electron/dist'),
   directories:{app:path.join(root,'.package-staging/whatsapp-number-filter/app'),output:process.env.WNF_BUILD_OUTPUT?path.resolve(process.env.WNF_BUILD_OUTPUT):path.join(root,'release/whatsapp-number-filter/0.0.1')},
-  files:['package.json','main.cjs','preload.cjs','data.cjs','permissions.cjs','page.cjs','index.html','styles.css','compact.css','renderer.js','icon.ico','!node_modules{,/**/*}'],
+  files:['package.json','main.cjs','preload.cjs','data.cjs','permissions.cjs','launcher-bridge.cjs','business-access.cjs','business-crypto.cjs','filter-license-public.json','page.cjs','index.html','styles.css','compact.css','themes.css','brand.png','renderer.js','icon.ico','!node_modules{,/**/*}'],
   afterPack:async context=>{
     const {flipFuses,FuseVersion,FuseV1Options:F}=require('@electron/fuses');
     await flipFuses(path.join(context.appOutDir,'whatsapp-number-filter.exe'),{version:FuseVersion.V1,strictlyRequireAllFuses:true,[F.RunAsNode]:false,[F.EnableCookieEncryption]:true,[F.EnableNodeOptionsEnvironmentVariable]:false,[F.EnableNodeCliInspectArguments]:false,[F.EnableEmbeddedAsarIntegrityValidation]:true,[F.OnlyLoadAppFromAsar]:true,[F.LoadBrowserProcessSpecificV8Snapshot]:false,[F.GrantFileProtocolExtraPrivileges]:false,[F.WasmTrapHandlers]:true});

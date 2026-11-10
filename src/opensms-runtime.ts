@@ -3,7 +3,7 @@ import { normalizeAssistantPhone } from '../electron/assistant-material-identity
 export function openSmsRuntime(command: any, normalizePhone: typeof normalizeAssistantPhone) {
   const w = window as any;
   if (!['opensms.cc', 'www.opensms.cc'].includes(location.hostname)) return false;
-  const version = '2026-11-07-opensms-unified-input-v14';
+  const version = 'gpt-history-time-v1-2026-11-07-opensms-unified-input-v14';
   const startupGuardMarker = '2026-10-16-opensms-v1';
   if (w.__dfOpenSms?.version !== version) {
     w.__dfOpenSms?.dispose();
@@ -289,14 +289,14 @@ export function openSmsRuntime(command: any, normalizePhone: typeof normalizeAss
           button.onclick=()=>{if(contact().id!==item.contactId||source(item.body)!==item.text)return;button.disabled=true;emit('bubble-refresh',JSON.stringify({key:item.key,text:item.text,direction:item.direction,messagePart:'body'}));};item.body.parentElement!.appendChild(button);layoutChanged=true;
         }
       }
-      const eligible=items.filter(i=>i.dayKey===todayKey()&&i.direction==='incoming'&&/[A-Za-z]{2,}/.test(i.text)&&!/[\u3400-\u9fff]/.test(i.text)).slice(-3);
+      const eligible=items.filter(i=>i.direction==='incoming'&&i.text.length<=4000&&/[A-Za-z]{2,}/.test(i.text)&&!/[\u3400-\u9fff]/.test(i.text)).slice(-3);
       document.querySelectorAll<HTMLElement>('#message-box .df-smart-reply-host').forEach(n=>{if(!eligible.some(i=>i.key===n.dataset.smsKey)){n.remove();layoutChanged=true;}});
       for(const item of eligible){
         if(item.row.querySelector('.df-smart-reply-host'))continue;
-        const button=document.createElement('button');button.type='button';button.className='df-smart-reply-host';button.dataset.smsKey=item.key;button.textContent='去GPT';button.style.cssText='display:block;margin:5px 0;font:12px sans-serif;border:1px solid #80c79a;border-radius:6px;padding:3px 8px;background:#effbf3;color:#197745;cursor:pointer';
+        const button=document.createElement('button');button.type='button';button.className='df-smart-reply-host';button.dataset.smsKey=item.key;button.textContent='去GPT';button.title='以此气泡为终点，不限日期向上复制最多 18 条有效英文气泡（含双方消息和时间）';button.style.cssText='display:block;margin:5px 0;font:12px sans-serif;border:1px solid #80c79a;border-radius:6px;padding:3px 8px;background:#effbf3;color:#197745;cursor:pointer';
         button.onclick=()=>{
-          const current=rows().filter(r=>r.dayKey===todayKey());const index=current.findIndex(r=>r.key===item.key);if(index<0||item.direction!=='incoming'||contact().id!==item.contactId)return;
-          const messages=current.slice(0,index+1).filter(r=>/[A-Za-z]{2,}/.test(r.text)&&!/[\u3400-\u9fff]/.test(r.text)&&r.text.length<=4000).slice(-18).map(r=>({speaker:r.direction==='outgoing'?'self':'other',text:r.text}));
+          const current=rows();const index=current.findIndex(r=>r.key===item.key);if(index<0||item.direction!=='incoming'||contact().id!==item.contactId)return;
+          const messages=current.slice(0,index+1).filter(r=>/[A-Za-z]{2,}/.test(r.text)&&!/[\u3400-\u9fff]/.test(r.text)&&r.text.length<=4000).slice(-18).map(r=>({speaker:r.direction==='outgoing'?'self':'other',text:r.text,timestamp:normalize(r.timestamp).slice(0,256)}));
           while(new TextEncoder().encode(JSON.stringify(messages)).length>80_000&&messages.length>1)messages.shift();
           const activeCards=Array.from(document.querySelectorAll<HTMLElement>('.chat-item.active')).filter(visible);
           const activeNumber=activeCards.length===1?activeCards[0].querySelector<HTMLElement>('.tag-receiver')?.parentElement?.querySelector<HTMLElement>('.address-name'):null;

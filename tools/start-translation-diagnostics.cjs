@@ -30,6 +30,12 @@ const signalSync = spawnSync(process.execPath, [path.join(__dirname, 'sync-signa
 if (signalSync.error || signalSync.status !== 0) {
   throw signalSync.error || new Error('Verified Signal developer runtime synchronization failed.');
 }
+const filterPreparation = spawnSync(process.execPath, [path.join(__dirname, 'prepare-whatsapp-filter-runtime.cjs')], {
+  cwd: root, env: process.env, windowsHide: true, stdio: 'inherit'
+});
+if (filterPreparation.error || filterPreparation.status !== 0) {
+  throw filterPreparation.error || new Error('Independent filter developer runtime preparation failed.');
+}
 const diagnosticRoot = path.join(root, '.tmp', 'translation-diagnostics-client');
 const userDataPath = migrateDiagnosticDataRoot(root, process.env.APPDATA);
 const sourceRuntime = path.join(root, '.runtime', 'signal-desktop');

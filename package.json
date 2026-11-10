@@ -8,7 +8,7 @@
   "main": "dist-electron/main.js",
   "type": "module",
   "scripts": {
-    "dev:assistant": "npm run build && node tools/start-assistant-development.cjs",
+    "dev:assistant": "npm run build && npm run prepare:whatsapp-filter-runtime && node tools/start-assistant-development.cjs",
     "test:assistant-library": "node tools/test-assistant-library.mjs",
     "test:customer-follow-up": "node tools/test-customer-follow-up.cjs",
     "test:customer-follow-up-runtime": "node tools/test-customer-follow-up-runtime.cjs",
@@ -29,11 +29,17 @@
     "test:opensms-login": "node tools/test-opensms-login.cjs",
     "test:conversation-export": "node tools/test-conversation-export.mjs",
     "dev:diagnostics": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/start-translation-diagnostics.ps1",
-    "predev": "npm run prepare:local-speech-assets && npm run test:signal-source-artifact:v8.18 && node tools/sync-signal-source-runtime.cjs",
+    "predev": "npm run build && npm run prepare:whatsapp-filter-runtime && npm run prepare:local-speech-assets && npm run test:signal-source-artifact:v8.18 && node tools/sync-signal-source-runtime.cjs",
     "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
     "build": "vue-tsc --noEmit && vite build && tsc -p electron/tsconfig.json",
     "start": "electron .",
     "start:issuer": "npm run build && electron dist-electron/license-issuer.js",
+    "package:issuer-current": "node tools/package-existing-issuer.cjs",
+    "test:filter-business-license": "node tools/test-filter-business-license.mjs",
+    "test:whatsapp-filter-integration": "node tools/test-whatsapp-filter-integration.mjs",
+    "test:whatsapp-filter-visible-runtime": "node tools/test-whatsapp-filter-visible-runtime.mjs",
+    "prepare:whatsapp-filter-runtime": "node tools/prepare-whatsapp-filter-runtime.cjs",
+    "prepare:package-whatsapp-filter-runtime": "node tools/prepare-whatsapp-filter-runtime.cjs --package",
     "start:prompt-generator": "npm run build && electron dist-electron/prompt-generator.js",
     "package:prompt-generator": "npm run build && node tools/prepare-prompt-generator-signing.cjs && electron-builder --config electron-builder.prompt-generator.cjs --win portable",
     "test:license-core": "npm run build && node tools/test-license-core.mjs",
@@ -140,7 +146,7 @@
     "suite:package": "node tools/package-license-suite.cjs",
     "prepare:client-suite": "node tools/prepare-client-license-suite.cjs",
     "security:check": "node tools/security-gate.cjs",
-    "package:win": "npm run prepare:package-output && node tools/prepare-client-license-suite.cjs && npm run prepare:signal-runtime && npm run build && node tools/build-client-prompt-bundles.cjs && node tools/prepare-local-speech-assets.cjs && npm run prepare:package-signal-runtime && npm run security:check && node tools/bundle-client-main.cjs && electron-builder --win nsis && node tools/verify-packaged-output.cjs --client=release"
+    "package:win": "npm run prepare:package-output && node tools/prepare-client-license-suite.cjs && npm run prepare:signal-runtime && npm run build && npm run prepare:package-whatsapp-filter-runtime && node tools/build-client-prompt-bundles.cjs && node tools/prepare-local-speech-assets.cjs && npm run prepare:package-signal-runtime && npm run security:check && node tools/bundle-client-main.cjs && electron-builder --win nsis && node tools/verify-packaged-output.cjs --client=release"
   },
   "devDependencies": {
     "@electron/asar": "^4.2.0",
@@ -175,6 +181,10 @@
       "package.json"
     ],
     "extraResources": [
+      {
+        "from": ".package-staging/whatsapp-filter-package-runtime",
+        "to": "whatsapp-filter"
+      },
       {
         "from": ".package-secrets/client-license-suite.json",
         "to": "license-suite-public.json"

@@ -34,7 +34,8 @@ assert.match(runtime, /state: 'eligible'/);
 assert.match(runtime, /state: 'unavailable'/);
 assert.match(runtime, /smartConversationSignature.*split\('::'\)\[0\]/);
 assert.match(runtime, /\.slice\(-18\)/);
-assert.match(runtime, /dayKey === currentDayKey/);
+assert.doesNotMatch(runtime, /dayKey === currentDayKey/);
+assert.match(runtime, /timestamp: row.timestamp/);
 assert.match(runtime, /liveContext\.at\(-1\)\?\.speaker !== 'other'/);
 assert.match(runtime, /action: 'smart-reply-request'/);
 assert.match(runtime, /action: 'smart-reply-select'/);
@@ -83,4 +84,4 @@ const transientUnavailableBranch = runtime.slice(
 );
 assert.doesNotMatch(transientUnavailableBranch, /removeAll\(\)/);
 
-console.log('smart-reply-ui: last-three incoming anchors, clicked-bubble up-to-18-today context, GPT handoff and legacy selection safety contracts passed');
+console.log('smart-reply-ui: last-three incoming anchors, clicked-bubble up-to-18 cross-date context with timestamps, GPT handoff and legacy selection safety contracts passed');

@@ -10,6 +10,45 @@ const licenseCodeInput = document.getElementById('licenseCode');
 
 let lastLicenseCode = '';
 let countdownTimer = null;
+let lastFilterCode = '';
+let filterIssuing = false;
+
+for (const [id, filter] of [['translatorTab', false], ['filterTab', true]]) {
+  document.getElementById(id).addEventListener('click', () => {
+    document.getElementById('translatorBusinessPanel').classList.toggle('hidden', filter);
+    document.getElementById('filterBusinessPanel').classList.toggle('hidden', !filter);
+    document.getElementById('translatorTab').setAttribute('aria-pressed', String(!filter));
+    document.getElementById('filterTab').setAttribute('aria-pressed', String(filter));
+    setStatus('');
+  });
+}
+function clearFilterResult() {
+  lastFilterCode = '';
+  document.getElementById('filterAuthorizationCode').value = '';
+  document.getElementById('filterResultPanel').classList.add('hidden');
+}
+document.getElementById('filterMachineCode').addEventListener('input', clearFilterResult);
+document.getElementById('issueFilterBtn').addEventListener('click', async () => {
+  if (filterIssuing) return;
+  const machineCode = document.getElementById('filterMachineCode').value.trim();
+  clearFilterResult(); filterIssuing = true;
+  document.getElementById('issueFilterBtn').disabled = true;
+  try {
+    const output = await api.issueFilterBusiness(machineCode);
+    if (document.getElementById('filterMachineCode').value.trim() !== machineCode) return;
+    lastFilterCode = output.authorizationCode;
+    document.getElementById('filterAuthorizationCode').value = lastFilterCode;
+    document.getElementById('filterResultPanel').classList.remove('hidden');
+    setStatus(`筛选业务授权码已生成，套装 ${output.suiteId}`);
+  } catch (error) { setStatus(error.message || '生成业务授权码失败'); }
+  finally { filterIssuing = false; document.getElementById('issueFilterBtn').disabled = false; }
+});
+document.getElementById('copyFilterCodeBtn').addEventListener('click', async () => {
+  try {
+    if (!lastFilterCode) return setStatus('请先生成业务授权码');
+    await api.copyText(lastFilterCode); setStatus('业务授权码已复制');
+  } catch (error) { setStatus(error.message || '复制失败'); }
+});
 
 function setStatus(text) {
   statusText.textContent = text || '';

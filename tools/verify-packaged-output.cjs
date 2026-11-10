@@ -264,8 +264,8 @@ async function verifyClient(clientRoot) {
   const signalProjection = signalProjectionEntry
     ? Buffer.from(await asar.extractFile(signalAsar, signalProjectionEntry.replace(/^[/\\]/, ''))).toString('utf8')
     : '';
-  if (!signalProjection.includes('isCurrentLocalCalendarDay') || !signalProjection.includes('.slice(-18)')) {
-    throw new Error('Bundled Signal GPT context is missing the current-day 18-message selector.');
+  if (!signalProjection.includes('isGptEnglishMessage') || !signalProjection.includes('.slice(-18)')) {
+    throw new Error('Bundled Signal GPT context is missing the cross-date 18-message English selector.');
   }
   for (const marker of ['resyncConversation', 'resetRefreshState']) {
     if (!signalBridge.includes(marker) || !signalPreload.includes(marker)) {

@@ -41,6 +41,11 @@
             <span>套装 ID</span><strong id="suiteIdText">-</strong>
             <span>密钥 ID</span><strong id="keyIdText">-</strong>
           </div>
+          <nav class="business-tabs" aria-label="授权业务">
+            <button id="translatorTab" type="button" aria-pressed="true">翻译器授权</button>
+            <button id="filterTab" type="button" aria-pressed="false">WhatsApp 号码筛选授权</button>
+          </nav>
+          <div id="translatorBusinessPanel">
           <div class="grid">
             <label>本机码<textarea id="machineCode" rows="3"></textarea></label>
             <label>用户名<input id="username" /></label>
@@ -59,6 +64,17 @@
             </div>
             <textarea id="licenseCode" rows="8" readonly></textarea>
           </div>
+          </div>
+          <section id="filterBusinessPanel" class="hidden">
+            <h2>WhatsApp 号码筛选业务授权</h2>
+            <p class="notice">粘贴筛选器授权页显示的业务本机码，生成该机器的 4 位数字授权码。此业务授权与翻译器授权分开。</p>
+            <label>筛选业务本机码<textarea id="filterMachineCode" rows="5" spellcheck="false" placeholder="WNFB1.…"></textarea></label>
+            <button id="issueFilterBtn" class="primary" type="button">生成业务授权码</button>
+            <div id="filterResultPanel" class="result hidden">
+              <label>4 位业务授权码<input id="filterAuthorizationCode" readonly inputmode="numeric" maxlength="4" /></label>
+              <button id="copyFilterCodeBtn" type="button">复制业务授权码</button>
+            </div>
+          </section>
         </section>
 
         <p id="statusText" class="status"></p>

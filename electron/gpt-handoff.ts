@@ -8,7 +8,8 @@ export function buildGptClipboardText(request: SmartReplyRequest) {
   const validated = validateSmartReplyRequest(request);
   const transcript = {
     schema_version: 'df.smart_reply.input.v1',
-    messages: validated.messages.map(({ speaker, text }) => ({ speaker, text })),
+    messages: validated.messages.map(({ speaker, text, timestamp }) => ({ speaker, text, timestamp: timestamp || null })),
+    timestamp_note: 'timestamp 是平台提供的消息时间；带 Z 或时区偏移的 ISO 时间可用于计算间隔。其它文字保留平台原样，不保证包含日期或时区；null 表示未知。仅在日期、时刻及时区足够明确时判断对话间隔，不要把缺失日期当成今天，也不要猜测未知时间。',
     latest_speaker: 'other',
     reply_count: 3,
     output_language: 'en-US',

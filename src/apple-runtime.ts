@@ -10,7 +10,7 @@ declare const controlOwner: string | null;
 export function appleRuntime(command: any) {
   if (location.origin !== 'http://127.0.0.1:8070' || window.top !== window) return false;
   const w = window as any;
-  const version = '2026-11-07-apple-unified-input-v3';
+  const version = '2026-11-09-apple-gpt-history-time-v4';
   if (w.__dfApple?.version !== version) {
     w.__dfApple?.dispose();
     const state: any = { version, enabled: false, signature: '', context: '', input: null, pending: null, ready: null, sensitive: null, writing: false, sending: false, inFlight: false, composing: false, cache: new Map() };
@@ -102,7 +102,9 @@ export function appleRuntime(command: any) {
         const body = row.querySelector<HTMLElement>('.bubble > .original');
         const text = canonical(body?.textContent);
         if (!body || !text || /^\[(?:附件消息|正文解析未完成|无文字内容)\]$/.test(text)) return [];
-        const timestamp = canonical(row.querySelector('.message-meta')?.textContent?.replace(/^[^·]*·\s*/, ''));
+        const savedIndex = Number(row.dataset.messageId ?? index);
+        const saved = Array.isArray(currentConversation?.messages) ? currentConversation.messages[savedIndex] : undefined;
+        const timestamp = canonical(saved?.time || row.querySelector('.message-meta')?.textContent?.replace(/^[^·]*·\s*/, '')).slice(0, 256);
         const direction = row.classList.contains('outgoing') ? 'outgoing' : row.classList.contains('incoming') ? 'incoming' : 'unknown';
         const key = `${id}:${row.dataset.messageId ?? index}:${hash(text)}:${hash(timestamp)}`;
         if (row.dataset.dfMsgKey && row.dataset.dfMsgKey !== key) row.querySelectorAll('.df-chat-translation').forEach(node => node.remove());
@@ -132,7 +134,35 @@ export function appleRuntime(command: any) {
     };
     const decorate = () => {
       const items = rows();
-      preserveScroll(() => { for (const item of items) { const cached = state.cache.get(item.contactId + '\n' + item.text); if (cached) inject(item, cached); } });
+      preserveScroll(() => {
+        for (const item of items) { const cached = state.cache.get(item.contactId + '\n' + item.text); if (cached) inject(item, cached); }
+        const valid = (item: typeof items[number]) => (item.direction === 'incoming' || item.direction === 'outgoing') && item.text.length <= 4000 && /[A-Za-z]{2,}/.test(item.text) && !/[\u3400-\u9fff]/.test(item.text);
+        const eligible = items.filter(item => item.direction === 'incoming' && valid(item)).slice(-3);
+        const smartKey = (item: typeof items[number]) => `smart-${hash(item.key)}-${hash(item.text)}`;
+        document.querySelectorAll<HTMLElement>('#messages .df-smart-reply-host').forEach(host => {
+          if (!eligible.some(item => smartKey(item) === host.dataset.dfSmartReplyKey)) host.remove();
+        });
+        for (const item of eligible) {
+          const key = smartKey(item);
+          if (item.row.querySelector('.df-smart-reply-host')) continue;
+          const host = document.createElement('div'); host.className = 'df-smart-reply-host'; host.dataset.dfSmartReplyKey = key;
+          const button = document.createElement('button'); button.type = 'button'; button.className = 'df-smart-reply-button'; button.textContent = '去GPT';
+          button.title = '以此气泡为终点，不限日期向上复制最多 18 条有效英文气泡（含双方消息和时间）';
+          button.style.cssText = 'display:block;margin:5px 0;border:1px solid #80c79a;border-radius:6px;padding:3px 8px;background:#effbf3;color:#197745;cursor:pointer';
+          button.onclick = event => {
+            event.preventDefault(); event.stopPropagation();
+            if (button.disabled || contact().id !== item.contactId || !item.row.isConnected) return;
+            const current = rows(); const index = current.findIndex(row => row.key === item.key);
+            if (index < 0 || !current.filter(row => row.direction === 'incoming' && valid(row)).slice(-3).some(row => row.key === item.key)) return;
+            const messages = current.slice(0, index + 1).filter(valid).slice(-18).map(row => ({ speaker: row.direction === 'outgoing' ? 'self' : 'other', text: row.text, timestamp: row.timestamp }));
+            while (messages.length > 1 && new TextEncoder().encode(JSON.stringify(messages)).length > 80_000) messages.shift();
+            if (!messages.length || new TextEncoder().encode(JSON.stringify(messages)).length > 80_000) return;
+            emit('smart-reply-request', JSON.stringify({ latestMessageKey: key, messages }), `apple-gpt-${Date.now().toString(36)}`);
+            button.disabled = true; button.textContent = '复制中…';
+          };
+          host.append(button); item.body.parentElement!.append(host);
+        }
+      });
       return items;
     };
     const stop = (event: Event) => { event.preventDefault(); event.stopImmediatePropagation(); };
@@ -205,7 +235,7 @@ export function appleRuntime(command: any) {
       if (cmd.action === 'enabled') { state.enabled = cmd.enabled === true; if (!state.enabled) reset(); return true; }
       if (cmd.action === 'contact') return contact();
       if (cmd.action === 'export') return exportConversation(cmd.command);
-      if (cmd.action === 'install') { decorate(); return true; }
+      if (cmd.action === 'install' || cmd.action === 'smart') { decorate(); return true; }
       if (cmd.action === 'text') return read();
       if (cmd.action === 'focus' || cmd.action === 'focusNative') { editor()?.focus(); return !!contact().id && document.activeElement === editor(); }
       if (cmd.action === 'matches') return matches(state.pending) && state.pending.requestId === cmd.requestId;
@@ -280,7 +310,7 @@ export function appleRuntime(command: any) {
     document.addEventListener('compositionstart', onCompositionStart, true); document.addEventListener('compositionend', onCompositionEnd, true);
     let timer: ReturnType<typeof setTimeout> | undefined;
     const observer = new MutationObserver(records => {
-      if (!records.some(record => !(record.target instanceof Element ? record.target : record.target.parentElement)?.closest('.df-chat-translation') && (record.type !== 'childList' || [...record.addedNodes, ...record.removedNodes].some(node => !(node instanceof Element && node.matches('.df-chat-translation')))))) return;
+      if (!records.some(record => !(record.target instanceof Element ? record.target : record.target.parentElement)?.closest('.df-chat-translation, .df-smart-reply-host') && (record.type !== 'childList' || [...record.addedNodes, ...record.removedNodes].some(node => !(node instanceof Element && node.matches('.df-chat-translation, .df-smart-reply-host')))))) return;
       if (timer) return;
       timer = setTimeout(() => { timer = undefined; sync(); decorate(); }, 180);
     });
@@ -290,7 +320,7 @@ export function appleRuntime(command: any) {
       observer.disconnect(); clearInterval(interval); if (timer) clearTimeout(timer);
       document.removeEventListener('input', onSpaceInput, true); for (const name of ['focusout', 'pointerdown']) document.removeEventListener(name, clearSpaceRun, true); for (const name of ['compositionstart', 'compositionend']) document.removeEventListener(name, onSpaceComposition, true); window.removeEventListener('keydown', onKey, true); window.removeEventListener('click', onClick, true); document.removeEventListener('input', onInput, true);
       document.removeEventListener('compositionstart', onCompositionStart, true); document.removeEventListener('compositionend', onCompositionEnd, true);
-      style.remove(); document.getElementById('df-apple-composer-status')?.remove(); delete document.documentElement.dataset.dfAppleGuard;
+      style.remove(); document.querySelectorAll('#messages .df-smart-reply-host').forEach(node => node.remove()); document.getElementById('df-apple-composer-status')?.remove(); delete document.documentElement.dataset.dfAppleGuard;
     };
     state.editor = editor;
     w.__dfApple = state; sync(); document.documentElement.dataset.dfAppleGuard = version;

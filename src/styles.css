@@ -24,6 +24,11 @@
   box-sizing: border-box;
 }
 
+.filter-app-menu { position:fixed;z-index:3200;min-width:220px;padding:6px;border:1px solid var(--line-strong);border-radius:10px;background:var(--bg-soft);color:var(--text);box-shadow:var(--shadow);outline:none; }
+.filter-app-menu button { display:block;width:100%;padding:12px 14px;text-align:left;border-radius:6px;color:var(--text); }
+.filter-app-menu button:hover,.filter-app-menu button:focus-visible { background:var(--panel-muted);color:var(--accent-bright);outline:1px solid var(--line-strong); }
+.filter-launch-status { color:var(--muted-strong);font-size:13px; }
+
 html,
 body,
 #app {
@@ -1816,6 +1821,39 @@ select:focus {
   font-size: 16px;
 }
 
+/* Visual whitespace drags, including padding inside a sidebar button. */
+.app-sidebar,
+.app-sidebar .side-nav button,
+.runtime-side,
+.runtime-side > button,
+.runtime-side .runtime-lock-button {
+  -webkit-app-region: drag;
+}
+
+.app-sidebar > .brand-mark,
+.app-sidebar > h2,
+.app-sidebar > span,
+.app-sidebar .side-nav button > b,
+.app-sidebar .side-nav button > span,
+.app-sidebar .sidebar-status > *,
+.runtime-side button > span,
+.runtime-side button > img,
+.runtime-side button > strong,
+.runtime-side button > small,
+.runtime-side .runtime-lock-guide,
+.runtime-side .runtime-lock-guide *,
+.app-sidebar :is(a, input, textarea, select, [role="dialog"], [role="menu"]),
+.runtime-side :is(a, input, textarea, select, [role="dialog"], [role="menu"]) {
+  -webkit-app-region: no-drag;
+}
+
+.runtime-side button .runtime-drag-label {
+  width: max-content;
+  margin-bottom: 0;
+  color: inherit;
+  line-height: normal;
+}
+
 .runtime-side > .runtime-home,
 .runtime-side > .runtime-lock-entry > .runtime-lock-button,
 .runtime-side > .runtime-guard-button,
@@ -1853,6 +1891,8 @@ select:focus {
 }
 
 .runtime-side .runtime-customize-button {
+  position: relative;
+  top: 10px;
   min-height: 0;
   height: 60px;
   align-self: end;

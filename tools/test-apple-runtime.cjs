@@ -77,7 +77,7 @@ if (!process.versions.electron) {
     // The production preload blocks native submission before the page guard is installed.
     await type('启动中文'); await enter(); await clickSend(); assert.equal(await nativeCount(), 0);
     await cmd({ action: 'install' }); await cmd({ action: 'enabled', enabled: true }); await events();
-    assert.equal(await execute(`document.documentElement.dataset.dfAppleGuard`), '2026-11-07-apple-unified-input-v3');
+    assert.equal(await execute(`document.documentElement.dataset.dfAppleGuard`), '2026-11-09-apple-gpt-history-time-v4');
 
     const physicalSpace = async () => {
       win.webContents.sendInputEvent({type:'keyDown',keyCode:'Space'});
@@ -207,6 +207,25 @@ if (!process.versions.electron) {
     await change();await exporting('begin');await execute(`workspaceRevision++;true`);assert.equal((await exporting('snapshot')).ok,false,'a new capture/revision invalidates an old export');
     console.log('apple assistant/export: confirmed textarea insertion, phone duplicate warnings, switch/disabled protection, unsupported-image honesty; saved model export, repeated rows, both parties, today/all, Chinese and actual App export handler passed');
 
+    await change();
+    await execute(`currentConversation.messages=Array.from({length:26},(_,i)=>({side:i%2?'incoming':'outgoing',time:i<20?'2026-11-08 23:55':'2026-11-09 00:15',text:i===20?'中文消息':'English bubble '+i}));document.querySelector('#messages').innerHTML=currentConversation.messages.map((m,i)=>'<div class="message '+m.side+'" data-message-id="'+i+'"><div class="message-meta">'+m.time+'</div><div class="bubble"><div class="original">'+m.text+'</div></div></div>').join('');true`);
+    await cmd({action:'smart'});await events();
+    assert.equal(await execute(`document.querySelectorAll('#messages .df-smart-reply-button').length`),3);
+    await execute(`document.querySelector('#messages .df-smart-reply-button').click();true`);
+    const appleGpt=JSON.parse((await events()).find(e=>e.action==='smart-reply-request').text);
+    assert.equal(appleGpt.messages.length,18);
+    assert.equal(appleGpt.messages.at(-1).text,'English bubble 21','clicked middle anchor stops the context');
+    assert.equal(appleGpt.messages[0].text,'English bubble 3','invalid bubble does not consume the limit');
+    assert.equal(appleGpt.messages[0].timestamp,'2026-11-08 23:55');
+    assert.equal(appleGpt.messages.at(-1).timestamp,'2026-11-09 00:15');
+    assert.ok(appleGpt.messages.some(m=>m.speaker==='self'));
+    assert.ok(!appleGpt.messages.some(m=>m.text==='中文消息'));
+    const {buildGptClipboardText}=await import('../dist-electron/gpt-handoff.js');
+    const clipboard=buildGptClipboardText({platform:'apple',messages:appleGpt.messages,latestSpeaker:'other',replyCount:3,outputLanguage:'en-US',allowSensitiveEcho:false});
+    assert.equal(JSON.parse(clipboard.split('\n\n')[0]).messages[0].timestamp,'2026-11-08 23:55');
+    await execute(`window.staleAppleGpt=document.querySelectorAll('#messages .df-smart-reply-button')[1];true`);
+    await change('device-b','chat-b');await events();await execute(`window.staleAppleGpt.click();true`);
+    assert.ok(!(await events()).some(e=>e.action==='smart-reply-request'),'stale button cannot copy another device/contact');
     await cmd({ action: 'dispose' }); await type('重新安装守卫前'); await enter(); assert.equal(await nativeCount(), 5, 'disposing the runtime re-enables the startup preload block');
     await win.loadURL('http://127.0.0.1:8071/'); assert.equal(await cmd({ action: 'install' }), false, 'the Apple adapter is restricted to its exact origin');
     win.destroy();

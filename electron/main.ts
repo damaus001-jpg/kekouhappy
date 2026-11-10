@@ -32,6 +32,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { readAssistantLibrary, saveAssistantModule, importAssistantModule, attachAssistantMedia, revealAssistantMedia, exportAssistantTemplate, exportAssistantModule, assistantMediaPath } from './assistant-library.js';
 import type { AssistantKind, AssistantModule } from './assistant-library-types.js';
 import { handoffChatToGpt } from './gpt-handoff.js';
+import { WhatsAppFilterLauncher, resolveWhatsAppFilterLaunch } from './whatsapp-filter-launcher.js';
 import { installOpenSmsLoginPersistence, removeOpenSmsLogin } from './opensms-login.js';
 import { stageAssistantMaterial, currentAssistantMaterial, readAssistantUsage, recordAssistantUse, readAssistantImage, removeAssistantUsageForProfile } from './assistant-material-store.js';
 import { filterProfileScopedJsonl, profileLogIdentityHash } from './profile-data-cleanup.js';
@@ -3889,12 +3890,15 @@ function userAgentForPlatform(platform: Platform) {
   return platform === 'whatsapp' ? whatsappUserAgent : telegramUserAgent;
 }
 
+const whatsappFilterLauncher = new WhatsAppFilterLauncher();
+app.once('will-quit', () => whatsappFilterLauncher.dispose());
 async function saveConfig(config: AppConfig): Promise<AppConfig> {
   assertClientRuntimeAllowed();
   const sanitizedConfig = sanitizeConfig(config);
   await mkdir(app.getPath('userData'), { recursive: true });
   await writeJsonAtomic(configPath(), sanitizedConfig);
   await writeJsonAtomic(profilesPath(), sanitizedConfig.profiles);
+  whatsappFilterLauncher.setTheme(sanitizedConfig.activeTheme);
   return sanitizedConfig;
 }
 
@@ -5847,7 +5851,9 @@ async function respondToSignalSmartReplyRequest(
       platform: 'signal',
       messages: request.messages.map(message => ({
         speaker: message.direction === 'incoming' ? 'other' : 'self',
-        text: message.sourceText
+        text: message.sourceText,
+        timestamp: Number.isFinite(message.timestamp) && message.timestamp > 0
+          ? new Date(message.timestamp).toISOString() : undefined
       })),
       latestSpeaker: 'other',
       replyCount: 3,
@@ -8097,6 +8103,14 @@ function registerIpc() {
   trustedHandle('customer:preview-import',true,async (_event,target:CustomerTarget)=>{await validateCustomerTarget(target);return previewCustomerFile(target,()=>validateCustomerTarget(target));});
   trustedHandle('customer:import',true,async (_event,target:CustomerTarget,token:string,selectedStage?:string)=>{await validateCustomerTarget(target);assertText(token,'Customer import token',80);if(selectedStage!==undefined)assertText(selectedStage,'Customer stage',40);return importCustomerFile(target,token,selectedStage);});
   trustedHandle('assistant:get', true, () => { assertAssistantUnlocked(); return readAssistantLibrary(); });
+  trustedHandle('whatsapp-filter:open', true, async () => {
+    assertAssistantUnlocked();
+    const expected = clientLicenseManager?.getRuntimeSecurityExpectation();
+    if (!expected?.hardwareHash) throw new Error('请先完成本机授权初始化');
+    const launch = resolveWhatsAppFilterLaunch({ packaged: app.isPackaged, resourcesPath: process.resourcesPath, workspaceRoot: process.cwd(), expected, theme: (await readConfig()).activeTheme });
+    await whatsappFilterLauncher.open(launch.executable, launch.grant);
+    return { opened: true };
+  });
   trustedHandle('conversation:export', true, async (_event,request:ConversationExportRequest) => {
     assertAssistantUnlocked();assertSerializedSize(request,'Conversation export',32*1024*1024);assertProfileId(request.profileId);
     const profile=(await readProfileBackup()).find(p=>p.id===request.profileId);

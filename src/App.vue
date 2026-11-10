@@ -234,6 +234,39 @@ const platformCatalog = ref<PlatformInfo[]>([
   { platform: 'apple', label: '苹果', url: 'http://127.0.0.1:8070/' }
 ]);
 const isCreatingProfile = ref(false);
+const whatsappFilterMenu = ref<{ x: number; y: number } | null>(null);
+const whatsappFilterOpening = ref(false);
+const whatsappFilterStatus = ref('');
+function closeWhatsAppFilterMenu() { whatsappFilterMenu.value = null; }
+onMounted(() => {
+  window.addEventListener('resize', closeWhatsAppFilterMenu);
+  window.addEventListener('scroll', closeWhatsAppFilterMenu, true);
+});
+onUnmounted(() => {
+  window.removeEventListener('resize', closeWhatsAppFilterMenu);
+  window.removeEventListener('scroll', closeWhatsAppFilterMenu, true);
+});
+function showWhatsAppFilterMenu(event: MouseEvent) {
+  const icon = event.currentTarget;
+  if (!(icon instanceof HTMLElement)) return;
+  const bounds = icon.getBoundingClientRect();
+  const menuWidth = 220, menuHeight = 56, gap = 12;
+  const right = bounds.right + gap;
+  const anchoredX = right + menuWidth <= window.innerWidth - gap ? right : Math.max(gap, bounds.left - menuWidth - gap);
+  const x = Math.max(gap, anchoredX - 300);
+  const y = Math.max(gap, Math.min(bounds.top + (bounds.height - menuHeight) / 2, window.innerHeight - menuHeight - gap));
+  whatsappFilterMenu.value = { x, y };
+  requestAnimationFrame(() => document.querySelector<HTMLElement>('.filter-app-menu')?.focus());
+}
+async function openWhatsAppFilter() {
+  whatsappFilterMenu.value = null;
+  if (whatsappFilterOpening.value) return;
+  whatsappFilterOpening.value = true; whatsappFilterStatus.value = '正在打开号码筛选…';
+  try { await window.chatTranslator.openWhatsAppNumberFilter(); whatsappFilterStatus.value = '号码筛选已打开'; }
+  catch (error) { whatsappFilterStatus.value = error instanceof Error ? error.message : '号码筛选打开失败，请重试'; }
+  finally { whatsappFilterOpening.value = false; }
+}
+watch(activePanel, () => { whatsappFilterMenu.value = null; });
 const openSmsError = ref('');
 const createDialogOpen = ref(false);
 const newProfileName = ref('');
@@ -3891,7 +3924,8 @@ async function handleInjectedComposerEvent(
       if (!value || value.length > 4000 || !/[A-Za-z]{2,}/.test(value) || hasChineseText(value)) return;
       totalLength += value.length;
       if (totalLength > 72_000) return;
-      messages.push({ speaker: record.speaker, text: value });
+      if (record.timestamp !== undefined && (typeof record.timestamp !== 'string' || record.timestamp.length > 256 || /[\u0000-\u001f\u007f]/.test(record.timestamp))) return;
+      messages.push({ speaker: record.speaker, text: value, ...(typeof record.timestamp === 'string' ? { timestamp: record.timestamp } : {}) });
     }
     if (messages.at(-1)?.speaker !== 'other') return;
     const activeSignature = normalizeSmartReplyConversationSignature(composerConversationSignatures.get(profileId) || '');
@@ -9267,9 +9301,10 @@ async function refreshWebSmartReplyUi(
   runtimeOverride?: { execute: <T>(script: string) => Promise<T> }
 ) {
   const profile = profiles.value.find((item) => item.id === profileId);
-  if (!profile || profile.platform === 'signal' || profile.platform === 'apple') return;
+  if (!profile || profile.platform === 'signal') return;
   const runtime = runtimeOverride || getRuntimeScriptExecutor(profile);
   if (!runtime) return;
+  if(profile.platform==='apple'){await runtime.execute(buildAppleScript({action:'smart'}));return;}
   if(profile.platform==='opensms'){await runtime.execute(buildOpenSmsScript({action:'smart'}));return;}
   const installState = await runtime
     .execute<SmartReplyUiInstallResult | false>(buildSmartReplyUiInstallScript(appForPlatform(profile.platform)))
@@ -12752,7 +12787,7 @@ onUnmounted(() => {
       <div class="brand-mark large"></div>
       <div class="brand-kicker">PIKACHU TRANSLATOR</div>
       <h1>皮卡丘翻译器</h1>
-      <p>多账号聊天翻译 / 企业素材管控 / 客户资产保护</p>
+      <p>让私域生意，走向世界</p>
     </section>
 
     <section class="login-workbench">
@@ -12828,7 +12863,7 @@ onUnmounted(() => {
     </section>
   </main>
 
-  <main v-show="signedIn && activePanel !== 'session'" class="page app-page" :class="themeClass">
+  <main v-show="signedIn && activePanel !== 'session'" class="page app-page" :class="themeClass" @click="whatsappFilterMenu = null" @keydown.esc="whatsappFilterMenu = null">
     <div class="window-ctrl vertical" @pointerdown.stop @mousedown.stop>
       <button type="button" data-window-control="minimize">-</button>
       <button type="button" data-window-control="toggle-maximize">□</button>
@@ -12841,10 +12876,10 @@ onUnmounted(() => {
       <span>V{{ clientVersion }}</span>
 
       <nav class="side-nav">
-        <button :class="{ active: activePanel === 'apps' }" type="button" @click="activePanel = 'apps'"><b>01</b>应用中心</button>
-        <button :class="{ active: activePanel === 'home' }" type="button" @click="activePanel = 'home'"><b>02</b>我的主页</button>
-        <button :class="{ active: activePanel === 'notice' }" type="button" @click="activePanel = 'notice'"><b>03</b>管理通知</button>
-        <button :class="{ active: activePanel === 'agency' }" type="button" @click="activePanel = 'agency'"><b>04</b>代理加盟</button>
+        <button :class="{ active: activePanel === 'apps' }" type="button" @click="activePanel = 'apps'"><b>01</b><span>应用中心</span></button>
+        <button :class="{ active: activePanel === 'home' }" type="button" @click="activePanel = 'home'"><b>02</b><span>我的主页</span></button>
+        <button :class="{ active: activePanel === 'notice' }" type="button" @click="activePanel = 'notice'"><b>03</b><span>管理通知</span></button>
+        <button :class="{ active: activePanel === 'agency' }" type="button" @click="activePanel = 'agency'"><b>04</b><span>代理加盟</span></button>
       </nav>
 
       <div class="sidebar-status">
@@ -12873,10 +12908,14 @@ onUnmounted(() => {
 
         <div class="app-card-row">
           <button v-for="tile in appEntryTiles" :key="tile.app" class="launch-card" type="button" :disabled="isCreatingProfile" @click="openAppEntry(tile.app)">
-            <span class="app-logo"><img :src="tile.icon" :alt="tile.label" /></span>
+            <span class="app-logo" @contextmenu.stop.prevent="tile.app === 'whatsapp' && showWhatsAppFilterMenu($event)"><img :src="tile.icon" :alt="tile.label" /></span>
             <strong>{{ tile.label }}</strong>
           </button>
         </div>
+        <div v-if="whatsappFilterMenu" class="filter-app-menu" role="menu" tabindex="-1" :style="{ left: whatsappFilterMenu.x + 'px', top: whatsappFilterMenu.y + 'px' }" @click.stop>
+          <button type="button" role="menuitem" :disabled="whatsappFilterOpening" @click="openWhatsAppFilter">WhatsApp 号码筛选</button>
+        </div>
+        <p v-if="whatsappFilterStatus" class="filter-launch-status" role="status">{{ whatsappFilterStatus }}</p>
       </section>
 
       <section v-else class="content-panel settings-page compact">
@@ -13011,7 +13050,7 @@ onUnmounted(() => {
       <div class="runtime-lock-entry">
         <button type="button" class="runtime-lock-button" @click="handleLockButtonClick">
           <span class="runtime-lock-key" aria-hidden="true"></span>
-          锁屏
+          <span class="runtime-drag-label">锁屏</span>
         </button>
         <aside v-if="lockGuideVisible && !lockScreenStatus?.enabled" class="runtime-lock-guide" @click.stop>
           <button class="runtime-lock-guide-close" type="button" aria-label="关闭锁屏设置引导" @click="dismissLockGuide">×</button>
@@ -13044,7 +13083,7 @@ onUnmounted(() => {
             <img :src="pokeballIcon" alt="" />
           </span>
         </span>
-        {{ workspaceHeaderCollapsed ? '折叠' : '展开' }}
+        <span class="runtime-drag-label">{{ workspaceHeaderCollapsed ? '折叠' : '展开' }}</span>
       </button>
       <button type="button" class="app-short wa" :class="{ active: currentApp === 'whatsapp', unread: unreadCountForApp('whatsapp') > 0 }" @click="selectRuntimeApp('whatsapp')">
         <img :src="multiWhatsappIcon" alt="WhatsApp" />

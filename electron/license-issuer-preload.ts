@@ -29,6 +29,7 @@ const api = {
   initializePassword: (password: string): Promise<IssuerStatus> => ipcRenderer.invoke('issuer:initialize-password', password),
   login: (password: string): Promise<IssuerStatus & { authenticated: boolean }> => ipcRenderer.invoke('issuer:login', password),
   issueLicense: (input: IssueLicenseInput): Promise<IssueLicenseOutput> => ipcRenderer.invoke('issuer:issue-license', input),
+  issueFilterBusiness: (machineCode: string): Promise<{ authorizationCode: string; suiteId: string; keyId: string; business: string }> => ipcRenderer.invoke('issuer:issue-filter-business', machineCode),
   copyText: (text: string): Promise<void> => ipcRenderer.invoke('issuer:copy-text', text),
   saveLicenseDat: (licenseCode: string): Promise<{ path?: string; canceled?: boolean }> => ipcRenderer.invoke('issuer:save-license-dat', licenseCode),
   getSuiteSummary: (): Promise<{ suiteId: string; keyId: string; publicKeySha256: string }> => ipcRenderer.invoke('issuer:suite-summary'),

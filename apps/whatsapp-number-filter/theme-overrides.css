@@ -1,0 +1,46 @@
+/* Palette declarations are copied from Pikachu's current four themes at build time. */
+:root{color-scheme:dark;font-family:"Microsoft YaHei","Segoe UI",Arial,sans-serif;color:var(--text);background:var(--bg)}
+:root[data-theme="clearWaterBlue"]{color-scheme:light}
+body{color:var(--text);background:var(--bg)}
+header,aside{background:var(--panel-strong);border-color:var(--line)}
+header{color:var(--accent-bright)}
+header{-webkit-app-region:drag;user-select:none}
+header button,.pikachu-window-actions{-webkit-app-region:no-drag}
+.pikachu-window-actions{display:flex;align-items:center;gap:2px;margin-right:-12px;margin-left:6px}
+.pikachu-window-actions button{display:grid;place-items:center;width:34px;height:32px;padding:0;background:transparent;color:var(--muted-strong);border:1px solid transparent;border-radius:6px}
+.pikachu-window-actions button:hover{color:var(--accent-bright);border-color:var(--line);background:var(--panel-muted)}
+.pikachu-window-actions #window-close:hover{color:#fff;background:#b52b45;border-color:#b52b45}
+.pikachu-window-actions span{position:relative;display:block;width:12px;height:12px;pointer-events:none}
+.control-minimize::before{content:"";position:absolute;left:0;top:8px;width:12px;height:1px;background:currentColor}
+.control-maximize::before{content:"";position:absolute;inset:1px;border:1px solid currentColor;border-radius:1px}
+.is-maximized .control-maximize::before{inset:3px 2px 0 0}
+.is-maximized .control-maximize::after{content:"";position:absolute;inset:0 0 3px 3px;border-top:1px solid currentColor;border-right:1px solid currentColor}
+.control-close::before,.control-close::after{content:"";position:absolute;left:5px;top:0;width:1px;height:13px;background:currentColor;transform:rotate(45deg)}
+.control-close::after{transform:rotate(-45deg)}
+.pikachu-brand{width:42px;height:42px;object-fit:contain}
+.version{color:var(--muted-strong);background:var(--panel-muted);border:1px solid var(--line)}
+.authorization-chip{margin-left:auto;background:var(--panel-muted);color:var(--accent-bright);border:1px solid var(--line-strong);font-size:11px}
+.browser-placeholder,.connection,.note,.file-details p,.stats span,.ratio,.footer-note,.progress-label span{color:var(--muted)}
+.import-card,.stats>div{background:var(--bg-soft);border-color:var(--line);border-radius:8px}
+.file-icon,.stats .green{background:var(--panel-muted);color:var(--accent-bright);border-color:var(--line-strong)}
+.stats .green strong,.ratio strong,.text-button{color:var(--accent-bright)}
+.primary{background:linear-gradient(135deg,var(--accent-deep),var(--accent-bright));color:var(--bg);border:1px solid var(--line-strong);border-radius:6px;box-shadow:var(--accent-shadow)}
+.primary:hover:not(:disabled){background:linear-gradient(135deg,var(--accent),var(--accent-bright));filter:brightness(1.06)}
+.secondary{background:var(--panel-muted);border-color:var(--line-strong);color:var(--text);border-radius:6px}
+button:focus-visible{outline-color:var(--accent-bright)}
+.message{color:var(--muted-strong)}
+progress,progress::-webkit-progress-bar{background:var(--panel-muted)}
+progress::-webkit-progress-value{background:var(--accent)}
+.dot.online{background:var(--accent-bright)}
+.error{color:#ffd0c7;background:#49231f;border-color:#a66254}
+:root[data-theme="clearWaterBlue"] .error{color:#932f22;background:#fff0eb;border-color:#e2b5a6}
+dialog{width:min(540px,calc(100vw - 32px));max-height:calc(100vh - 32px);overflow:auto;padding:24px;border:1px solid var(--line-strong);border-radius:14px;color:var(--text);background:var(--bg-soft);box-shadow:var(--shadow)}
+dialog::backdrop{background:#0009}
+.auth-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px}
+.auth-heading h2{font-size:18px;margin:0;color:var(--accent-bright)}
+.auth-heading button{background:transparent;color:var(--muted);font-size:24px;padding:0 5px}
+dialog label{display:block;margin:14px 0 8px;font-size:12px}
+dialog textarea,dialog input{display:block;width:100%;margin-top:7px;padding:9px 11px;border:1px solid var(--line-strong);border-radius:6px;color:var(--text);background:var(--panel);font:inherit;resize:vertical}
+#business-code{font-size:22px;letter-spacing:6px}
+#activate-business{width:100%;margin-top:12px}
+@media(max-width:1080px){header{gap:8px}header strong{font-size:16px}.authorization-chip{font-size:10px;padding:8px}}

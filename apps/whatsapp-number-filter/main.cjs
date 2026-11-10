@@ -1,21 +1,34 @@
-const {app,BrowserWindow,WebContentsView,ipcMain,dialog,shell,session,screen,protocol}=require('electron');
+const {app,BrowserWindow,WebContentsView,ipcMain,dialog,shell,session,screen,protocol,safeStorage,clipboard}=require('electron');
 const fs=require('node:fs');
 const path=require('node:path');
 const {parseTxt,exportTxt}=require('./data.cjs');
 const {page}=require('./page.cjs');
 const {allowWhatsAppStorage}=require('./permissions.cjs');
+const {launchEnvironment,connectLauncher}=require('./launcher-bridge.cjs');
+const {BusinessAccess}=require('./business-access.cjs');
+const initialLaunch=launchEnvironment();
 
 app.setName('Whatsapp号码筛选');
 protocol.registerSchemesAsPrivileged([{scheme:'app',privileges:{standard:true,secure:true,supportFetchAPI:true,corsEnabled:true}}]);
 app.setAppUserModelId('com.pikachu.whatsappnumberfilter');
 app.setPath('userData',process.env.WNF_USER_DATA_DIR||path.join(app.getPath('appData'),'WhatsappNumberFilter'));
-const single=app.requestSingleInstanceLock();
+const single=app.requestSingleInstanceLock(initialLaunch||{});
 if(!single)app.quit();
 let window,view,timer,busy=false,polling=false,imported=null,lastExport=null,booted=false;
+let bridge=null,access=null,grant=null;
 const uiUrl='app://number-filter/index.html';
 const waUserAgent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/'+process.versions.chrome+' Safari/537.36';
-let state={version:app.getVersion(),loggedIn:false,online:true,ready:false,running:false,checked:0,total:0,registered:0,notRegistered:0,unknown:0,imported:null,message:'请先在左侧扫码登录 WhatsApp。',error:'',exportFolder:''};
-const publish=patch=>{state={...state,...patch};if(window&&!window.isDestroyed())window.webContents.send('filter:state',state);};
+let state={version:app.getVersion(),theme:'blackGold',maximized:false,authorization:null,authorizationRequired:false,loggedIn:false,online:true,ready:false,running:false,checked:0,total:0,registered:0,notRegistered:0,unknown:0,imported:null,message:'请先在左侧扫码登录 WhatsApp。',error:'',exportFolder:''};
+const backgrounds={blackGold:'#08090d',pink:'#160711',murongPurple:'#171218',clearWaterBlue:'#eaf8ff'};
+const publish=patch=>{state={...state,...patch,authorization:access?.status()||null};if(window&&!window.isDestroyed())window.webContents.send('filter:state',state);};
+function applyTheme(theme){if(!Object.hasOwn(backgrounds,theme))return;window?.setBackgroundColor(backgrounds[theme]);publish({theme});}
+function focusWindow(){if(!window||window.isDestroyed())return false;if(window.isMinimized())window.restore();window.show();window.focus();return window.isVisible()&&!window.isMinimized();}
+async function attachLauncher(info){
+ const connection=await connectLauncher(info,message=>{if(message.type==='theme')applyTheme(message.theme);if(message.type==='focus'){const visible=focusWindow();bridge?.socket.write(JSON.stringify({type:'focus-applied',requestId:message.requestId,visible})+'\n');}});
+ const identity=JSON.parse(fs.readFileSync(path.join(__dirname,'filter-license-public.json'),'utf8'));
+ if(identity.suiteId!==connection.grant.suiteId||identity.keyId!==connection.grant.keyId||(grant&&grant.hardwareHash!==connection.grant.hardwareHash)){connection.socket.write('{"type":"error"}\n');connection.socket.destroy();throw new Error('筛选器与皮卡丘的套装或本机身份不一致');}
+ bridge?.socket.destroy();bridge=connection;grant=connection.grant;applyTheme(grant.theme);return identity;
+}
 const isWhatsApp=url=>{try{return new URL(url).origin==='https://web.whatsapp.com';}catch{return false;}};
 const execute=(action,options={})=>view.webContents.executeJavaScript('('+page.toString()+')('+JSON.stringify(action)+','+JSON.stringify(options)+')',true);
 function bounds(){if(!window||!view)return;const [width,height]=window.getContentSize();view.setBounds({x:0,y:64,width:Math.max(300,width-392),height:Math.max(100,height-64)});}
@@ -34,6 +47,14 @@ async function poll(){
   }finally{polling=false;}
 }
 const handlers={
+  async 'window-control'(action){
+    if(!window||window.isDestroyed())return;
+    if(action==='minimize')window.minimize();
+    else if(action==='toggle-maximize'){if(window.isMaximized())window.unmaximize();else window.maximize();}
+    else if(action==='close'){window.close();return;}
+    else throw new Error('窗口操作无效');
+    publish({maximized:window.isMaximized()});
+  },
   async import(){
     if(state.running)throw new Error('请先停止当前筛选。');
     const chosen=await dialog.showOpenDialog(window,{title:'导入号码 TXT',filters:[{name:'号码文本文件',extensions:['txt']}],properties:['openFile']});
@@ -56,18 +77,35 @@ const handlers={
   async stop(){if(!booted)return;await execute('stop');publish({message:'正在停止，等待在途查询结束…'});},
   async export(){
     if(!booted)throw new Error('请先执行筛选。');if(state.running)throw new Error('请先等待筛选完成，或停止筛选。');
+    access.consumeExport();publish({});
     const report=await execute('export');
     const chosen=await dialog.showOpenDialog(window,{title:'选择 TXT 结果保存位置',properties:['openDirectory','createDirectory']});if(chosen.canceled)return null;
     lastExport=exportTxt(report,chosen.filePaths[0],imported);publish({exportFolder:lastExport.folder,error:'',message:'TXT 结果已导出。'});return lastExport;
   },
   async 'show-export'(){if(lastExport)await shell.openPath(lastExport.folder);},
+  async 'authorization-dialog'(open){if(typeof open!=='boolean')throw new Error('授权窗口状态无效');view?.setVisible(!open);if(!open)publish({authorizationRequired:false});return access.status();},
+  async 'copy-machine-code'(){clipboard.writeText(access.status().machineCode);},
+  async activate(code){const result=access.activate(code);publish({authorizationRequired:false,error:''});return result;},
   async refresh(){if(state.running)throw new Error('筛选进行中，请先停止再刷新。');booted=false;view.webContents.reload();publish({ready:false,loggedIn:false,error:'',message:'正在重新加载 WhatsApp…'});}
 };
 app.whenReady().then(async()=>{
   if(!single)return;
+  let identity;
+  if(!app.isPackaged&&process.env.WNF_SMOKE==='1'){
+    identity=JSON.parse(fs.readFileSync(path.join(__dirname,'filter-license-public.json'),'utf8'));
+    grant={suiteId:identity.suiteId,keyId:identity.keyId,hardwareHash:'1'.repeat(64),theme:'blackGold'};
+  }else{
+    if(!initialLaunch){dialog.showErrorBox('请从皮卡丘打开','请在皮卡丘主页应用中心，右键 WhatsApp，选择“WhatsApp 号码筛选”。');app.quit();return;}
+    identity=await attachLauncher(initialLaunch);
+  }
+  if(!safeStorage.isEncryptionAvailable())throw new Error('本机授权保护暂不可用，请稍后重试');
+  const licenseName='whatsapp-filter-'+grant.hardwareHash.slice(0,16)+'.dat';
+  const guardRoot=!app.isPackaged&&process.env.WNF_SMOKE==='1'?path.join(app.getPath('userData'),'test-guard'):path.join(app.getPath('appData'),'maoyi Security',identity.suiteId);
+  access=new BusinessAccess({identity,hardwareHash:grant.hardwareHash,files:[path.join(guardRoot,licenseName),path.join(app.getPath('userData'),licenseName)],protect:text=>safeStorage.encryptString(text),unprotect:buffer=>safeStorage.decryptString(buffer)});
+  state.theme=grant.theme;
   app.userAgentFallback=waUserAgent;
   session.defaultSession.setUserAgent(waUserAgent);
-  const uiFiles={'index.html':'text/html; charset=utf-8','styles.css':'text/css; charset=utf-8','compact.css':'text/css; charset=utf-8','renderer.js':'text/javascript; charset=utf-8'};
+  const uiFiles={'index.html':'text/html; charset=utf-8','styles.css':'text/css; charset=utf-8','compact.css':'text/css; charset=utf-8','themes.css':'text/css; charset=utf-8','brand.png':'image/png','renderer.js':'text/javascript; charset=utf-8'};
   protocol.handle('app',request=>{
     try{
       const url=new URL(request.url),name=decodeURIComponent(url.pathname.slice(1));
@@ -76,12 +114,16 @@ app.whenReady().then(async()=>{
     }catch{return new Response('Not found',{status:404});}
   });
   const area=screen.getPrimaryDisplay().workAreaSize;
-  window=new BrowserWindow({show:process.env.WNF_SMOKE!=='1'&&process.env.WNF_STARTUP_CHECK!=='1',width:Math.min(1280,area.width),height:Math.min(850,area.height),minWidth:Math.min(980,area.width),minHeight:Math.min(600,area.height),center:true,title:'Whatsapp号码筛选',icon:path.join(__dirname,'icon.ico'),autoHideMenuBar:true,backgroundColor:'#f3f6f5',webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true}});
+  const shouldShow=process.env.WNF_STARTUP_CHECK!=='1'&&(app.isPackaged||process.env.WNF_SMOKE!=='1');
+  window=new BrowserWindow({show:false,titleBarStyle:'hidden',titleBarOverlay:false,width:Math.min(1280,area.width),height:Math.min(850,area.height),minWidth:Math.min(980,area.width),minHeight:Math.min(600,area.height),center:true,title:'皮卡丘 · WhatsApp 号码筛选',icon:path.join(__dirname,'icon.ico'),autoHideMenuBar:true,backgroundColor:backgrounds[state.theme],webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true}});
+  window.once('ready-to-show',()=>{if(shouldShow)focusWindow();});
   window.removeMenu();
-  for(const [action,handler]of Object.entries(handlers))ipcMain.handle('filter:'+action,async event=>{
-    if(event.sender!==window.webContents||event.senderFrame?.url!==uiUrl)throw new Error('Unsupported caller');
+  window.on('maximize',()=>publish({maximized:true}));window.on('unmaximize',()=>publish({maximized:false}));
+  for(const [action,handler]of Object.entries(handlers))ipcMain.handle('filter:'+action,async (event,...args)=>{
+    if(event.sender!==window.webContents||event.senderFrame!==event.sender.mainFrame||event.senderFrame?.url!==uiUrl)throw new Error('Unsupported caller');
+    if(action==='window-control')return handler(...args);
     if(busy)throw new Error('上一个操作尚未结束，请稍候。');busy=true;
-    try{return await handler();}catch(error){const message=String(error?.message||error).replace(/\d{7,}/g,'[号码]').slice(0,400);publish({error:message});throw new Error(message);}finally{busy=false;}
+    try{return await handler(...args);}catch(error){const message=String(error?.message||error).replace(/\d{7,}/g,'[号码]').slice(0,400);publish({error:message,...(error.code==='authorization-required'?{authorizationRequired:true}:{})});throw new Error(message);}finally{busy=false;}
   });
   const waSession=session.fromPartition('persist:whatsapp-number-filter');
   waSession.setUserAgent(waUserAgent);
@@ -97,6 +139,8 @@ app.whenReady().then(async()=>{
   view.webContents.on('did-fail-load',(_event,code,description,_url,isMainFrame)=>{if(isMainFrame&&code!==-3)publish({error:'WhatsApp 加载失败：'+description});});
   window.webContents.on('did-finish-load',()=>publish({}));
   await window.loadURL(uiUrl);
+  const visible=shouldShow?focusWindow():false;
+  bridge?.socket.write(JSON.stringify({type:'ready',visible})+'\n');
   if(process.env.WNF_SMOKE==='1'){
     const fixture=path.join(__dirname,'smoke-fixture.html');
     if(!fs.existsSync(fixture))throw new Error('Smoke fixture missing');
@@ -112,7 +156,8 @@ app.whenReady().then(async()=>{
   }
   void view.webContents.loadURL('https://web.whatsapp.com/login/').catch(error=>publish({error:'WhatsApp 加载失败：'+error.message}));
   timer=setInterval(poll,1000);
-  app.on('second-instance',()=>{if(window){if(window.isMinimized())window.restore();window.show();window.focus();}});
-  window.on('closed',()=>{clearInterval(timer);if(!view.webContents.isDestroyed())view.webContents.close();window=null;});
+  app.on('second-instance',async(_event,_args,_cwd,additionalData)=>{try{await attachLauncher(additionalData);const visible=focusWindow();bridge.socket.write(JSON.stringify({type:'ready',visible})+'\n');}catch{}});
+  if(!app.isPackaged&&process.env.WNF_SMOKE==='1')process.on('wnf-test-theme',applyTheme);
+  window.on('closed',()=>{clearInterval(timer);bridge?.socket.destroy();if(!view.webContents.isDestroyed())view.webContents.close();window=null;});
 }).catch(error=>{dialog.showErrorBox('Whatsapp号码筛选启动失败',String(error.message||error));app.quit();});
 app.on('window-all-closed',()=>app.quit());

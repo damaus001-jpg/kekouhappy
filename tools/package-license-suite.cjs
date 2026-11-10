@@ -195,6 +195,9 @@ function main() {
     run(process.execPath, [npmCli, 'run', 'build:prompt-bundles'], {
       MAOYI_LICENSE_SUITE_PATH: suitePath
     });
+    run(process.execPath, ['tools/prepare-whatsapp-filter-runtime.cjs', '--package'], {
+      MAOYI_LICENSE_SUITE_PATH: suitePath
+    });
     run(process.execPath, [npmCli, 'run', 'test:security'], {
       MAOYI_LICENSE_SUITE_PATH: suitePath
     });

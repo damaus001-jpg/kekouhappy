@@ -20,6 +20,7 @@ module.exports = {
     'package.json'
   ],
   extraResources: [
+    { from: '.package-staging/whatsapp-filter-package-runtime', to: 'whatsapp-filter' },
     { from: '.package-secrets/client-license-suite.json', to: 'license-suite-public.json' },
     { from: '.package-secrets/translation-prompts.dfp', to: 'translation-prompts.dfp' },
     { from: '.package-secrets/smart-reply-prompt.dfp', to: 'smart-reply-prompt.dfp' },

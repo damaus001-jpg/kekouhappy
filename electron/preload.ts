@@ -33,6 +33,7 @@ const initialTheme = (
 ) ? initialThemeCandidate : 'blackGold';
 
 const api: ElectronApi = {
+  openWhatsAppNumberFilter: () => ipcRenderer.invoke('whatsapp-filter:open'),
   getAssistantLibrary: () => ipcRenderer.invoke('assistant:get'),
   getCustomer: (target) => ipcRenderer.invoke('customer:get',target),
   saveCustomer: (target,value) => ipcRenderer.invoke('customer:save',target,value),

@@ -1,8 +1,37 @@
 const api=window.numberFilter;
 const el=id=>document.getElementById(id);
 let current={};let working=false;
+for(const [id,action]of [['window-minimize','minimize'],['window-maximize','toggle-maximize'],['window-close','close']]){
+ el(id).addEventListener('click',async()=>{try{await api.windowControl(action);}catch(error){if(action!=='close'){current={...current,error:String(error.message||error)};render(current);}}});
+}
+let authorizationOpening=false;
+async function showAuthorization(){
+ if(authorizationOpening||el('business-auth-dialog').open)return;
+ authorizationOpening=true;
+ try{
+  const status=await api.authorizationDialog(true);
+  el('business-machine-code').value=status.machineCode;
+  el('authorization-error').hidden=true;
+  el('business-auth-dialog').showModal();
+  el('business-code').focus();
+ }catch(error){current={...current,error:String(error.message||error)};}
+ finally{authorizationOpening=false;}
+}
+async function hideAuthorization(){
+ el('business-auth-dialog').close();
+ try{await api.authorizationDialog(false);}catch{}
+}
 function render(s){
   current=s;
+  el('window-maximize').classList.toggle('is-maximized',!!s.maximized);
+  el('window-maximize').title=s.maximized?'还原':'最大化';
+  el('window-maximize').setAttribute('aria-label',s.maximized?'还原':'最大化');
+  document.documentElement.dataset.theme=['blackGold','pink','murongPurple','clearWaterBlue'].includes(s.theme)?s.theme:'blackGold';
+  if(s.authorization){
+   el('authorization-open').textContent=s.authorization.activated?'筛选业务已授权':'导出试用 '+s.authorization.trialsRemaining+' / 3 · 业务授权';
+   el('authorization-trials').textContent=s.authorization.activated?'本机筛选业务已激活。':'剩余 '+s.authorization.trialsRemaining+' 次导出试用。每点击一次导出扣 1 次，取消保存也会扣除。';
+  }
+  if(s.authorizationRequired)void showAuthorization();
   el('connection').textContent=!s.online?'网络已断开':s.loggedIn?'WhatsApp 已登录':s.phase==='syncing'?'正在同步消息':s.phase==='loading'?'正在加载页面':'等待扫码登录';
   el('status-dot').classList.toggle('online',s.loggedIn&&s.online);
   el('file-name').textContent=s.imported?.fileName||'尚未导入号码文件';
@@ -21,3 +50,13 @@ function render(s){
 async function perform(method){if(working)return;working=true;render(current);try{await api[method]();}catch(error){current={...current,error:String(error.message||error).replace(/^Error invoking remote method '[^']+': Error: /,'')};}finally{working=false;render(current);}}
 for(const [id,method]of Object.entries({import:'importTxt',start:'start',stop:'stop',export:'exportTxt','show-export':'showExport',refresh:'refresh'}))el(id).addEventListener('click',()=>perform(method));
 api.onState(render);
+el('authorization-open').addEventListener('click',()=>void showAuthorization());
+el('authorization-close').addEventListener('click',()=>void hideAuthorization());
+el('business-auth-dialog').addEventListener('cancel',event=>{event.preventDefault();void hideAuthorization();});
+el('copy-machine-code').addEventListener('click',async()=>{try{await api.copyMachineCode();}catch(error){el('authorization-error').textContent=error.message;el('authorization-error').hidden=false;}});
+el('activate-business').addEventListener('click',async()=>{
+ const button=el('activate-business');if(button.disabled)return;button.disabled=true;
+ try{await api.activate(el('business-code').value.trim());await hideAuthorization();el('business-code').value='';}
+ catch(error){el('authorization-error').textContent=String(error.message||error).replace(/^Error invoking remote method '[^']+': Error: /,'');el('authorization-error').hidden=false;}
+ finally{button.disabled=false;}
+});

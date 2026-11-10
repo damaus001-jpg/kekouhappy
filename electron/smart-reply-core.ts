@@ -24,10 +24,10 @@ const exactInputKeys = new Set([
   'allowSensitiveEcho',
   'openSmsAreaContext'
 ]);
-const exactMessageKeys = new Set(['speaker', 'text']);
+const exactMessageKeys = new Set(['speaker', 'text', 'timestamp']);
 const exactResponseKeys = new Set(['schema_version', 'replies']);
 const exactReplyKeys = new Set(['id', 'english', 'chinese']);
-const allowedPlatforms = new Set(['whatsapp', 'telegram-a', 'telegram-k', 'signal', 'opensms']);
+const allowedPlatforms = new Set(['whatsapp', 'telegram-a', 'telegram-k', 'signal', 'opensms', 'apple']);
 
 function hasExactKeys(value: Record<string, unknown>, allowed: Set<string>) {
   return Object.keys(value).every((key) => allowed.has(key));
@@ -61,6 +61,7 @@ export function validateSmartReplyRequest(value: unknown): SmartReplyRequest {
       throw new Error('Smart reply message is invalid.');
     }
     const message = item as Record<string, unknown>;
+    assertBoundedOptionalText(message.timestamp, 'Smart reply message timestamp', 256);
     if (message.speaker !== 'self' && message.speaker !== 'other') {
       throw new Error('Smart reply speaker is invalid.');
     }
