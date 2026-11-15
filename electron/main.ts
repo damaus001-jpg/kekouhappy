@@ -20,6 +20,7 @@ import {
   type Session,
 } from 'electron';
 import { workspaceAccessHeaders } from './workspace-access.js';
+import { installMainWindowRecovery } from './main-window-recovery.js';
 import { appendFile, cp, readdir, readFile, writeFile, mkdir, rename, rm, stat } from 'node:fs/promises';
 import { createReadStream, lstatSync, readFileSync, realpathSync, statSync, type Dirent } from 'node:fs';
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
@@ -31,6 +32,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { readAssistantLibrary, saveAssistantModule, importAssistantModule, attachAssistantMedia, revealAssistantMedia, exportAssistantTemplate, exportAssistantModule, assistantMediaPath } from './assistant-library.js';
 import type { AssistantKind, AssistantModule } from './assistant-library-types.js';
+import { registerDevelopmentPageDebugWindow } from './development/page-debug-window.js';
 import { handoffChatToGpt } from './gpt-handoff.js';
 import { WhatsAppFilterLauncher, resolveWhatsAppFilterLaunch } from './whatsapp-filter-launcher.js';
 import { installOpenSmsLoginPersistence, removeOpenSmsLogin } from './opensms-login.js';
@@ -503,6 +505,7 @@ let remoteGuardVisibilityLockPromise: Promise<void> | null = null;
 let remoteGuardLastClearState: RemoteGuardState = 'starting';
 let remoteGuardRuntimeReason = '';
 const remoteGuardAlarmWindows = new Set<BrowserWindow>();
+const developmentPageDebugWindows = new Set<BrowserWindow>();
 let clientLicenseManager: ClientLicenseManager | null = null;
 let authorizedRuntimePrepared = false;
 let activeRuntimeSecurity: { payload: RuntimeBindingPayload; devicePrivateKeyPem: string } | null = null;
@@ -8270,6 +8273,7 @@ function registerIpc() {
     }
   });
   trustedHandle('app:is-packaged', false, () => app.isPackaged);
+  if (!app.isPackaged) registerDevelopmentPageDebugWindow(assertTrustedIpcSender, assertClientRuntimeAllowed, developmentPageDebugWindows);
   trustedHandle('config:get', true, () => readConfig());
   trustedHandle('config:save', true, (_event, config: AppConfig) => {
     assertSerializedSize(config, 'Application config', 1024 * 1024);
@@ -8673,21 +8677,29 @@ async function runDevelopmentCacheSmokeCheck() {
   if (loaded[0]?.translatedText !== request.translatedText) throw new Error('Encrypted translation cache smoke round trip failed.');
 }
 
+function isMainWindowRendererUnavailable(target = mainWindow) {
+  return !target || target.isDestroyed() || target.webContents.isDestroyed() || target.webContents.isCrashed();
+}
+
 async function flushMainWindowCustomerWrites() {
   const target = mainWindow;
-  if (!target || target.isDestroyed() || target.webContents.isDestroyed() || !isTrustedMainUrl(target.webContents.getURL())) return;
+  if (!target || isMainWindowRendererUnavailable(target) || !isTrustedMainUrl(target.webContents.getURL())) return;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     await Promise.race([
       target.webContents.executeJavaScript('window.__dfFlushCustomerWritesBeforeExit?.()'),
       new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error('客户资料仍在保存，请检查保存状态后重试')), 30_000); })
     ]);
+  } catch (error) {
+    // A dead renderer cannot flush or resume editing. Do not trap taskbar Close
+    // behind a save request it can no longer answer. Live save failures still block.
+    if (!isMainWindowRendererUnavailable(target)) throw error;
   } finally { if (timer) clearTimeout(timer); }
 }
 
 async function reportCustomerSaveExitFailure(error: unknown) {
   const target = mainWindow;
-  if (!target || target.isDestroyed()) return;
+  if (!target || isMainWindowRendererUnavailable(target)) return;
   await target.webContents.executeJavaScript('window.__dfResumeCustomerEditing?.()').catch(() => undefined);
   await dialog.showMessageBox(target, {
     type: 'error', title: '客户资料尚未保存', message: '已取消退出，客户资料和草稿仍保留在窗口中。',
@@ -8696,7 +8708,7 @@ async function reportCustomerSaveExitFailure(error: unknown) {
 }
 
 function prepareCustomerWritesForQuit() {
-  if (customerQuitSaveReady || !mainWindow || mainWindow.isDestroyed() || !isTrustedMainUrl(mainWindow.webContents.getURL())) return true;
+  if (customerQuitSaveReady || isMainWindowRendererUnavailable() || !mainWindow || !isTrustedMainUrl(mainWindow.webContents.getURL())) return true;
   customerQuitSavePromise ??= flushMainWindowCustomerWrites()
     .then(() => { customerQuitSaveReady = true; app.quit(); })
     .catch(reportCustomerSaveExitFailure)
@@ -8706,7 +8718,7 @@ function prepareCustomerWritesForQuit() {
 
 function deferWindowCloseForCustomerWrites(event: { preventDefault: () => void }) {
   const target = mainWindow;
-  if (customerWindowCloseReady || !target || target.isDestroyed() || !isTrustedMainUrl(target.webContents.getURL())) return;
+  if (customerWindowCloseReady || !target || isMainWindowRendererUnavailable(target) || !isTrustedMainUrl(target.webContents.getURL())) return;
   event.preventDefault();
   customerWindowClosePromise ??= flushMainWindowCustomerWrites()
     .then(() => { if (!target.isDestroyed()) { customerWindowCloseReady = true; target.close(); } })
@@ -8757,6 +8769,26 @@ async function createWindow() {
   applyTaskbarUnreadOverlay();
   applyTaskbarUnreadAttention();
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  const recoveryWindow = mainWindow;
+  const stopRendererRecovery = installMainWindowRecovery(recoveryWindow, {
+    logPath: join(app.getPath('userData'), 'renderer-health.jsonl'),
+    hideSignalWindows: () => {
+      hideAllSignalWindows();
+      pendingSignalWorkspaceBounds.clear();
+      lastSignalScreenBounds.clear();
+      visibleSignalProfileId = null;
+    },
+    recoveryFailed: () => {
+      void dialog.showMessageBox(recoveryWindow, {
+        type: 'error', title: '界面无法恢复',
+        message: '客户端界面连续异常退出，请保存其他程序的工作后重启电脑。',
+        detail: '已保存的账号和客户资料仍保留。未保存的界面草稿可能已随页面异常退出而丢失。',
+        buttons: ['关闭客户端'], noLink: true
+      }).then(() => {
+        if (!recoveryWindow.isDestroyed()) recoveryWindow.close();
+      }).catch(() => undefined);
+    }
+  });
   mainWindow.webContents.on('will-navigate', (event, targetUrl) => {
     if (!isTrustedMainUrl(targetUrl)) event.preventDefault();
   });
@@ -8788,6 +8820,7 @@ async function createWindow() {
       return;
     }
     deferWindowCloseForCustomerWrites(event);
+    if (isMainWindowRendererUnavailable()) stopRendererRecovery();
   });
   mainWindow.on('restore', requestSignalWorkspaceRestoreOnce);
   mainWindow.on('show', requestSignalWorkspaceRestoreOnce);
@@ -8811,6 +8844,7 @@ async function createWindow() {
   const onDisplayMetricsChanged = () => refreshSignalAfterLayoutChange();
   screen.on('display-metrics-changed', onDisplayMetricsChanged);
   mainWindow.once('closed', () => {
+    for (const debugWindow of developmentPageDebugWindows) debugWindow.destroy();
     screen.removeListener('display-metrics-changed', onDisplayMetricsChanged);
     signalLayoutReplayTimers.forEach(timer => clearTimeout(timer));
     signalLayoutReplayTimers = [];

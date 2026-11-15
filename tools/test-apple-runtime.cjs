@@ -113,7 +113,7 @@ if (!process.versions.electron) {
     console.log('Apple: fixed Enter, physical double/triple spaces, English spaces, IME and legacy settings passed');
     await change();
     const scanned = await execute(helpers.buildMessageScanScript('apple', { limit: 20, includeAlreadyTranslated: true }));
-    assert.equal(scanned.length, 4); assert.ok(scanned.every(item => item.contactId.startsWith('apple:device-a:chat-a:')));
+    assert.equal(scanned.length, 4); assert.ok(scanned.every(item => item.contactId === '+12135551212' && item.contactIdType === 'phone' && item.conversationSignature.startsWith('apple:device-a:chat-a:')));
     assert.ok(scanned.every(item => item.text.startsWith('English message')), 'only right-side message originals are scanned');
     assert.equal((await execute(helpers.buildUnreadScanScript('apple'))).count, 0);
     assert.equal(await execute(helpers.buildMessageTranslationInjectScript(scanned[0].key, '气泡译文', 'apple', scanned[0].text)), true);
@@ -142,7 +142,8 @@ if (!process.versions.electron) {
     assert.equal(await execute(helpers.buildComposerRequestMatchScript(request.requestId)), false, 'device identity separates identical conversation IDs and phone numbers');
     assert.equal((await execute(helpers.buildComposerScript('write', 'Wrong device', true, false, 'default', request.requestId))).ok, false);
     assert.equal(await execute(helpers.buildMessageTranslationInjectScript(scanned[0].key, '错误会话译文', 'apple', scanned[0].text)), false);
-    assert.equal(await execute(`document.querySelectorAll('#messages .df-chat-translation').length`), 0, 'cached translations from another device are not applied');
+    await pause(240);
+    assert.equal(await execute(`document.querySelectorAll('#messages .df-chat-translation').length`), 2, 'the same peer phone reuses cached translations while stale device-bound writes remain blocked');
     request = await requestTranslation('刷新前的草稿'); await change('device-b');
     assert.equal(await execute(helpers.buildComposerRequestMatchScript(request.requestId)), false, 'reloading the same conversation also invalidates stale writes');
 

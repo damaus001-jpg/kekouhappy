@@ -70,6 +70,7 @@ const api: ElectronApi = {
   changeStorageLocation: () => ipcRenderer.invoke('storage:change-location'),
   getConfig: () => ipcRenderer.invoke('config:get'),
   isPackaged: () => ipcRenderer.invoke('app:is-packaged'),
+  openDebugUrl: (address: string) => ipcRenderer.invoke('development:open-debug-url', address),
   saveConfig: (config: AppConfig) => ipcRenderer.invoke('config:save', config),
   setEyeCareTranslationEnabled: (enabled: boolean) => ipcRenderer.invoke('config:set-eye-care-translation', enabled),
   getPlatformCatalog: () => ipcRenderer.invoke('platforms:get'),

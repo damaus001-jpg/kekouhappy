@@ -829,6 +829,7 @@ export type ElectronApi = {
   changeStorageLocation: () => Promise<StorageLocationActionResult>;
   getConfig: () => Promise<AppConfig>;
   isPackaged: () => Promise<boolean>;
+  openDebugUrl: (address: string) => Promise<void>;
   saveConfig: (config: AppConfig) => Promise<AppConfig>;
   setEyeCareTranslationEnabled: (enabled: boolean) => Promise<AppConfig>;
   getPlatformCatalog: () => Promise<PlatformInfo[]>;

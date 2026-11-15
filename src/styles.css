@@ -2711,6 +2711,28 @@ select:focus {
   height: 48px;
 }
 
+.opensms-debug-form {
+  margin-top: 16px;
+}
+
+.opensms-debug-form label {
+  margin-bottom: 8px;
+}
+
+.opensms-debug-controls {
+  display: flex;
+  gap: 10px;
+}
+
+.opensms-debug-controls input {
+  min-width: 0;
+  flex: 1;
+}
+
+.opensms-debug-controls button {
+  flex: 0 0 auto;
+}
+
 .opensms-entry-option strong {
   font-size: 18px;
 }

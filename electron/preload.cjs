@@ -47,6 +47,7 @@ const api = {
   changeStorageLocation: () => ipcRenderer.invoke('storage:change-location'),
   getConfig: () => ipcRenderer.invoke('config:get'),
   isPackaged: () => ipcRenderer.invoke('app:is-packaged'),
+  openDebugUrl: (address) => ipcRenderer.invoke('development:open-debug-url', address),
   saveConfig: (config) => ipcRenderer.invoke('config:save', config),
   setEyeCareTranslationEnabled: (enabled) => ipcRenderer.invoke('config:set-eye-care-translation', enabled),
   getPlatformCatalog: () => ipcRenderer.invoke('platforms:get'),

@@ -7,13 +7,39 @@ declare const workspaceBusy: boolean;
 declare const sendBlocked: boolean;
 declare const controlOwner: string | null;
 
-export function appleRuntime(command: any) {
+// Self-contained because it is also serialized into the Apple translation layer.
+export function appleTranslationCacheMatchesPhone(entry: { platform?: string; contactId?: string; contactIdType?: string }, phone: string) {
+  const normalize = (value: string) => {
+    if (!/^\+?[\d\s().-]+$/.test(value.trim())) return '';
+    let digits = value.replace(/\D/g, '');
+    const international = value.trim().startsWith('+') || digits.startsWith('00');
+    if (digits.startsWith('00')) digits = digits.slice(2);
+    if (!international && digits.length === 10) digits = '1' + digits;
+    return /^[1-9]\d{7,14}$/.test(digits) ? '+' + digits : '';
+  };
+  if (entry.platform && entry.platform !== 'apple') return false;
+  const expected = normalize(phone); if (!expected) return false;
+  let identity = entry.contactId || '';
+  // Read compatible historical entries without rewriting or deleting caches.
+  if (identity.startsWith('apple:')) {
+    const parts = identity.split(':'); if (parts.length !== 4) return false;
+    try { identity = decodeURIComponent(parts[3]); } catch { return false; }
+  }
+  return normalize(identity) === expected;
+}
+
+export function appleRuntime(command: any, cacheMatchesPhone: typeof appleTranslationCacheMatchesPhone) {
   if (location.origin !== 'http://127.0.0.1:8070' || window.top !== window) return false;
   const w = window as any;
-  const version = '2026-11-09-apple-gpt-history-time-v4';
+  const version = '2026-11-15-apple-translation-performance-v5';
+  // Keep the established input-readiness contract; performance updates have
+  // their own version and do not change the preload's input protection policy.
+  const startupGuardMarker = '2026-11-09-apple-gpt-history-time-v4';
   if (w.__dfApple?.version !== version) {
     w.__dfApple?.dispose();
     const state: any = { version, enabled: false, signature: '', context: '', input: null, pending: null, ready: null, sensitive: null, writing: false, sending: false, inFlight: false, composing: false, cache: new Map() };
+    let decorationDirty = true;
+    const isForeground = () => state.foreground !== false && !document.hidden;
     const canonical = (value: unknown) => String(value ?? '').replace(/\r\n?/g, '\n').replace(/\u00a0/g, ' ').normalize('NFC').trim();
     const hash = (value: string) => { let h = 2166136261; for (const c of value) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return (h >>> 0).toString(36); };
     const visible = (node: HTMLElement | null) => !!node?.isConnected && node.getBoundingClientRect().width > 0 && node.getBoundingClientRect().height > 0 && getComputedStyle(node).visibility !== 'hidden';
@@ -82,8 +108,10 @@ export function appleRuntime(command: any) {
       if (input) { delete input.dataset.dfTranslatorRequestId; delete input.dataset.dfTranslatorReadyRequestId; }
     };
     const sync = () => {
+      observeMessages();
       const stamp = context(), input = editor(), id = contact().id;
       if (stamp !== state.context || input !== state.input) {
+        decorationDirty = true;
         reset(); state.inFlight = false; state.context = stamp; state.signature = id; state.input = input;
         w.__dfConversationSignature = id; emit('conversation-change', id); hint('');
       }
@@ -95,32 +123,48 @@ export function appleRuntime(command: any) {
         !(typeof workspaceBusy === 'boolean' && workspaceBusy) && !(typeof sendBlocked === 'boolean' && sendBlocked) &&
         !(typeof controlOwner === 'string' && typeof workspaceDevice === 'string' && controlOwner !== workspaceDevice);
     };
+    const rowSources = new WeakMap<HTMLElement, { body: HTMLElement; text: string; key: string; id: string; messageId: string; timestamp: string }>();
     const rows = () => {
-      const id = contact().id, box = document.getElementById('messages');
-      if (!id || !box) return [];
-      return Array.from(box.querySelectorAll<HTMLElement>(':scope > .message')).flatMap((row, index) => {
+      processMutations(observer.takeRecords());
+      const target = contact(), id = target.id, box = document.getElementById('messages');
+      if (!id || !target.phone || !box) return [];
+      // Parse changed sources before reading geometry. No persistent geometry
+      // cache: scroll, resize and wrapping must immediately affect candidates.
+      const parsed = Array.from(box.querySelectorAll<HTMLElement>(':scope > .message')).flatMap((row, index) => {
         const body = row.querySelector<HTMLElement>('.bubble > .original');
-        const text = canonical(body?.textContent);
-        if (!body || !text || /^\[(?:附件消息|正文解析未完成|无文字内容)\]$/.test(text)) return [];
+        if (!body) return [];
         const savedIndex = Number(row.dataset.messageId ?? index);
         const saved = Array.isArray(currentConversation?.messages) ? currentConversation.messages[savedIndex] : undefined;
         const timestamp = canonical(saved?.time || row.querySelector('.message-meta')?.textContent?.replace(/^[^·]*·\s*/, '')).slice(0, 256);
+        const messageId = row.dataset.messageId ?? String(index);
+        let cached = rowSources.get(row);
+        if (!cached || cached.body !== body || cached.id !== id || cached.messageId !== messageId || cached.timestamp !== timestamp) {
+          const text = canonical(body.textContent);
+          cached = { body, text, key: `${id}:${messageId}:${hash(text)}:${hash(timestamp)}`, id, messageId, timestamp };
+          rowSources.set(row, cached);
+        }
+        const { text, key } = cached;
+        if (!text || /^\[(?:附件消息|正文解析未完成|无文字内容)\]$/.test(text)) return [];
         const direction = row.classList.contains('outgoing') ? 'outgoing' : row.classList.contains('incoming') ? 'incoming' : 'unknown';
-        const key = `${id}:${row.dataset.messageId ?? index}:${hash(text)}:${hash(timestamp)}`;
         if (row.dataset.dfMsgKey && row.dataset.dfMsgKey !== key) row.querySelectorAll('.df-chat-translation').forEach(node => node.remove());
-        row.dataset.dfMsgKey = key;
-        const rect = row.getBoundingClientRect(), bounds = box.getBoundingClientRect();
-        return [{ row, body, key, text, timestamp, direction, contactId: id, contactIdType: 'platform', contactTitle: contact().title, conversationSignature: id,
-          scanBand: rect.bottom < bounds.top ? 'above' : rect.top > bounds.bottom ? 'below' : 'visible', nearConversationEnd: box.scrollHeight - box.scrollTop - box.clientHeight < 80,
+        if (row.dataset.dfMsgKey !== key) row.dataset.dfMsgKey = key;
+        return [{ row, body, key, text, timestamp, direction, contactId: target.phone, contactIdType: 'phone', contactKey: 'apple-phone:' + target.phone, contactTitle: target.title, conversationSignature: id }];
+      });
+      const bounds = box.getBoundingClientRect();
+      const nearConversationEnd = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+      return parsed.map(item => {
+        const rect = item.row.getBoundingClientRect();
+        return { ...item, scanBand: rect.bottom < bounds.top ? 'above' : rect.top > bounds.bottom ? 'below' : 'visible', nearConversationEnd,
           rectTop: rect.top, rectBottom: rect.bottom, rectHeight: rect.height, viewportHeight: innerHeight,
-          inViewport: rect.bottom >= bounds.top && rect.top <= bounds.bottom, rectLeft: rect.left, rectRight: rect.right }];
+          inViewport: rect.bottom >= bounds.top && rect.top <= bounds.bottom, rectLeft: rect.left, rectRight: rect.right };
       });
     };
-    const preserveScroll = (change: () => void) => {
+    const preserveScroll = (change: () => void, items: ReturnType<typeof rows>) => {
       const box = document.getElementById('messages');
       if (!box) return;
       const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 48;
-      const anchor = Array.from(box.querySelectorAll<HTMLElement>(':scope > .message')).find(row => row.getBoundingClientRect().bottom >= box.getBoundingClientRect().top);
+      const boxTop = box.getBoundingClientRect().top;
+      const anchor = items.find(item => item.rectBottom >= boxTop)?.row;
       const top = anchor?.getBoundingClientRect().top ?? 0;
       change();
       if (atBottom) box.scrollTop = box.scrollHeight;
@@ -134,6 +178,9 @@ export function appleRuntime(command: any) {
     };
     const decorate = () => {
       const items = rows();
+      if (!decorationDirty || !isForeground()) return items;
+      decorationDirty = false;
+      if (timer !== undefined) { clearTimeout(timer); timer = undefined; }
       preserveScroll(() => {
         for (const item of items) { const cached = state.cache.get(item.contactId + '\n' + item.text); if (cached) inject(item, cached); }
         const valid = (item: typeof items[number]) => (item.direction === 'incoming' || item.direction === 'outgoing') && item.text.length <= 4000 && /[A-Za-z]{2,}/.test(item.text) && !/[\u3400-\u9fff]/.test(item.text);
@@ -151,7 +198,7 @@ export function appleRuntime(command: any) {
           button.style.cssText = 'display:block;margin:5px 0;border:1px solid #80c79a;border-radius:6px;padding:3px 8px;background:#effbf3;color:#197745;cursor:pointer';
           button.onclick = event => {
             event.preventDefault(); event.stopPropagation();
-            if (button.disabled || contact().id !== item.contactId || !item.row.isConnected) return;
+            if (button.disabled || contact().id !== item.conversationSignature || !item.row.isConnected) return;
             const current = rows(); const index = current.findIndex(row => row.key === item.key);
             if (index < 0 || !current.filter(row => row.direction === 'incoming' && valid(row)).slice(-3).some(row => row.key === item.key)) return;
             const messages = current.slice(0, index + 1).filter(valid).slice(-18).map(row => ({ speaker: row.direction === 'outgoing' ? 'self' : 'other', text: row.text, timestamp: row.timestamp }));
@@ -162,9 +209,36 @@ export function appleRuntime(command: any) {
           };
           host.append(button); item.body.parentElement!.append(host);
         }
-      });
+      }, items);
       return items;
     };
+    let paintTimer: ReturnType<typeof setTimeout> | undefined;
+    let pendingPaints: { command: any; stamp: string; resolve: (ok: boolean) => void }[] = [];
+    const queueTranslation = (cmd: any) => new Promise<boolean>(resolve => {
+      pendingPaints.push({ command: cmd, stamp: context(), resolve });
+      if (paintTimer !== undefined) return;
+      paintTimer = setTimeout(() => {
+        paintTimer = undefined;
+        const batch = pendingPaints; pendingPaints = [];
+        try {
+          const items = rows(), byKey = new Map(items.map(item => [item.key, item]));
+          const stamp = context();
+          const valid = batch.map(request => ({ request, item: byKey.get(request.command.key) })).filter(({ request, item }) => {
+            const ok = !!item && request.stamp === stamp && !!request.command.translation && canonical(item.text) === canonical(request.command.sourceText);
+            if (!ok) request.resolve(false);
+            return ok;
+          });
+          if (valid.length) preserveScroll(() => {
+            for (const { request, item } of valid) {
+              state.cache.set(item!.contactId + '\n' + item!.text, String(request.command.translation));
+              inject(item, String(request.command.translation), request.command.replaceExisting);
+              request.resolve(true);
+            }
+            while (state.cache.size > 3000) state.cache.delete(state.cache.keys().next().value);
+          }, items);
+        } catch { for (const request of batch) request.resolve(false); }
+      }, isForeground() ? 24 : 100);
+    });
     const stop = (event: Event) => { event.preventDefault(); event.stopImmediatePropagation(); };
     const directUrl = (text: string) => { if (/\s/.test(text) || !/^(https?:\/\/|www\.)/i.test(text)) return false; try { const url = new URL(/^www\./i.test(text) ? 'https://' + text : text); return ['http:', 'https:'].includes(url.protocol) && !!url.hostname; } catch { return false; } };
     const sensitive = (text: string) => text.length <= 256 && !/[\r\n]/.test(text) && (/^[0-9 ]{1,34}$/.test(text) || /^0x[0-9A-Za-z]{20,80}$/.test(text) || /^T[0-9A-Za-z]{33}$/.test(text) || /^[0-9A-Za-z]{32,44}$/.test(text));
@@ -235,7 +309,7 @@ export function appleRuntime(command: any) {
       if (cmd.action === 'enabled') { state.enabled = cmd.enabled === true; if (!state.enabled) reset(); return true; }
       if (cmd.action === 'contact') return contact();
       if (cmd.action === 'export') return exportConversation(cmd.command);
-      if (cmd.action === 'install' || cmd.action === 'smart') { decorate(); return true; }
+      if (cmd.action === 'install' || cmd.action === 'smart') { processMutations(observer.takeRecords()); if (decorationDirty && isForeground()) decorate(); return true; }
       if (cmd.action === 'text') return read();
       if (cmd.action === 'focus' || cmd.action === 'focusNative') { editor()?.focus(); return !!contact().id && document.activeElement === editor(); }
       if (cmd.action === 'matches') return matches(state.pending) && state.pending.requestId === cmd.requestId;
@@ -243,16 +317,13 @@ export function appleRuntime(command: any) {
       if (cmd.action === 'probe') return { guard: version, hasComposer: !!editor(), protectionReady: true, translatedReady: !!state.ready, pending: !!state.pending, textLength: read().length, hasChinese: /[\u3400-\u9fff]/.test(read()), queueLength: w.__dfTranslatorQueue?.length || 0 };
       if (cmd.action === 'scan') return decorate().filter(item => /[A-Za-z]{2,}/.test(item.text) && !/[\u3400-\u9fff]/.test(item.text) && item.text.length <= 4000 && (cmd.options?.includeAlreadyTranslated || !item.row.querySelector('.df-chat-translation')) && item.rectBottom >= -innerHeight * (cmd.options?.viewportScreensAbove || 0) && item.rectTop <= innerHeight * (1 + (cmd.options?.viewportScreensBelow || 0))).slice(-(cmd.options?.limit || 100)).map(({ row, body, ...item }) => item);
       if (cmd.action === 'cache') {
-        const id = contact().id;
-        for (const entry of cmd.entries || []) if (entry.sourceText && entry.translatedText && (!entry.contactId || entry.contactId === id)) state.cache.set(id + '\n' + canonical(entry.sourceText), String(entry.translatedText));
+        const phone = contact().phone || '';
+        for (const entry of cmd.entries || []) if (entry.sourceText && entry.translatedText && cacheMatchesPhone(entry, phone)) state.cache.set(phone + '\n' + canonical(entry.sourceText), String(entry.translatedText));
         while (state.cache.size > 3000) state.cache.delete(state.cache.keys().next().value);
-        decorate(); return true;
+        decorationDirty = true; decorate(); return true;
       }
       if (cmd.action === 'inject') {
-        const item = rows().find(item => item.key === cmd.key && canonical(item.text) === canonical(cmd.sourceText));
-        if (!item || !cmd.translation) return false;
-        state.cache.set(item.contactId + '\n' + item.text, String(cmd.translation));
-        preserveScroll(() => inject(item, String(cmd.translation), cmd.replaceExisting)); return true;
+        return queueTranslation(cmd);
       }
       if (cmd.action === 'state') {
         const value = cmd.state || {};
@@ -309,26 +380,76 @@ export function appleRuntime(command: any) {
     window.addEventListener('keydown', onKey, true); window.addEventListener('click', onClick, true); document.addEventListener('input', onInput, true);
     document.addEventListener('compositionstart', onCompositionStart, true); document.addEventListener('compositionend', onCompositionEnd, true);
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const observer = new MutationObserver(records => {
-      if (!records.some(record => !(record.target instanceof Element ? record.target : record.target.parentElement)?.closest('.df-chat-translation, .df-smart-reply-host') && (record.type !== 'childList' || [...record.addedNodes, ...record.removedNodes].some(node => !(node instanceof Element && node.matches('.df-chat-translation, .df-smart-reply-host')))))) return;
-      if (timer) return;
-      timer = setTimeout(() => { timer = undefined; sync(); decorate(); }, 180);
-    });
-    const box = document.getElementById('messages'); if (box) observer.observe(box, { childList: true, subtree: true, characterData: true });
+    const scheduleDecorate = () => {
+      if (timer !== undefined || !isForeground()) return;
+      timer = setTimeout(() => { timer = undefined; sync(); if (isForeground()) decorate(); }, 180);
+    };
+    const processMutations = (records: MutationRecord[]) => {
+      const ownUi = '.df-chat-translation, .df-smart-reply-host';
+      for (const record of records) {
+        const target = record.target instanceof Element ? record.target : record.target.parentElement;
+        if (target?.closest(ownUi)) continue;
+        if (record.type === 'childList' && [...record.addedNodes, ...record.removedNodes].every(node => node instanceof Element && node.matches(ownUi))) continue;
+        const row = target?.closest<HTMLElement>('.message');
+        const cached = row && rowSources.get(row);
+        if (row && cached && (target === cached.body || (target && cached.body.contains(target)))) rowSources.delete(row);
+        if (record.type === 'childList') for (const node of [...record.addedNodes, ...record.removedNodes]) if (node instanceof HTMLElement) {
+          rowSources.delete(node); node.querySelectorAll<HTMLElement>('.message').forEach(row => rowSources.delete(row));
+        }
+        decorationDirty = true; scheduleDecorate();
+      }
+    };
+    const observer = new MutationObserver(processMutations);
+    let observedBox: HTMLElement | null = null;
+    const observeMessages = () => {
+      const box = document.getElementById('messages');
+      if (observedBox === box) return;
+      processMutations(observer.takeRecords()); observer.disconnect(); observedBox = box; decorationDirty = true;
+      if (box) observer.observe(box, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['class', 'data-message-id'] });
+    };
+    state.setForeground = (foreground: boolean) => { if (state.foreground === foreground) return; state.foreground = foreground; if (foreground) { decorationDirty = true; scheduleDecorate(); } };
+    const onVisibility = () => { if (isForeground()) { decorationDirty = true; scheduleDecorate(); } };
+    document.addEventListener('visibilitychange', onVisibility);
     const interval = setInterval(sync, 1500);
     state.dispose = () => {
       observer.disconnect(); clearInterval(interval); if (timer) clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
+      if (paintTimer !== undefined) clearTimeout(paintTimer);
+      for (const request of pendingPaints) request.resolve(false); pendingPaints = [];
       document.removeEventListener('input', onSpaceInput, true); for (const name of ['focusout', 'pointerdown']) document.removeEventListener(name, clearSpaceRun, true); for (const name of ['compositionstart', 'compositionend']) document.removeEventListener(name, onSpaceComposition, true); window.removeEventListener('keydown', onKey, true); window.removeEventListener('click', onClick, true); document.removeEventListener('input', onInput, true);
       document.removeEventListener('compositionstart', onCompositionStart, true); document.removeEventListener('compositionend', onCompositionEnd, true);
       style.remove(); document.querySelectorAll('#messages .df-smart-reply-host').forEach(node => node.remove()); document.getElementById('df-apple-composer-status')?.remove(); delete document.documentElement.dataset.dfAppleGuard;
     };
     state.editor = editor;
-    w.__dfApple = state; sync(); document.documentElement.dataset.dfAppleGuard = version;
+    w.__dfApple = state; sync(); document.documentElement.dataset.dfAppleGuard = startupGuardMarker;
   }
   if (command.action === 'dispose') { w.__dfApple.dispose(); delete w.__dfApple; return true; }
   return w.__dfApple.apply(command);
 }
 
 export function buildAppleScript(command: Record<string, unknown>) {
-  return `(${appleRuntime.toString()})(${JSON.stringify(command)})`;
+  return `(${appleRuntime.toString()})(${JSON.stringify(command)},${appleTranslationCacheMatchesPhone.toString()})`;
+}
+
+export function buildAppleRuntimeCheck() {
+  return 'window.__dfApple?.version === "2026-11-15-apple-translation-performance-v5"';
+}
+
+export function buildAppleCommandScript(command: Record<string, unknown>) {
+  return `(()=>{if(!(${buildAppleRuntimeCheck()}))throw new Error("Apple translation runtime unavailable");return window.__dfApple.apply(${JSON.stringify(command)});})()`;
+}
+
+export async function executeAppleRuntimeScript<T>(script: string, execute: (script: string) => Promise<unknown>, guard: string, foreground: boolean, isCurrent: () => boolean): Promise<T> {
+  const checkCurrent = () => { if (!isCurrent()) throw new Error('Web translation runtime replaced'); };
+  const run = () => execute(`${guard}\nif(!(${buildAppleRuntimeCheck()})){({__dfAppleRuntimeRequired:true});}else{window.__dfApple.setForeground?.(${foreground});${script}\n}`);
+  const needsRuntime = (value: unknown) => !!value && typeof value === 'object' && '__dfAppleRuntimeRequired' in value;
+  checkCurrent();
+  let result = await run();
+  if (needsRuntime(result)) {
+    checkCurrent();
+    await execute(`${guard}\n${buildAppleScript({ action: 'bootstrap' })}`);
+    checkCurrent(); result = await run();
+    if (needsRuntime(result)) throw new Error('Apple translation runtime unavailable');
+  }
+  checkCurrent(); return result as T;
 }

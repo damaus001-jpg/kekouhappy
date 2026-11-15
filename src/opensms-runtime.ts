@@ -3,7 +3,7 @@ import { normalizeAssistantPhone } from '../electron/assistant-material-identity
 export function openSmsRuntime(command: any, normalizePhone: typeof normalizeAssistantPhone) {
   const w = window as any;
   if (!['opensms.cc', 'www.opensms.cc'].includes(location.hostname)) return false;
-  const version = 'gpt-history-time-v1-2026-11-07-opensms-unified-input-v14';
+  const version = '2026-11-15-opensms-incremental-v15';
   const startupGuardMarker = '2026-10-16-opensms-v1';
   if (w.__dfOpenSms?.version !== version) {
     w.__dfOpenSms?.dispose();
@@ -243,16 +243,28 @@ export function openSmsRuntime(command: any, normalizePhone: typeof normalizeAss
       }
     };
     const source = (el: Element) => {const clone=el.cloneNode(true) as HTMLElement;clone.querySelectorAll('.df-chat-translation,.df-chat-refresh-translation,.df-smart-reply-host').forEach(n=>n.remove());return normalize(clone.innerText || clone.textContent || '');};
+    // Cache only source metadata. Geometry is read afresh so scrolling, wrapping
+    // and resized windows cannot leave stale translation candidates.
+    const rowSources = new WeakMap<Element, { body: HTMLElement; text: string; key: string; signature: string; rowId: string }>();
+    let decorationDirty = true;
+    const isForeground=()=>state.foreground!==false&&!document.hidden;
     const rows = () => {
+      processMutations(observer.takeRecords());
       const current=contact();if(!current.id)return [];
+      const box=document.getElementById('message-box')!;
+      const nearConversationEnd=box.scrollHeight-box.scrollTop-box.clientHeight<180,nearConversationStart=box.scrollTop<180;
       return Array.from(document.querySelectorAll<HTMLElement>('#message-box > ul > li[id^="m-"].im-chat-other,#message-box > ul > li[id^="m-"].im-chat-mine')).flatMap(row=>{
         const body=row.querySelector<HTMLElement>('.im-chat-text > .message-content');if(!body||!visible(body))return [];
-        const text=source(body);if(!text)return [];
-        const key=`sms-${hash(current.id)}-${hash(row.id)}-${hash(text)}`;
-        body.dataset.dfMsgTextKey=key;row.dataset.dfMsgKey=key;
-        const rect=body.getBoundingClientRect();const box=document.getElementById('message-box')!;
+        let cached=rowSources.get(row);
+        if(!cached||cached.body!==body||cached.signature!==current.id||cached.rowId!==row.id){
+          const text=source(body);const key=`sms-${hash(current.id)}-${hash(row.id)}-${hash(text)}`;
+          cached={body,text,key,signature:current.id,rowId:row.id};rowSources.set(row,cached);
+          body.dataset.dfMsgTextKey=key;row.dataset.dfMsgKey=key;
+        }
+        const {text,key}=cached;if(!text)return [];
+        const rect=body.getBoundingClientRect();
         const timestamp=row.querySelector<HTMLElement>('.im-chat-user .msg-time,.contact-time-only')?.textContent||'';
-        return [{key,text,timestamp,dayKey:dayKey(timestamp),contactId:current.id,contactKey:current.id,contactIdType:'platform',contactTitle:current.title,direction:row.classList.contains('im-chat-mine')?'outgoing':'incoming',messagePart:'body',rectTop:rect.top,rectBottom:rect.bottom,viewportHeight:innerHeight,scanBand:rect.bottom<0?'above':rect.top>innerHeight?'below':'visible',nearConversationEnd:box.scrollHeight-box.scrollTop-box.clientHeight<180,nearConversationStart:box.scrollTop<180,row,body}];
+        return [{key,text,timestamp,dayKey:dayKey(timestamp),contactId:current.id,contactKey:current.id,contactIdType:'platform',contactTitle:current.title,direction:row.classList.contains('im-chat-mine')?'outgoing':'incoming',messagePart:'body',rectTop:rect.top,rectBottom:rect.bottom,viewportHeight:innerHeight,scanBand:rect.bottom<0?'above':rect.top>innerHeight?'below':'visible',nearConversationEnd,nearConversationStart,row,body}];
       });
     };
     const paint = (entry:any,knownItem?:ReturnType<typeof rows>[number],preserveScroll=true) => {
@@ -271,6 +283,8 @@ export function openSmsRuntime(command: any, normalizePhone: typeof normalizeAss
     const refresh = (key:string,processing:boolean) => {const item=rows().find(r=>r.key===key);const button=item?.row.querySelector<HTMLButtonElement>('.df-chat-refresh-translation');if(button){button.disabled=processing;button.textContent=processing?'…':'↻';}return !!button;};
     const decorate = () => {
       const items=rows();
+      if(!decorationDirty||!isForeground())return items;
+      decorationDirty=false;
       // Reuse the scan for every cached translation, then restore the viewport once.
       const box=document.getElementById('message-box');
       const atBottom=!!box&&box.scrollHeight-box.scrollTop-box.clientHeight<120;
@@ -312,6 +326,31 @@ export function openSmsRuntime(command: any, normalizePhone: typeof normalizeAss
       }
       return items;
     };
+    // Resolve each command only after its translation was applied. Several
+    // concurrent completions share one scan and one scroll-anchor restoration.
+    let paintTimer:number|undefined;
+    let pendingPaints:{entry:any;signature:string;resolve:(ok:boolean)=>void}[]=[];
+    const queuePaint=(entry:any)=>new Promise<boolean>(resolve=>{
+      pendingPaints.push({entry,signature:contact().id,resolve});
+      if(paintTimer!==undefined)return;
+      paintTimer=window.setTimeout(()=>{
+        paintTimer=undefined;const batch=pendingPaints;pendingPaints=[];
+        const items=rows(),byKey=new Map(items.map(item=>[item.key,item]));
+        const box=document.getElementById('message-box');
+        const atBottom=!!box&&box.scrollHeight-box.scrollTop-box.clientHeight<120;
+        const boxTop=box?.getBoundingClientRect().top||0;
+        const anchor=items.find(item=>item.rectBottom>=boxTop)?.row;
+        const anchorTop=anchor?.getBoundingClientRect().top||0;
+        const signature=contact().id;
+        let changed=false;
+        for(const request of batch){
+          const item=byKey.get(request.entry.key);
+          const ok=!!item&&request.signature===signature&&paint(request.entry,item,false);
+          changed ||= ok;request.resolve(ok);
+        }
+        if(box&&changed){if(atBottom)box.scrollTop=box.scrollHeight;else if(anchor?.isConnected)box.scrollTop+=anchor.getBoundingClientRect().top-anchorTop;}
+      },isForeground()?24:100);
+    });
     const sensitive = (text:string) => text.length<=256&&!/[\r\n]/.test(text)&&(/^[0-9 ]{1,34}$/.test(text)||/^0x[0-9A-Za-z]{20,80}$/.test(text)||/^T[0-9A-Za-z]{33}$/.test(text)||/^[0-9A-Za-z]{32,44}$/.test(text));
     const directUrl = (text:string) => {
       if(/\s/.test(text)||!/^https?:\/\/|^www\./i.test(text))return false;
@@ -402,7 +441,7 @@ export function openSmsRuntime(command: any, normalizePhone: typeof normalizeAss
         const current=contact().id;
         return {sameConversation:current===signature,conversationSignature:current,candidates:current===signature?candidates:[]};
       }
-      if(cmd.action==='install'){decorate();return true;}
+      if(cmd.action==='install'){processMutations(observer.takeRecords());if(decorationDirty&&isForeground())decorate();return true;}
       if(cmd.action==='enabled'){state.enabled=cmd.enabled;if(!cmd.enabled)reset();return true;}
       if(cmd.action==='text')return read();
       if(cmd.action==='focus'||cmd.action==='focusNative')return focus();
@@ -422,10 +461,10 @@ export function openSmsRuntime(command: any, normalizePhone: typeof normalizeAss
         return {count:Math.min(999,Math.max(0,count)),ready:!!document.querySelector('.left-bar .avatar-name')};
       }
       if(cmd.action==='scan')return decorate().filter(r=>/[A-Za-z]{2,}/.test(r.text)&&!/[\u3400-\u9fff]/.test(r.text)&&r.text.length<=4000&&(cmd.options?.includeAlreadyTranslated||!r.row.querySelector('.df-chat-translation'))&&r.rectBottom>=-innerHeight*(cmd.options?.viewportScreensAbove||0)&&r.rectTop<=innerHeight*(1+(cmd.options?.viewportScreensBelow||0))).slice(-(cmd.options?.limit||12)).map(({row,body,...item}:any)=>item);
-      if(cmd.action==='inject')return paint(cmd);
-      if(cmd.action==='cache'){for(const entry of cmd.entries||[])if(entry.sourceText)state.cache.set(hash(entry.sourceText),{...entry,sourceText:normalize(entry.sourceText)});while(state.cache.size>3000)state.cache.delete(state.cache.keys().next().value);decorate();return true;}
+      if(cmd.action==='inject')return queuePaint(cmd);
+      if(cmd.action==='cache'){for(const entry of cmd.entries||[])if(entry.sourceText)state.cache.set(hash(entry.sourceText),{...entry,sourceText:normalize(entry.sourceText)});while(state.cache.size>3000)state.cache.delete(state.cache.keys().next().value);decorationDirty=true;decorate();return true;}
       if(cmd.action==='refresh')return refresh(cmd.key,cmd.state==='processing');
-      if(cmd.action==='smart'){decorate();return true;}
+      if(cmd.action==='smart'){processMutations(observer.takeRecords());if(decorationDirty&&isForeground())decorate();return true;}
       if(cmd.action==='state'){
         const value=cmd.state || {};const input=editor();
         if(value.conversationSignature&&value.conversationSignature!==contact().id)return false;
@@ -474,24 +513,39 @@ export function openSmsRuntime(command: any, normalizePhone: typeof normalizeAss
     document.addEventListener('keydown',onKey,true);document.addEventListener('click',onPointer,true);document.addEventListener('input',onInput,true);
     let syncTimer:number|undefined;let decorateTimer:number|undefined;
     const scheduleSync=()=>{if(syncTimer!==undefined)return;syncTimer=window.setTimeout(()=>{syncTimer=undefined;sync(true);},120);};
-    const scheduleDecorate=()=>{if(decorateTimer!==undefined)return;decorateTimer=window.setTimeout(()=>{decorateTimer=undefined;decorate();},250);};
+    const scheduleDecorate=()=>{if(!isForeground()||decorateTimer!==undefined)return;decorateTimer=window.setTimeout(()=>{decorateTimer=undefined;decorate();},250);};
     // The host app already scans for translations periodically. Keep this as a
     // lightweight route/contact fallback instead of rescanning every bubble twice a second.
     const timer=setInterval(()=>sync(),1800);
-    const observer=new MutationObserver(records=>{
+    const processMutations=(records:MutationRecord[])=>{
       let needsSync=false;let needsDecorate=false;
       for(const record of records){
         const target=record.target instanceof Element?record.target:record.target.parentElement;
         const ownUi='.df-chat-translation,.df-chat-refresh-translation,.df-smart-reply-host,.df-opensms-area-hint';
         if(target?.closest(ownUi))continue;
         if(record.type==='childList'&&[...Array.from(record.addedNodes),...Array.from(record.removedNodes)].every(node=>node instanceof Element&&node.matches(ownUi)))continue;
-        if(target?.closest('#message-box'))needsDecorate=true;else needsSync=true;
+        if(target?.closest('#message-box')){
+          const row=target.closest('li[id^="m-"]');
+          const cached=row&&rowSources.get(row);
+          if(row&&cached&&(target===cached.body||cached.body.contains(target)||(record.type==='attributes'&&record.attributeName==='id'&&target===row)))rowSources.delete(row);
+          // A removed/reinserted row may retain its element identity.
+          if(record.type==='childList')for(const node of [...Array.from(record.addedNodes),...Array.from(record.removedNodes)])if(node instanceof Element){rowSources.delete(node);node.querySelectorAll('li[id^="m-"]').forEach(row=>rowSources.delete(row));}
+          needsDecorate=true;
+        }else needsSync=true;
       }
-      if(needsSync)scheduleSync();if(needsDecorate)scheduleDecorate();
-    });observer.observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['class','data-id','title']});
-    state.dispose=()=>{document.removeEventListener('input', onSpaceInput, true); for (const name of ['focusout', 'pointerdown']) document.removeEventListener(name, clearSpaceRun, true); for (const name of ['compositionstart', 'compositionend']) document.removeEventListener(name, onSpaceComposition, true); observer.disconnect();clearInterval(timer);if(syncTimer!==undefined)clearTimeout(syncTimer);if(decorateTimer!==undefined)clearTimeout(decorateTimer);document.removeEventListener('keydown',onKey,true);document.removeEventListener('click',onPointer,true);document.removeEventListener('input',onInput,true);delete document.documentElement.dataset.dfOpenSmsGuard;};
+      if(needsSync){decorationDirty=true;scheduleSync();}if(needsDecorate){decorationDirty=true;scheduleDecorate();}
+    };
+    const observer=new MutationObserver(processMutations);observer.observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['class','data-id','title','id']});
+    const onVisibility=()=>{if(!document.hidden){decorationDirty=true;scheduleSync();scheduleDecorate();}};
+    // CSS visibility on an embedded webview does not reliably describe whether
+    // its host workspace is active. The host supplies that state on short calls.
+    state.setForeground=(foreground:boolean)=>{if(state.foreground===foreground)return;state.foreground=foreground;if(foreground){decorationDirty=true;scheduleSync();scheduleDecorate();}};
+    document.addEventListener('visibilitychange',onVisibility);
+    state.dispose=()=>{document.removeEventListener('visibilitychange',onVisibility);if(paintTimer!==undefined)clearTimeout(paintTimer);for(const request of pendingPaints)request.resolve(false);pendingPaints=[];document.removeEventListener('input', onSpaceInput, true); for (const name of ['focusout', 'pointerdown']) document.removeEventListener(name, clearSpaceRun, true); for (const name of ['compositionstart', 'compositionend']) document.removeEventListener(name, onSpaceComposition, true); observer.disconnect();clearInterval(timer);if(syncTimer!==undefined)clearTimeout(syncTimer);if(decorateTimer!==undefined)clearTimeout(decorateTimer);document.removeEventListener('keydown',onKey,true);document.removeEventListener('click',onPointer,true);document.removeEventListener('input',onInput,true);delete document.documentElement.dataset.dfOpenSmsGuard;};
     state.editor=editor;w.__dfOpenSms=state;
   }
   return w.__dfOpenSms.apply(command);
 }
 export function buildOpenSmsScript(command:any) {return `(${openSmsRuntime.toString()})(${JSON.stringify(command)},${normalizeAssistantPhone.toString()})`;}
+export function buildOpenSmsRuntimeCheck() {return `window.__dfOpenSms?.version==="2026-11-15-opensms-incremental-v15"`;}
+export function buildOpenSmsCommandScript(command:any) {return `(()=>{if(!(${buildOpenSmsRuntimeCheck()}))throw new Error("OpenSMS runtime unavailable");return window.__dfOpenSms.apply(${JSON.stringify(command)});})()`;}

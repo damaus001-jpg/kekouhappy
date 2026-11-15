@@ -14,8 +14,8 @@ import { conversationExportDay, localConversationExportDate } from '../electron/
 import { buildConversationExportScript,mergeConversationExportRows,unwrapConversationExportResult } from './conversation-export-runtime';
 import { buildSignalGptButtonScript } from './gpt-handoff-runtime';
 import { buildSignalEmojiPickerScript } from './signal-emoji-picker-runtime';
-import { buildOpenSmsScript } from './opensms-runtime';
-import { buildAppleScript } from './apple-runtime';
+import { buildOpenSmsCommandScript as buildOpenSmsScript, buildOpenSmsScript as buildOpenSmsBootstrapScript, buildOpenSmsRuntimeCheck } from './opensms-runtime';
+import { buildAppleCommandScript as buildAppleScript, executeAppleRuntimeScript, appleTranslationCacheMatchesPhone } from './apple-runtime';
 import { buildWhatsAppContactListResizeScript } from './whatsapp-contact-list-resize-runtime';
 import { buildOpenSmsContactListResizeScript } from './opensms-contact-list-resize-runtime';
 import { buildVoiceConversationSignatureScript, buildVoiceMessageActionButtonStateScript, buildVoiceMessageScanScript, buildVoiceMessageAudioChunkScript } from './local-speech-runtime';
@@ -210,6 +210,7 @@ const activeTheme = ref<ThemeName>(window.chatTranslator?.getInitialTheme?.() ??
 const showDeveloperDiagnostics = ref(import.meta.env.DEV);
 const themeMenuOpen = ref(false);
 const openSmsEntryOpen = ref(false);
+const debugUrl = ref('https://pc.libertyess.com/');
 let openSmsEntryTrigger: HTMLElement | null = null;
 const workspaceHeaderCollapsed = ref(false);
 const pokeballBursting = ref(false);
@@ -1429,6 +1430,7 @@ function openAppEntry(app: RuntimeApp) {
 
 function openOpenSmsEntry() {
   if (isCreatingProfile.value) return;
+  openSmsError.value = '';
   openSmsEntryTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   openSmsEntryOpen.value = true;
   void nextTick(() => document.querySelector<HTMLButtonElement>('.opensms-entry-android')?.focus());
@@ -1451,6 +1453,16 @@ function openAppleWorkspace() {
   openSmsEntryOpen.value = false;
   openSmsEntryTrigger = null;
   void openOpenSms('apple');
+}
+
+async function openDebugUrl() {
+  openSmsError.value = '';
+  try {
+    await window.chatTranslator.openDebugUrl(debugUrl.value);
+    closeOpenSmsEntry();
+  } catch (error) {
+    openSmsError.value = error instanceof Error ? error.message : '调试窗口打开失败';
+  }
 }
 
 function trapOpenSmsEntryFocus(event: KeyboardEvent) {
@@ -8902,6 +8914,7 @@ function deleteTranslationMemoryCacheEntry(profileId: string, candidate: Partial
 
 function applyTranslationCacheEntries(profileId: string, entries: TranslationCacheEntry[], candidate?: Partial<MessageCandidate>) {
   for (const entry of entries) {
+    if (candidate?.contactKey?.startsWith('apple-phone:') && !appleTranslationCacheMatchesPhone(entry, candidate.contactId || '')) continue;
     if (entry.sourceHash && isUsefulMessageTranslation(entry.sourceText || '', entry.translatedText)) {
       setTranslationMemoryCacheEntry(profileId, candidate, entry.sourceHash, entry.translatedText);
       setTranslationMemoryCacheEntry(profileId, { contactKey: '__profile-source__' }, entry.sourceHash, entry.translatedText);
@@ -9097,7 +9110,7 @@ function getCachedTranslation(profileId: string, sourceText: string, candidate?:
   const profileMemoryCache = translationMemoryCaches.get(profileScope);
   const translatedText =
     memoryCache.get(sourceHash) ||
-    profileMemoryCache?.get(sourceHash) ||
+    (!candidate?.contactKey?.startsWith('apple-phone:') && profileMemoryCache?.get(sourceHash)) ||
     '';
   if (!translatedText) return '';
   if (isUsefulMessageTranslation(sourceText, translatedText)) return translatedText;
@@ -9138,8 +9151,9 @@ async function lookupTranslationCacheForCandidates(profile: ChatProfile, candida
       contactRemark: group.candidate.contactRemark,
       sourceHashes: hashes
     }), 10_000, webRuntimeControllers.get(profile.id)?.signal).catch(() => []);
-    applyTranslationCacheEntries(profile.id, entries, group.candidate);
-    for (const entry of entries) {
+    const matchingEntries = profile.platform === 'apple' ? entries.filter(entry => appleTranslationCacheMatchesPhone(entry, group.candidate.contactId || '')) : entries;
+    applyTranslationCacheEntries(profile.id, matchingEntries, group.candidate);
+    for (const entry of matchingEntries) {
       const sourceText = group.sourceTexts.get(entry.sourceHash) || entry.sourceText || '';
       if (!isUsefulMessageTranslation(sourceText, entry.translatedText)) continue;
       cachedTranslations.set(entry.sourceHash, entry.translatedText);
@@ -9199,14 +9213,14 @@ function setCachedTranslation(profile: ChatProfile, candidate: MessageCandidate,
     timestamp: candidate.timestamp,
     messagePart: candidate.messagePart
   });
-  void installCachedTranslationRuntime(profile, [{ sourceHash, sourceText: normalizeCacheText(sourceText), translatedText, updatedAt: Date.now() }]);
+  void installCachedTranslationRuntime(profile, [{ sourceHash, sourceText: normalizeCacheText(sourceText), translatedText, updatedAt: Date.now(), ...(profile.platform === 'apple' ? { platform: profile.platform, contactId: candidate.contactId, contactIdType: candidate.contactIdType } : {}) }]);
 }
 
 async function installCachedTranslationRuntime(profile: ChatProfile, entries: TranslationCacheEntry[]) {
   if (isSignalLegacyBubbleTranslationDisabled(profile)) return;
   const compactEntries = entries
     .filter((entry) => entry.sourceHash && isUsefulMessageTranslation(entry.sourceText || '', entry.translatedText))
-    .map((entry) => ({ sourceHash: entry.sourceHash, sourceText: entry.sourceText, translatedText: entry.translatedText, updatedAt: entry.updatedAt }));
+    .map((entry) => ({ sourceHash: entry.sourceHash, sourceText: entry.sourceText, translatedText: entry.translatedText, updatedAt: entry.updatedAt, ...(profile.platform === 'apple' ? { platform: entry.platform, contactId: entry.contactId, contactIdType: entry.contactIdType } : {}) }));
   if (!compactEntries.length) return;
   const batches: typeof compactEntries[] = [];
   let batch: typeof compactEntries = [];
@@ -10254,9 +10268,29 @@ function getRuntimeScriptExecutor(profile: ChatProfile) {
       if (signal.aborted || (webRuntimeGenerations.get(profile.id) ?? 0) !== generation) {
         return Promise.reject<T>(new Error('Web translation runtime replaced'));
       }
-      const platformBootstrap=profile.platform==='opensms'?buildOpenSmsScript({action:'bootstrap'})+';\n':profile.platform==='apple'?buildAppleScript({action:'bootstrap'})+';\n':'';
-      const guardedScript = `window.__dfTranslationRuntimeGeneration ??= ${generation};\nif (window.__dfTranslationRuntimeGeneration !== ${generation}) throw new Error('Web translation runtime replaced');\n${platformBootstrap}${script}`;
-      return withTranslationDeadline(webview.executeJavaScript(guardedScript, true) as Promise<T>, 8_000, signal);
+      if (profile.platform === 'apple') {
+        const guard = `window.__dfTranslationRuntimeGeneration ??= ${generation};\nif(window.__dfTranslationRuntimeGeneration!==${generation})throw new Error('Web translation runtime replaced');`;
+        const foreground = signedIn.value && activePanel.value === 'session' && activeProfileId.value === profile.id && !lockScreenVisible.value && !document.hidden;
+        return executeAppleRuntimeScript<T>(script,
+          code => withTranslationDeadline(webview.executeJavaScript(code, true), 8_000, signal), guard, foreground,
+          () => !signal.aborted && (webRuntimeGenerations.get(profile.id) ?? 0) === generation);
+      }
+      const platformBootstrap='';
+      const foreground=profile.platform==='opensms'&&signedIn.value&&activePanel.value==='session'&&activeProfileId.value===profile.id&&!lockScreenVisible.value&&!document.hidden;
+      const commandScript=profile.platform==='opensms'?`if(!(${buildOpenSmsRuntimeCheck()})){({__dfOpenSmsRuntimeRequired:true});}else{window.__dfOpenSms.setForeground?.(${foreground});${script}\n}`:platformBootstrap+script;
+      const guardedScript = `window.__dfTranslationRuntimeGeneration ??= ${generation};\nif (window.__dfTranslationRuntimeGeneration !== ${generation}) throw new Error('Web translation runtime replaced');\n${commandScript}`;
+      const run=()=>withTranslationDeadline(webview.executeJavaScript(guardedScript, true) as Promise<T>, 8_000, signal);
+      if(profile.platform!=='opensms')return run();
+      return run().then(async(result:T)=>{
+        if(!result||typeof result!=='object'||!('__dfOpenSmsRuntimeRequired' in result))return result;
+        if(signal.aborted||(webRuntimeGenerations.get(profile.id)??0)!==generation)throw new Error('Web translation runtime replaced');
+        const bootstrap=`if(window.__dfTranslationRuntimeGeneration!==${generation})throw new Error('Web translation runtime replaced');\n${buildOpenSmsBootstrapScript({action:'bootstrap'})}`;
+        await withTranslationDeadline(webview.executeJavaScript(bootstrap,true),8_000,signal);
+        if(signal.aborted||(webRuntimeGenerations.get(profile.id)??0)!==generation)throw new Error('Web translation runtime replaced');
+        const retried=await run();
+        if(retried&&typeof retried==='object'&&'__dfOpenSmsRuntimeRequired' in retried)throw new Error('OpenSMS runtime unavailable');
+        return retried;
+      });
     }
   };
 }
@@ -13283,6 +13317,14 @@ onUnmounted(() => {
           <strong>苹果</strong>
         </button>
       </div>
+      <form v-if="showDeveloperDiagnostics" class="opensms-debug-form" @submit.prevent="openDebugUrl">
+        <label for="opensms-debug-url">页面调试</label>
+        <div class="opensms-debug-controls">
+          <input id="opensms-debug-url" v-model="debugUrl" type="url" inputmode="url" placeholder="https://example.com" required />
+          <button type="submit">打开调试</button>
+        </div>
+      </form>
+      <p v-if="openSmsError" role="alert">{{ openSmsError }}</p>
       <div class="modal-actions">
         <button type="button" @click="closeOpenSmsEntry">取消</button>
       </div>
