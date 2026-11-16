@@ -372,7 +372,7 @@ export function appleRuntime(command: any, cacheMatchesPhone: typeof appleTransl
       return false;
     };
     const style = document.createElement('style'); style.id = 'df-apple-translation-style';
-    style.textContent = '#messages .df-chat-translation{box-sizing:border-box;max-width:100%;margin-top:7px;padding-top:6px;border-top:1px solid #94a3b866;font-size:14px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;color:#176040}#df-apple-composer-status{padding:6px 10px;font-size:12px;line-height:1.4;color:#176040}';
+    style.textContent = '#messages .df-chat-translation{box-sizing:border-box;max-width:100%;margin-top:7px;padding-top:6px;border-top:1px solid #94a3b866;font-size:14px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;color:#176040}#df-apple-composer-status{padding:6px 10px;font-size:12px;line-height:1.4;color:#ffffff}';
     document.head?.append(style);
     document.addEventListener('input', onSpaceInput, true);
     for (const name of ['focusout', 'pointerdown']) document.addEventListener(name, clearSpaceRun, true);
