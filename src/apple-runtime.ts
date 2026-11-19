@@ -1,4 +1,5 @@
 // These bindings belong to the local phone workspace's main-world script.
+import { openSmsAreaCodeInfo } from './phone-area-codes';
 declare const workspaceDevice: string | null;
 declare const workspaceRevision: number;
 declare const currentConversationId: string | null;
@@ -28,10 +29,10 @@ export function appleTranslationCacheMatchesPhone(entry: { platform?: string; co
   return normalize(identity) === expected;
 }
 
-export function appleRuntime(command: any, cacheMatchesPhone: typeof appleTranslationCacheMatchesPhone) {
+export function appleRuntime(command: any, cacheMatchesPhone: typeof appleTranslationCacheMatchesPhone, areaCodeInfo: Record<string, [string, string, string]>) {
   if (location.origin !== 'http://127.0.0.1:8070' || window.top !== window) return false;
   const w = window as any;
-  const version = '2026-11-15-apple-translation-performance-v5';
+  const version = '2026-11-18-apple-composer-handoff-v13';
   // Keep the established input-readiness contract; performance updates have
   // their own version and do not change the preload's input protection policy.
   const startupGuardMarker = '2026-11-09-apple-gpt-history-time-v4';
@@ -83,7 +84,7 @@ export function appleRuntime(command: any, cacheMatchesPhone: typeof appleTransl
         const row = rendered.get(String(index));
         const displayed = canonical(row?.querySelector('.bubble > .original')?.textContent);
         const chineseText = originalText && displayed === canonical(originalText)
-          ? canonical(row?.querySelector('.df-chat-translation')?.textContent) : '';
+          ? canonical(row?.querySelector('.df-chat-translation-text')?.textContent ?? row?.querySelector('.df-chat-translation')?.textContent) : '';
         return { id: 'apple-message:' + index, direction, timestamp, originalText, chineseText,
           mediaLabel: originalText ? '' : message.kind === 'attachment' ? '[附件消息]' : message.decode_error ? '[正文解析未完成]' : '[无文字内容]' };
       });
@@ -107,8 +108,60 @@ export function appleRuntime(command: any, cacheMatchesPhone: typeof appleTransl
       const input = editor();
       if (input) { delete input.dataset.dfTranslatorRequestId; delete input.dataset.dfTranslatorReadyRequestId; }
     };
+    const readingFontKey = 'df-apple-reading-font-size';
+    const clampReadingFont = (value: number) => Number.isFinite(value) ? Math.min(22, Math.max(12, Math.round(value))) : 15;
+    let readingFont = 15;
+    try { const saved = localStorage.getItem(readingFontKey); if (saved !== null) readingFont = clampReadingFont(Number(saved)); } catch { /* Keep the default when storage is unavailable. */ }
+    const readingControl = document.createElement('label');
+    readingControl.id = 'df-apple-reading-font-control';
+    const readingLabel = document.createElement('span'); readingLabel.textContent = '阅读字号';
+    const readingSlider = document.createElement('input'); readingSlider.type = 'range'; readingSlider.min = '12'; readingSlider.max = '22'; readingSlider.step = '1'; readingSlider.value = String(readingFont); readingSlider.setAttribute('aria-label', '阅读区文字大小');
+    const readingValue = document.createElement('output');
+    const applyReadingFont = () => {
+      document.documentElement.style.setProperty('--df-apple-reading-font', readingFont + 'px');
+      readingValue.value = readingFont + 'px'; readingSlider.setAttribute('aria-valuetext', readingFont + '像素');
+    };
+    readingSlider.oninput = () => {
+      readingFont = clampReadingFont(Number(readingSlider.value));
+      preserveScroll(applyReadingFont, rows());
+      try { localStorage.setItem(readingFontKey, String(readingFont)); } catch { /* The current page still uses the selected size. */ }
+    };
+    readingControl.append(readingLabel, readingSlider, readingValue); applyReadingFont();
+    const areaHint = document.createElement('div'); areaHint.id = 'df-apple-area-hint'; areaHint.setAttribute('role', 'note');
+    areaHint.title = '按号码区号推测的代表区域；号码携转后实际所在地可能不同';
+    const timezoneFormatters = new Map<string, Intl.DateTimeFormat>();
+    const timezoneOffsetMinutes = (zone: string, at: Date) => {
+      let formatter = timezoneFormatters.get(zone);
+      if (!formatter) { formatter = new Intl.DateTimeFormat('en-US', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }); timezoneFormatters.set(zone, formatter); }
+      const values: Record<string, number> = {};
+      for (const part of formatter.formatToParts(at)) if (part.type !== 'literal') values[part.type] = Number(part.value);
+      return Math.round((Date.UTC(values.year, values.month - 1, values.day, values.hour, values.minute, values.second) - at.getTime()) / 60000);
+    };
+    const updateAreaHint = () => {
+      const target = contact(); const digits = (target.phone || '').replace(/\D/g, '');
+      const areaCode = digits.length === 11 && digits[0] === '1' ? digits.slice(1, 4) : digits.length === 10 ? digits.slice(0, 3) : '';
+      const info = areaCodeInfo[areaCode];
+      const phoneNode = document.getElementById('peer-phone');
+      if (!info || !target.phone || !phoneNode || !canonical(phoneNode.textContent).includes(canonical(currentConversation?.phone_number))) { areaHint.remove(); return; }
+      const [city, stateName, zone] = info;
+      const now = new Date(); const delta = Math.round((timezoneOffsetMinutes(zone, now) - timezoneOffsetMinutes('America/Los_Angeles', now)) / 60);
+      areaHint.textContent = `(${areaCode})-${stateName}-${city}-时差${delta >= 0 ? '+' : ''}${delta}`;
+      areaHint.setAttribute('aria-label', areaHint.textContent);
+      areaHint.style.color = stateName === '加利福尼亚州' ? '#dc2626' : '#111111';
+      const liveScreen = document.getElementById('selected');
+      if (!liveScreen) { areaHint.remove(); return; }
+      if (areaHint.parentElement !== document.body) document.body.append(areaHint);
+      const rect = liveScreen.getBoundingClientRect();
+      areaHint.style.left = (rect.left + rect.width / 2) + 'px';
+      areaHint.style.top = (rect.top + 10) + 'px';
+    };
     const sync = () => {
       observeMessages();
+      const messages = document.getElementById('messages');
+      updateAreaHint();
+      const translateControls = messages?.parentElement?.querySelector('.foreground-reading');
+      if (translateControls && readingControl.parentElement !== translateControls) translateControls.append(readingControl);
+      else if (!translateControls && messages?.parentElement && readingControl.nextElementSibling !== messages) messages.before(readingControl);
       const stamp = context(), input = editor(), id = contact().id;
       if (stamp !== state.context || input !== state.input) {
         decorationDirty = true;
@@ -170,11 +223,45 @@ export function appleRuntime(command: any, cacheMatchesPhone: typeof appleTransl
       if (atBottom) box.scrollTop = box.scrollHeight;
       else if (anchor?.isConnected) box.scrollTop += anchor.getBoundingClientRect().top - top;
     };
+    const ensureRefresh = (item: ReturnType<typeof rows>[number], node: HTMLElement) => {
+      let textNode = node.querySelector<HTMLElement>('.df-chat-translation-text');
+      if (!textNode) {
+        textNode = document.createElement('span'); textNode.className = 'df-chat-translation-text';
+        textNode.textContent = node.textContent; node.replaceChildren(textNode);
+      }
+      const host = item.row.querySelector<HTMLElement>('.df-smart-reply-host');
+      const mount = (button: HTMLButtonElement) => {
+        if (host) {
+          if (button.parentElement !== host) host.prepend(button);
+        } else if (button.parentElement !== node) node.append(button);
+      };
+      let refresh = item.row.querySelector<HTMLButtonElement>('.df-chat-refresh-translation');
+      if (refresh?.dataset.dfRefreshKey === item.key) { mount(refresh); return; }
+      refresh?.remove();
+      refresh = document.createElement('button'); refresh.type = 'button'; refresh.className = 'df-chat-refresh-translation'; refresh.dataset.dfRefreshKey = item.key;
+      refresh.title = '重新翻译本条气泡'; refresh.setAttribute('aria-label', '重新翻译本条气泡'); refresh.textContent = '↻';
+      refresh.style.cssText = 'align-items:center;appearance:none;background:transparent;border:0;border-radius:50%;box-shadow:none;color:inherit;cursor:pointer;display:inline-flex;vertical-align:middle;font-family:inherit;font-size:15px;font-weight:400;height:24px;justify-content:center;line-height:1;margin:0 0 0 3px;opacity:0.72;padding:0;pointer-events:auto;width:24px';
+      const button = refresh;
+      button.onmouseenter = () => { button.style.background = 'color-mix(in srgb, currentColor 12%, transparent)'; button.style.opacity = '1'; };
+      button.onmouseleave = () => { button.style.background = 'transparent'; button.style.opacity = '0.72'; };
+      if (w.__dfBubbleRefreshPendingKeys?.[item.key]) { button.disabled = true; button.setAttribute('aria-busy', 'true'); button.textContent = '...'; }
+      button.onclick = event => {
+        event.preventDefault(); event.stopPropagation(); event.stopImmediatePropagation();
+        if (button.disabled || !item.row.isConnected || contact().id !== item.conversationSignature || !rows().some(row => row.key === item.key && row.text === item.text)) return;
+        w.__dfBubbleRefreshPendingKeys ||= Object.create(null); w.__dfBubbleRefreshPendingKeys[item.key] = true;
+        button.disabled = true; button.setAttribute('aria-busy', 'true'); button.textContent = '...';
+        emit('bubble-refresh', JSON.stringify({ key: item.key, text: item.text, direction: item.direction, messagePart: 'body' }));
+      };
+      mount(button);
+    };
     const inject = (item: any, text: string, replace = false) => {
       let node = item.body.parentElement.querySelector('.df-chat-translation');
-      if (node && !replace) return;
+      if (node && !replace) { ensureRefresh(item, node); return; }
       if (!node) { node = document.createElement('div'); node.className = 'df-chat-translation notranslate'; node.setAttribute('translate', 'no'); item.body.parentElement.append(node); }
-      if (node.textContent !== text) node.textContent = text;
+      const textNode = node.querySelector('.df-chat-translation-text');
+      if (textNode) { if (textNode.textContent !== text) textNode.textContent = text; }
+      else if (node.textContent !== text) node.textContent = text;
+      ensureRefresh(item, node);
     };
     const decorate = () => {
       const items = rows();
@@ -182,12 +269,20 @@ export function appleRuntime(command: any, cacheMatchesPhone: typeof appleTransl
       decorationDirty = false;
       if (timer !== undefined) { clearTimeout(timer); timer = undefined; }
       preserveScroll(() => {
-        for (const item of items) { const cached = state.cache.get(item.contactId + '\n' + item.text); if (cached) inject(item, cached); }
+        for (const item of items) {
+          const cached = state.cache.get(item.contactId + '\n' + item.text); if (cached) inject(item, cached);
+          const translation = item.row.querySelector<HTMLElement>('.df-chat-translation'); if (translation) ensureRefresh(item, translation);
+        }
         const valid = (item: typeof items[number]) => (item.direction === 'incoming' || item.direction === 'outgoing') && item.text.length <= 4000 && /[A-Za-z]{2,}/.test(item.text) && !/[\u3400-\u9fff]/.test(item.text);
         const eligible = items.filter(item => item.direction === 'incoming' && valid(item)).slice(-3);
         const smartKey = (item: typeof items[number]) => `smart-${hash(item.key)}-${hash(item.text)}`;
         document.querySelectorAll<HTMLElement>('#messages .df-smart-reply-host').forEach(host => {
-          if (!eligible.some(item => smartKey(item) === host.dataset.dfSmartReplyKey)) host.remove();
+          if (!eligible.some(item => smartKey(item) === host.dataset.dfSmartReplyKey)) {
+            const refresh = host.querySelector('.df-chat-refresh-translation');
+            const translation = host.parentElement?.querySelector('.df-chat-translation');
+            if (refresh && translation) translation.append(refresh);
+            host.remove();
+          }
         });
         for (const item of eligible) {
           const key = smartKey(item);
@@ -195,7 +290,7 @@ export function appleRuntime(command: any, cacheMatchesPhone: typeof appleTransl
           const host = document.createElement('div'); host.className = 'df-smart-reply-host'; host.dataset.dfSmartReplyKey = key;
           const button = document.createElement('button'); button.type = 'button'; button.className = 'df-smart-reply-button'; button.textContent = '去GPT';
           button.title = '以此气泡为终点，不限日期向上复制最多 18 条有效英文气泡（含双方消息和时间）';
-          button.style.cssText = 'display:block;margin:5px 0;border:1px solid #80c79a;border-radius:6px;padding:3px 8px;background:#effbf3;color:#197745;cursor:pointer';
+          button.style.cssText = 'display:block;margin:0;border:1px solid #80c79a;border-radius:5px;font-size:12px;line-height:1.4;padding:2px 6px;background:#effbf3;color:#197745;cursor:pointer';
           button.onclick = event => {
             event.preventDefault(); event.stopPropagation();
             if (button.disabled || contact().id !== item.conversationSignature || !item.row.isConnected) return;
@@ -208,6 +303,7 @@ export function appleRuntime(command: any, cacheMatchesPhone: typeof appleTransl
             button.disabled = true; button.textContent = '复制中…';
           };
           host.append(button); item.body.parentElement!.append(host);
+          const translation = item.row.querySelector<HTMLElement>('.df-chat-translation'); if (translation) ensureRefresh(item, translation);
         }
       }, items);
       return items;
@@ -241,26 +337,20 @@ export function appleRuntime(command: any, cacheMatchesPhone: typeof appleTransl
     });
     const stop = (event: Event) => { event.preventDefault(); event.stopImmediatePropagation(); };
     const directUrl = (text: string) => { if (/\s/.test(text) || !/^(https?:\/\/|www\.)/i.test(text)) return false; try { const url = new URL(/^www\./i.test(text) ? 'https://' + text : text); return ['http:', 'https:'].includes(url.protocol) && !!url.hostname; } catch { return false; } };
-    const sensitive = (text: string) => text.length <= 256 && !/[\r\n]/.test(text) && (/^[0-9 ]{1,34}$/.test(text) || /^0x[0-9A-Za-z]{20,80}$/.test(text) || /^T[0-9A-Za-z]{33}$/.test(text) || /^[0-9A-Za-z]{32,44}$/.test(text));
     const approval = (requestId: string, text: string) => ({ requestId, text, input: editor(), signature: contact().id, context: context() });
     const matches = (pending: any) => !!pending && pending.input === editor() && pending.signature === contact().id && pending.context === context() && pending.text === read();
     const submit = (event: Event) => {
       sync();
-      if (state.sending) return;
       const text = read();
-      if (!available() || state.inFlight || !text) { stop(event); hint(state.inFlight ? '手机工作台正在处理发送，请核对结果，勿重复发送' : '请先确认手机控制连接和当前联系人'); return; }
+      // Apple runtime owns Chinese translation only. Leave non-Chinese submits
+      // untouched so the embedding 8070 workspace handles them, including
+      // translated drafts and English pasted directly by the user.
+      if (!state.enabled || !text || !/[\u3400-\u9fff]/.test(text) || directUrl(text)) return;
+      if (state.inFlight) { stop(event); hint('翻译正在处理，请稍候'); return; }
       if (state.pending) { stop(event); hint('正在处理，请稍候'); return; }
-      if (matches(state.sensitive)) { stop(event); const token = state.sensitive.requestId; state.sensitive = null; state.pending = approval(token, text); emit('sensitive-send', text, token); return; }
-      if (sensitive(text)) { stop(event); state.pending = approval('sensitive', text); emit('sensitive-prepare', text); return; }
-      if (/[\u3400-\u9fff]/.test(text) && !directUrl(text)) {
-        stop(event); const id = 'apple-translate-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
-        state.pending = approval(id, text); editor()!.dataset.dfTranslatorRequestId = id; emit('translate', text, id); hint('正在翻译…'); return;
-      }
-      if (state.ready) {
-        stop(event);
-        if (!matches(state.ready)) { reset(); hint('输入内容或联系人已变化，请重新核对'); return; }
-        state.pending = state.ready; state.ready = null; emit('send', text, state.pending.requestId);
-      }
+      stop(event);
+      const id = 'apple-translate-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+      state.pending = approval(id, text); editor()!.dataset.dfTranslatorRequestId = id; emit('translate', text, id); hint('正在翻译…');
     };
     let spaceRun: { input: HTMLElement; signature: string; text: string; count: number } | null = null;
     let spaceComposing = false;
@@ -284,7 +374,7 @@ export function appleRuntime(command: any, cacheMatchesPhone: typeof appleTransl
       if (spaceComposing || event.isComposing || event.keyCode === 229 || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) { clearSpaceRun(); return true; }
       if (event.repeat) return true;
       const text = read(), signature = context();
-      if (!/[\u3400-\u9fff]/.test(text) || directUrl(text)) { clearSpaceRun(); return true; }
+      if (!state.enabled || !/[\u3400-\u9fff]/.test(text) || directUrl(text)) { clearSpaceRun(); return true; }
       const normalized = text.replace(/ /g, '');
       const count = spaceRun?.input === input && spaceRun.signature === signature && spaceRun.text === normalized ? spaceRun.count + 1 : 1;
       spaceRun = { input, signature, text: normalized, count };
@@ -294,6 +384,10 @@ export function appleRuntime(command: any, cacheMatchesPhone: typeof appleTransl
     const onKey = (event: KeyboardEvent) => {
       if (handleSpace(event)) return;
       if (event.key !== 'Enter' || event.target !== editor()) return;
+      const text = read();
+      // Do not consume English Enter events here; 8070 owns sending and its
+      // keyboard policy, whether the text came from translation or paste.
+      if (!state.enabled || !/[\u3400-\u9fff]/.test(text) || directUrl(text)) return;
       if (state.composing || event.isComposing || event.keyCode === 229) { stop(event); return; }
       if (event.repeat || event.ctrlKey || event.metaKey) { stop(event); return; }
       if (event.shiftKey) return;
@@ -308,6 +402,12 @@ export function appleRuntime(command: any, cacheMatchesPhone: typeof appleTransl
       if (cmd.action === 'bootstrap') return true;
       if (cmd.action === 'enabled') { state.enabled = cmd.enabled === true; if (!state.enabled) reset(); return true; }
       if (cmd.action === 'contact') return contact();
+      if (cmd.action === 'refresh-candidate') {
+        if (cmd.conversationSignature !== contact().id) return null;
+        const item = rows().find(row => row.key === cmd.key && row.text === cmd.sourceText);
+        if (!item) return null;
+        const { row, body, ...candidate } = item; return candidate;
+      }
       if (cmd.action === 'export') return exportConversation(cmd.command);
       if (cmd.action === 'install' || cmd.action === 'smart') { processMutations(observer.takeRecords()); if (decorationDirty && isForeground()) decorate(); return true; }
       if (cmd.action === 'text') return read();
@@ -373,6 +473,29 @@ export function appleRuntime(command: any, cacheMatchesPhone: typeof appleTransl
     };
     const style = document.createElement('style'); style.id = 'df-apple-translation-style';
     style.textContent = '#messages .df-chat-translation{box-sizing:border-box;max-width:100%;margin-top:7px;padding-top:6px;border-top:1px solid #94a3b866;font-size:14px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;color:#176040}#df-apple-composer-status{padding:6px 10px;font-size:12px;line-height:1.4;color:#ffffff}';
+    style.textContent += `
+      #messages .original{font-size:var(--df-apple-reading-font,15px)}
+      #messages .df-chat-translation{font-size:calc(var(--df-apple-reading-font,15px) - 1px)}
+      #messages .translated{font-size:calc(var(--df-apple-reading-font,15px) + 3px)}
+      #messages .message-meta{font-size:calc(var(--df-apple-reading-font,15px) - 3px)}
+      #messages .message-empty{font-size:var(--df-apple-reading-font,15px)}
+      #messages .message.incoming{width:max-content;min-width:0}
+      #messages .message.incoming>.bubble{box-sizing:border-box;width:max-content;max-width:100%;display:grid;grid-template-columns:minmax(0,1fr)}
+      #messages .message.incoming>.bubble>.original{grid-column:1;min-width:24px}
+      #messages .message.incoming>.bubble>.df-chat-translation,
+      #messages .message.incoming>.bubble>.translated{contain:inline-size;min-width:0;grid-column:1;grid-row:2}
+      #messages .bubble:has(> .df-smart-reply-host){display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:8px}
+      #messages .message.incoming>.bubble:has(> .df-smart-reply-host){grid-template-columns:minmax(0,1fr) auto;column-gap:8px}
+      #messages .bubble:has(> .df-smart-reply-host)>.original{grid-column:1;min-width:24px}
+      #messages .bubble:has(> .df-smart-reply-host)>.df-chat-translation,
+      #messages .bubble:has(> .df-smart-reply-host)>.translated{grid-column:1;grid-row:2;min-width:0}
+      #messages .bubble>.df-smart-reply-host{grid-column:2;grid-row:2;align-self:end;display:inline-flex;align-items:center;gap:10px;white-space:nowrap}
+      #messages .df-smart-reply-host>.df-chat-refresh-translation{margin:0!important}
+      body>#df-apple-area-hint{position:fixed;z-index:2147483647;transform:translateX(-50%);box-sizing:border-box;padding:5px 9px;border:1px solid #d1d5db;border-radius:12px;background:#fff;color:#111;font:13px/1.35 sans-serif;white-space:nowrap;box-shadow:0 2px 8px #0008;pointer-events:none}
+      #df-apple-reading-font-control{display:flex;align-items:center;gap:8px;margin-left:auto;font-size:12px;line-height:1.5;white-space:nowrap}
+      #df-apple-reading-font-control input{width:110px;max-width:28vw;margin:0;accent-color:#80c79a}
+      #df-apple-reading-font-control output{min-width:30px;font-variant-numeric:tabular-nums}
+    `;
     document.head?.append(style);
     document.addEventListener('input', onSpaceInput, true);
     for (const name of ['focusout', 'pointerdown']) document.addEventListener(name, clearSpaceRun, true);
@@ -410,14 +533,19 @@ export function appleRuntime(command: any, cacheMatchesPhone: typeof appleTransl
     state.setForeground = (foreground: boolean) => { if (state.foreground === foreground) return; state.foreground = foreground; if (foreground) { decorationDirty = true; scheduleDecorate(); } };
     const onVisibility = () => { if (isForeground()) { decorationDirty = true; scheduleDecorate(); } };
     document.addEventListener('visibilitychange', onVisibility);
+    const repositionAreaHint = () => updateAreaHint();
+    window.addEventListener('resize', repositionAreaHint, { passive: true });
     const interval = setInterval(sync, 1500);
     state.dispose = () => {
       observer.disconnect(); clearInterval(interval); if (timer) clearTimeout(timer);
       document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('resize', repositionAreaHint);
       if (paintTimer !== undefined) clearTimeout(paintTimer);
       for (const request of pendingPaints) request.resolve(false); pendingPaints = [];
       document.removeEventListener('input', onSpaceInput, true); for (const name of ['focusout', 'pointerdown']) document.removeEventListener(name, clearSpaceRun, true); for (const name of ['compositionstart', 'compositionend']) document.removeEventListener(name, onSpaceComposition, true); window.removeEventListener('keydown', onKey, true); window.removeEventListener('click', onClick, true); document.removeEventListener('input', onInput, true);
       document.removeEventListener('compositionstart', onCompositionStart, true); document.removeEventListener('compositionend', onCompositionEnd, true);
+      readingControl.remove(); areaHint.remove(); document.documentElement.style.removeProperty('--df-apple-reading-font');
+      document.querySelectorAll('#messages .df-chat-refresh-translation').forEach(node => node.remove());
       style.remove(); document.querySelectorAll('#messages .df-smart-reply-host').forEach(node => node.remove()); document.getElementById('df-apple-composer-status')?.remove(); delete document.documentElement.dataset.dfAppleGuard;
     };
     state.editor = editor;
@@ -428,11 +556,11 @@ export function appleRuntime(command: any, cacheMatchesPhone: typeof appleTransl
 }
 
 export function buildAppleScript(command: Record<string, unknown>) {
-  return `(${appleRuntime.toString()})(${JSON.stringify(command)},${appleTranslationCacheMatchesPhone.toString()})`;
+  return `(${appleRuntime.toString()})(${JSON.stringify(command)},${appleTranslationCacheMatchesPhone.toString()},${JSON.stringify(openSmsAreaCodeInfo)})`;
 }
 
 export function buildAppleRuntimeCheck() {
-  return 'window.__dfApple?.version === "2026-11-15-apple-translation-performance-v5"';
+  return 'window.__dfApple?.version === "2026-11-18-apple-composer-handoff-v13"';
 }
 
 export function buildAppleCommandScript(command: Record<string, unknown>) {

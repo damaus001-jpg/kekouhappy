@@ -4041,7 +4041,7 @@ async function handleInjectedComposerEvent(
     }
     const key = typeof payload.key === 'string' ? payload.key.trim() : '';
     const sourceText = typeof payload.text === 'string' ? normalizeCacheText(payload.text) : '';
-    if (!/^[A-Za-z0-9._:-]{1,256}$/.test(key)) return;
+    if (profile.platform === 'apple' ? !key || key.length > 1024 : !/^[A-Za-z0-9._:-]{1,256}$/.test(key)) return;
     if (!sourceText || sourceText.length > 4000 || !/[A-Za-z]{2,}/.test(sourceText) || hasChineseText(sourceText)) {
       await getRuntimeScriptExecutor(profile)?.execute<boolean>(buildWebBubbleRefreshStateScript(key, 'idle')).catch(() => false);
       setComposerStatus(profileId, '本条消息无法翻译，请检查原文后重试');
@@ -4053,8 +4053,16 @@ async function handleInjectedComposerEvent(
     const messagePart = payload.messagePart === 'quote' ? 'quote' : 'body';
     const smsCandidate=profile.platform==='opensms'?(await executeProfileScript<MessageCandidate[]>(profileId,buildMessageScanScript('opensms',{limit:120,includeAlreadyTranslated:true})))?.find(item=>item.key===key&&item.text===sourceText):undefined;
     if(profile.platform==='opensms'&&!smsCandidate)return;
+    const appleCandidate = profile.platform === 'apple'
+      ? await executeProfileScript<MessageCandidate | null>(profileId, buildAppleScript({ action: 'refresh-candidate', key, sourceText, conversationSignature }))
+      : undefined;
+    if (profile.platform === 'apple' && !appleCandidate) {
+      await getRuntimeScriptExecutor(profile)?.execute<boolean>(buildWebBubbleRefreshStateScript(key, 'idle')).catch(() => false);
+      return;
+    }
     const enqueued = enqueueMessageTranslationTask(profile, {
       ...smsCandidate,
+      ...appleCandidate,
       key,
       text: sourceText,
       direction,
