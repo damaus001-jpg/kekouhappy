@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "version": "8.36.0",
+  "archive": {
+    "repositoryRelativePath": "reference-sources/Signal-Desktop-v8.36.0.zip",
+    "sha256": "38B003DC2C65F1D17D6E99CB864CC923A63B1A37A574DD1BB3F67F4CA9620FEA",
+    "extractedRoot": "Signal-Desktop-8.36.0",
+    "upstreamExtractedRoot": "signalapp-Signal-Desktop-ceafb48",
+    "upstreamTagObject": "ceafb48536643567744d2ea77382ba80b279f0fc",
+    "url": "https://api.github.com/repos/signalapp/Signal-Desktop/zipball/v8.36.0"
+  },
+  "referenceSource": {
+    "repositoryRelativePath": "reference-sources/Signal-Desktop-v8.36.0/Signal-Desktop-8.36.0"
+  },
+  "patchSeries": {
+    "projectRelativePath": "signal-source/patches/v8.36.0/series.json"
+  },
+  "package": {
+    "name": "signal-desktop",
+    "version": "8.36.0",
+    "node": "24.22.3",
+    "packageManager": "pnpm@11.24.0",
+    "electron": "45.4.1"
+  },
+  "experiment": {
+    "projectRelativePath": ".tmp/signal-source/v8.36.0",
+    "minimumPrepareFreeBytes": 1073741824,
+    "minimumBuildFreeBytes": 16106127360
+  },
+  "build": {
+    "installArgs": [
+      "pnpm",
+      "install",
+      "--offline",
+      "--frozen-lockfile"
+    ],
+    "cleanPaths": [
+      "release",
+      "bundles"
+    ],
+    "unsignedWindows": true,
+    "electronArchiveSha256": "2BA6223AFA9121F42831FEFE92C434334907540165294FC56697449D12E7CFE9",
+    "buildSteps": [
+      [
+        "pnpm",
+        "run",
+        "generate"
+      ],
+      [
+        "pnpm",
+        "run",
+        "build:rolldown:prod"
+      ],
+      [
+        "pnpm",
+        "run",
+        "build:release",
+        "--win",
+        "dir"
+      ]
+    ]
+  }
+}

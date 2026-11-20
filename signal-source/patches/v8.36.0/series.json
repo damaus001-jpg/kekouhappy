@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "baseline": "8.36.0",
+  "patches": [
+    {
+      "file": "0001-maoyi-complete-integration.patch",
+      "sha256": "4F0A3AA3157571C67ECFE6E0FF1455E759C7867A4596344C632AC0A3125A9CBA"
+    }
+  ]
+}

@@ -17,11 +17,11 @@ export function buildVoiceMessageScanScript(platform: LocalSpeechPlatform) {
   const signature=platform==='signal'?document.querySelector('.CompositionArea[data-df-signal-conversation-id]')?.getAttribute('data-df-signal-conversation-id')||'':location.href+'|'+String(document.querySelector('header')?.innerText||document.querySelector('header')?.textContent||'').replace(/\\s+/g,' ').trim().slice(0,180);
   if(!signature)return [];
   const bubbleFor = audio => platform==='signal'
-    ? (audio.closest('[class*="module-message__wrapper"]')||audio.closest('[class*="module-message"]')?.parentElement||audio.closest('[class*="module-message"]'))
+    ? (audio.closest('[class*="module-message__container"],[class*="module-message__wrapper"]')||audio.closest('[class*="module-message"]')?.parentElement||audio.closest('[class*="module-message"]'))
     : platform==='telegram'
       ? audio.closest('.bubble[data-mid], .bubble, .bubble-content-wrapper, .Message')
       : audio.closest('[data-testid="msg-container"], [data-pre-plain-text], [data-id^="true_"], [data-id^="false_"], .message-in, .message-out');
-  const audioNodes = Array.from(document.querySelectorAll(platform==='signal'?'.module-message__audio-attachment':'audio, [data-testid*="voice"] audio, [class*="voice"] audio')).reverse();
+  const audioNodes = Array.from(new Set(Array.from(document.querySelectorAll(platform==='signal'?'.module-message__audio-attachment,[class*="module-message__audio-attachment"],[data-df-audio-message-id]':'audio, [data-testid*="voice"] audio, [class*="voice"] audio')))).reverse();
   const found=[];
   for(const audio of audioNodes){
     const bubble=bubbleFor(audio);
@@ -39,12 +39,11 @@ export function buildVoiceMessageScanScript(platform: LocalSpeechPlatform) {
     const classText=String(bubble.className||'')+' '+String(directionNode.className||'');
     const explicit=String(bubble.getAttribute('data-id')||'')+' '+classText;
     const direction=/message-out|outgoing|is-out|from-me|sent/i.test(explicit)?'outgoing':/message-in|incoming|is-in|from-them|received/i.test(explicit)?'incoming':(bubble.getBoundingClientRect().left+bubble.getBoundingClientRect().width/2>innerWidth/2?'outgoing':'incoming');
-    if(direction!=='incoming'){Array.from(bubble.querySelectorAll('.df-voice-action-row')).find(row=>row.dataset.dfVoiceKey===key)?.remove();continue;}
     let voiceControls=platform==='signal'?Array.from(bubble.querySelectorAll('.df-voice-controls')).find(row=>row.dataset.dfVoiceControlsKey===key):null;
     let actionRow=Array.from(bubble.querySelectorAll('.df-voice-action-row')).find(row=>row.dataset.dfVoiceKey===key);
     if(platform==='signal'&&!voiceControls){
       voiceControls=document.createElement('div');voiceControls.className='df-voice-controls';voiceControls.dataset.dfVoiceControlsKey=key;
-      voiceControls.style.cssText='display:flex;flex-direction:column;align-items:flex-start;align-self:stretch;width:100%;max-width:100%;margin:4px 0 0;pointer-events:auto';
+      voiceControls.style.cssText='display:flex;flex-direction:row;align-items:center;align-self:center;width:auto;max-width:100%;margin:0 0 0 8px;pointer-events:auto';
     }
     if(actionRow){
       actionRow.style.justifyContent='flex-start';
@@ -56,13 +55,14 @@ export function buildVoiceMessageScanScript(platform: LocalSpeechPlatform) {
     if(!actionRow){
       actionRow=document.createElement('div');actionRow.className='df-voice-action-row';actionRow.dataset.dfVoiceKey=key;
       actionRow.style.cssText='display:flex;justify-content:flex-start;margin:'+(platform==='signal'?'0':'3px 10px 6px')+';pointer-events:auto';
-      const button=document.createElement('button');button.type='button';button.textContent='翻译';button.title='下载并识别这条语音，然后显示译文';
+      const button=document.createElement('button');button.type='button';button.textContent='翻译语音';button.title='在本机识别这条语音并显示译文';button.setAttribute('aria-label','翻译这条语音');
       button.style.cssText='appearance:none;border:1px solid rgba(181,130,35,.72);border-radius:6px;background:rgba(181,130,35,.12);color:inherit;padding:3px 12px;font:inherit;font-size:12px;line-height:1.5;cursor:pointer';
       let lastClick=0;button.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();if(button.disabled||Date.now()-lastClick<600)return;lastClick=Date.now();button.disabled=true;button.textContent='正在识别语音';window.__dfTranslatorQueue=Array.isArray(window.__dfTranslatorQueue)?window.__dfTranslatorQueue:[];window.__dfTranslatorQueue.push({action:'voice-translate',text:JSON.stringify({key,conversationSignature:signature}),conversationSignature:signature,at:Date.now()});});
       actionRow.appendChild(button);
       if(platform==='signal')voiceControls.appendChild(actionRow);else bubble.insertAdjacentElement('afterend',actionRow);
     }
-    if(platform==='signal'&&voiceControls.parentElement!==audio)audio.appendChild(voiceControls);
+    const voiceControlsMount=platform==='signal'?(audio.querySelector('.module-message__audio-attachment__button-and-waveform')||audio):audio;
+    if(platform==='signal'&&voiceControls.parentElement!==voiceControlsMount)voiceControlsMount.appendChild(voiceControls);
     const rect=bubble.getBoundingClientRect();let scroller=bubble.parentElement;
     while(scroller&&scroller!==document.body){const style=getComputedStyle(scroller);if(/(auto|scroll|overlay)/.test(style.overflowY)&&scroller.scrollHeight>scroller.clientHeight+40)break;scroller=scroller.parentElement;}
     const nearEnd=!scroller||scroller.scrollHeight-scroller.scrollTop-scroller.clientHeight<=Math.max(160,scroller.clientHeight*0.18);
