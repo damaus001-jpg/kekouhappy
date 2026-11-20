@@ -8529,6 +8529,10 @@ function registerIpc() {
     const targetWindow = BrowserWindow.fromWebContents(event.sender);
     if (targetWindow) toggleMainWindowSize(targetWindow);
   });
+  trustedHandle('window:get-expanded-state', false, (event) => {
+    const targetWindow = BrowserWindow.fromWebContents(event.sender);
+    return Boolean(targetWindow && (targetWindow.isMaximized() || targetWindow.isFullScreen()));
+  });
   trustedHandle('window:close', false, (event) => {
     BrowserWindow.fromWebContents(event.sender)?.close();
   });
@@ -8837,10 +8841,14 @@ async function createWindow() {
   mainWindow.on('move', scheduleVisibleSignalMoveSync);
   mainWindow.on('resize', refreshSignalAfterLayoutChange);
   mainWindow.on('resized', refreshSignalAfterLayoutChange);
-  mainWindow.on('maximize', refreshSignalAfterLayoutChange);
-  mainWindow.on('unmaximize', refreshSignalAfterLayoutChange);
-  mainWindow.on('enter-full-screen', refreshSignalAfterLayoutChange);
-  mainWindow.on('leave-full-screen', refreshSignalAfterLayoutChange);
+  const refreshExpandedLayout = () => {
+    mainWindow?.webContents.send('window:expanded-state-changed', Boolean(mainWindow?.isMaximized() || mainWindow?.isFullScreen()));
+    refreshSignalAfterLayoutChange();
+  };
+  mainWindow.on('maximize', refreshExpandedLayout);
+  mainWindow.on('unmaximize', refreshExpandedLayout);
+  mainWindow.on('enter-full-screen', refreshExpandedLayout);
+  mainWindow.on('leave-full-screen', refreshExpandedLayout);
   const onDisplayMetricsChanged = () => refreshSignalAfterLayoutChange();
   screen.on('display-metrics-changed', onDisplayMetricsChanged);
   mainWindow.once('closed', () => {

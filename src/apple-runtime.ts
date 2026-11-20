@@ -32,13 +32,16 @@ export function appleTranslationCacheMatchesPhone(entry: { platform?: string; co
 export function appleRuntime(command: any, cacheMatchesPhone: typeof appleTranslationCacheMatchesPhone, areaCodeInfo: Record<string, [string, string, string]>) {
   if (location.origin !== 'http://127.0.0.1:8070' || window.top !== window) return false;
   const w = window as any;
-  const version = '2026-11-18-apple-composer-handoff-v13';
+  const version = '2026-11-19-apple-composer-handoff-v17';
   // Keep the established input-readiness contract; performance updates have
   // their own version and do not change the preload's input protection policy.
   const startupGuardMarker = '2026-11-09-apple-gpt-history-time-v4';
   if (w.__dfApple?.version !== version) {
     w.__dfApple?.dispose();
-    const state: any = { version, enabled: false, signature: '', context: '', input: null, pending: null, ready: null, sensitive: null, writing: false, sending: false, inFlight: false, composing: false, cache: new Map() };
+    const state: any = { version, enabled: false, reviewEnabled: true, reviewStatus: 'hidden', reviewText: '', signature: '', context: '', input: null, pending: null, ready: null, sensitive: null, writing: false, sending: false, inFlight: false, composing: false, cache: new Map() };
+    const composerReviewSettingKey = 'df-composer-review-enabled-v1';
+    try { state.reviewEnabled = localStorage.getItem(composerReviewSettingKey) !== '0'; } catch { state.reviewEnabled = true; }
+    w.__dfComposerReviewEnabled = state.reviewEnabled;
     let decorationDirty = true;
     const isForeground = () => state.foreground !== false && !document.hidden;
     const canonical = (value: unknown) => String(value ?? '').replace(/\r\n?/g, '\n').replace(/\u00a0/g, ' ').normalize('NFC').trim();
@@ -92,7 +95,7 @@ export function appleRuntime(command: any, cacheMatchesPhone: typeof appleTransl
     };
     const emit = (action: string, text = '', requestId = '') => {
       w.__dfTranslatorQueue ||= [];
-      w.__dfTranslatorQueue.push({ action, text, requestId, conversationSignature: contact().id });
+      w.__dfTranslatorQueue.push({ action, text, requestId, conversationSignature: contact().id, ...(action === 'translate' ? { reviewEnabled: state.reviewEnabled } : {}) });
       if (w.__dfTranslatorQueue.length > 100) w.__dfTranslatorQueue.splice(0, w.__dfTranslatorQueue.length - 100);
     };
     const hint = (text: string) => {
@@ -103,10 +106,123 @@ export function appleRuntime(command: any, cacheMatchesPhone: typeof appleTransl
       if (node.textContent !== text) node.textContent = text;
       node.hidden = !text;
     };
+    const composerReviewPanel = document.createElement('section');
+    composerReviewPanel.id = 'df-apple-composer-review';
+    composerReviewPanel.className = 'df-composer-review';
+    composerReviewPanel.setAttribute('aria-label', '苹果回译设置');
+    composerReviewPanel.setAttribute('data-df-composer-review', 'source-native');
+    const composerReviewHeader = document.createElement('div');
+    const composerReviewTitle = document.createElement('span');
+    const composerReviewActions = document.createElement('span');
+    const composerReviewStatus = document.createElement('span');
+    const composerReviewToggle = document.createElement('button');
+    composerReviewToggle.type = 'button';
+    composerReviewToggle.setAttribute('role', 'switch');
+    composerReviewToggle.setAttribute('aria-label', '回译');
+    composerReviewToggle.setAttribute('data-df-composer-review-toggle', 'true');
+    const composerReviewText = document.createElement('textarea');
+    composerReviewText.rows = 1;
+    composerReviewText.setAttribute('aria-label', '回译中文，可编辑但不会发送');
+    composerReviewText.setAttribute('data-df-composer-review-text', 'true');
+    composerReviewText.onbeforeinput = event => event.stopPropagation();
+    composerReviewText.onkeydown = event => event.stopPropagation();
+    composerReviewText.onkeypress = event => event.stopPropagation();
+    composerReviewText.onkeyup = event => event.stopPropagation();
+    composerReviewText.oninput = () => {
+      if (state.reviewStatus === 'ready') state.reviewText = composerReviewText.value;
+    };
+    const resizeComposerReviewText = () => {
+      composerReviewText.style.height = 'auto';
+      const contentHeight = composerReviewText.scrollHeight;
+      composerReviewText.style.height = `${Math.min(72, Math.max(34, contentHeight))}px`;
+      composerReviewText.style.overflowY = contentHeight > 72 ? 'auto' : 'hidden';
+    };
+    const isComposerReviewDarkMode = () => {
+      const themeMarkers = `${document.documentElement.className || ''} ${document.body?.className || ''} ${document.documentElement.getAttribute('data-theme') || ''} ${document.body?.getAttribute('data-theme') || ''}`.toLowerCase();
+      if (/(dark|night)/.test(themeMarkers)) return true;
+      if (/(light|day)/.test(themeMarkers)) return false;
+      const rootScheme = getComputedStyle(document.documentElement).colorScheme;
+      if (rootScheme.includes('dark')) return true;
+      if (rootScheme.includes('light')) return false;
+      let node: HTMLElement | null = document.getElementById('reply-box');
+      while (node) {
+        const style = getComputedStyle(node);
+        if (style.colorScheme.includes('dark')) return true;
+        const color = style.backgroundColor.match(/rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:[,\s/]+([\d.]+%?))?\s*\)/i);
+        if (color) {
+          const alpha = color[4] === undefined ? 1 : Number(color[4].replace('%', '')) / (color[4].includes('%') ? 100 : 1);
+          if (alpha > 0) {
+            const luminance = 0.2126 * Number(color[1]) + 0.7152 * Number(color[2]) + 0.0722 * Number(color[3]);
+            return luminance < 145;
+          }
+        }
+        node = node.parentElement;
+      }
+      return window.matchMedia?.('(prefers-color-scheme: dark)').matches === true;
+    };
+    const styleComposerReviewToggle = () => {
+      const label = `回译 ${state.reviewEnabled ? '开' : '关'}`;
+      if (composerReviewToggle.textContent !== label) composerReviewToggle.textContent = label;
+      composerReviewToggle.setAttribute('aria-checked', String(state.reviewEnabled));
+      composerReviewToggle.style.cssText = `background:${state.reviewEnabled ? '#d5b94f' : '#c7c7c7'};border:0;border-radius:12px;color:#2f2a1f;cursor:pointer;font-size:12px;line-height:22px;min-width:62px;padding:0 10px`;
+    };
+    composerReviewToggle.onclick = event => {
+      event.preventDefault();
+      event.stopPropagation();
+      state.reviewEnabled = !state.reviewEnabled;
+      w.__dfComposerReviewEnabled = state.reviewEnabled;
+      try { localStorage.setItem(composerReviewSettingKey, state.reviewEnabled ? '1' : '0'); } catch { /* Keep the in-memory choice for this page session. */ }
+      window.dispatchEvent(new CustomEvent('df-composer-review-setting', { detail: { enabled: state.reviewEnabled } }));
+      if (!state.reviewEnabled) { state.reviewStatus = 'hidden'; state.reviewText = ''; }
+      renderComposerReview();
+    };
+    composerReviewActions.style.cssText = 'align-items:center;display:flex;gap:8px';
+    composerReviewActions.append(composerReviewStatus, composerReviewToggle);
+    composerReviewHeader.append(composerReviewTitle, composerReviewActions);
+    composerReviewPanel.append(composerReviewHeader, composerReviewText);
+    const setComposerReview = (status: string, text = '') => {
+      state.reviewStatus = status;
+      if (status === 'hidden') state.reviewText = '';
+      else state.reviewText = text;
+      renderComposerReview();
+    };
+    function renderComposerReview() {
+      const reviewVisible = state.reviewEnabled && state.reviewStatus !== 'hidden';
+      const isReady = reviewVisible && state.reviewStatus === 'ready';
+      const darkMode = isComposerReviewDarkMode();
+      const displayText = state.reviewStatus === 'loading'
+        ? '正在把英文回译成中文…'
+        : state.reviewStatus === 'error'
+          ? '回译失败，请再次按回车重试'
+          : String(state.reviewText || '');
+      composerReviewPanel.style.cssText = `background:${reviewVisible ? (darkMode ? '#1d211c' : '#fff4c2') : 'transparent'};border:${reviewVisible ? `1px solid ${darkMode ? '#46503d' : '#dec86e'}` : '0'};border-radius:14px;box-sizing:border-box;color:${darkMode ? '#d5b94f' : '#2f2a1f'};flex:0 0 calc(100% - 24px);margin:0 12px 8px;order:-1;padding:${reviewVisible ? '8px 14px 12px' : '2px'};width:calc(100% - 24px)`;
+      composerReviewHeader.style.cssText = `align-items:center;color:${darkMode ? '#bcb17a' : '#756948'};display:flex;font-size:12px;justify-content:space-between;line-height:22px;margin-bottom:${reviewVisible ? '5px' : '0'}`;
+      composerReviewTitle.textContent = reviewVisible ? '中文修改框' : '';
+      composerReviewStatus.textContent = isReady ? '请核对语义' : '';
+      composerReviewToggle.hidden = false;
+      composerReviewText.hidden = !reviewVisible;
+      composerReviewText.style.display = reviewVisible ? 'block' : 'none';
+      if (composerReviewText.value !== displayText) composerReviewText.value = displayText;
+      composerReviewText.readOnly = !isReady;
+      composerReviewText.style.cssText = `background:${darkMode ? '#151815' : '#fffbed'};border:1px solid ${darkMode ? '#3c4435' : '#d8ca9a'};border-radius:10px;box-sizing:border-box;caret-color:${darkMode ? '#d5b94f' : '#302d26'};color:${darkMode ? '#d8cf9a' : '#302d26'};display:${reviewVisible ? 'block' : 'none'};font:inherit;height:34px;line-height:20px;max-height:72px;min-height:34px;outline:none;overflow-y:hidden;padding:7px 11px;resize:none;width:100%`;
+      styleComposerReviewToggle();
+      if (reviewVisible) resizeComposerReviewText();
+    }
+    const ensureComposerReviewMount = () => {
+      const box = document.getElementById('reply-box');
+      const input = editor();
+      if (!box || !input) { composerReviewPanel.remove(); return; }
+      let composerRow: HTMLElement = input;
+      while (composerRow.parentElement && composerRow.parentElement !== box) composerRow = composerRow.parentElement;
+      if (composerReviewPanel.parentElement !== box || composerReviewPanel.nextElementSibling !== composerRow) {
+        box.insertBefore(composerReviewPanel, composerRow);
+      }
+    };
     const reset = () => {
       state.pending = null; state.ready = null; state.sensitive = null;
       const input = editor();
       if (input) { delete input.dataset.dfTranslatorRequestId; delete input.dataset.dfTranslatorReadyRequestId; }
+      setComposerReview('hidden');
     };
     const readingFontKey = 'df-apple-reading-font-size';
     const clampReadingFont = (value: number) => Number.isFinite(value) ? Math.min(22, Math.max(12, Math.round(value))) : 15;
@@ -153,12 +269,14 @@ export function appleRuntime(command: any, cacheMatchesPhone: typeof appleTransl
       if (areaHint.parentElement !== document.body) document.body.append(areaHint);
       const rect = liveScreen.getBoundingClientRect();
       areaHint.style.left = (rect.left + rect.width / 2) + 'px';
-      areaHint.style.top = (rect.top + 10) + 'px';
+      areaHint.style.top = (rect.top + 2) + 'px';
     };
     const sync = () => {
       observeMessages();
       const messages = document.getElementById('messages');
       updateAreaHint();
+      ensureComposerReviewMount();
+      renderComposerReview();
       const translateControls = messages?.parentElement?.querySelector('.foreground-reading');
       if (translateControls && readingControl.parentElement !== translateControls) translateControls.append(readingControl);
       else if (!translateControls && messages?.parentElement && readingControl.nextElementSibling !== messages) messages.before(readingControl);
@@ -342,15 +460,16 @@ export function appleRuntime(command: any, cacheMatchesPhone: typeof appleTransl
     const submit = (event: Event) => {
       sync();
       const text = read();
-      // Apple runtime owns Chinese translation only. Leave non-Chinese submits
-      // untouched so the embedding 8070 workspace handles them, including
-      // translated drafts and English pasted directly by the user.
-      if (!state.enabled || !text || !/[\u3400-\u9fff]/.test(text) || directUrl(text)) return;
+      const hasChinese = /[\u3400-\u9fff]/.test(text);
+      const hasEnglish = /[A-Za-z]{2,}/.test(text) && !hasChinese;
+      // Translate Chinese drafts and intercept English drafts for backtranslation.
+      // The first Enter starts review; only the subsequent Enter sends the draft.
+      if (!state.enabled || !text || (!hasChinese && !(hasEnglish && state.reviewEnabled)) || directUrl(text)) return;
       if (state.inFlight) { stop(event); hint('翻译正在处理，请稍候'); return; }
       if (state.pending) { stop(event); hint('正在处理，请稍候'); return; }
       stop(event);
       const id = 'apple-translate-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
-      state.pending = approval(id, text); editor()!.dataset.dfTranslatorRequestId = id; emit('translate', text, id); hint('正在翻译…');
+      state.pending = approval(id, text); editor()!.dataset.dfTranslatorRequestId = id; emit('translate', text, id); hint(hasEnglish ? '正在回译核对…' : '正在翻译…');
     };
     let spaceRun: { input: HTMLElement; signature: string; text: string; count: number } | null = null;
     let spaceComposing = false;
@@ -385,12 +504,14 @@ export function appleRuntime(command: any, cacheMatchesPhone: typeof appleTransl
       if (handleSpace(event)) return;
       if (event.key !== 'Enter' || event.target !== editor()) return;
       const text = read();
-      // Do not consume English Enter events here; 8070 owns sending and its
-      // keyboard policy, whether the text came from translation or paste.
-      if (!state.enabled || !/[\u3400-\u9fff]/.test(text) || directUrl(text)) return;
+      const hasChinese = /[\u3400-\u9fff]/.test(text);
+      const hasEnglish = /[A-Za-z]{2,}/.test(text) && !hasChinese;
+      if (!state.enabled || (!hasChinese && !(hasEnglish && state.reviewEnabled)) || directUrl(text)) return;
       if (state.composing || event.isComposing || event.keyCode === 229) { stop(event); return; }
       if (event.repeat || event.ctrlKey || event.metaKey) { stop(event); return; }
       if (event.shiftKey) return;
+      // The draft has already been reviewed. Let this Enter reach Apple's sender.
+      if (hasEnglish && matches(state.ready)) return;
       submit(event);
     };
     const onClick = (event: Event) => { const send = button(); if (send && event.target instanceof Element && event.target.closest('#reply-box #send-reply') === send) submit(event); };
@@ -429,12 +550,16 @@ export function appleRuntime(command: any, cacheMatchesPhone: typeof appleTransl
         const value = cmd.state || {};
         if ((value.conversationSignature && value.conversationSignature !== contact().id) || (value.expectedConversationSignature && value.expectedConversationSignature !== contact().id)) return false;
         if (Object.hasOwn(value, 'sensitiveToken')) { state.sensitive = value.sensitiveToken ? approval(value.sensitiveToken, canonical(value.sensitiveText)) : null; state.pending = null; }
+        if (Object.hasOwn(value, 'reviewStatus') && value.reviewStatus !== 'error') setComposerReview(String(value.reviewStatus || 'hidden'), String(value.reviewText || ''));
         if (Object.hasOwn(value, 'translated')) {
-          if (value.translated && state.pending?.requestId === value.requestId && state.pending.context === context() && state.pending.input === editor() && read() === canonical(value.translated)) {
-            state.ready = approval(value.requestId, read()); state.pending = null; editor()!.dataset.dfTranslatorReadyRequestId = value.requestId; hint('翻译完成，再按 Enter 或点击发送即可发送英文');
+          const composerRequestId = String(value.composerRequestId || value.requestId || '');
+          if (value.translated && state.pending?.requestId === composerRequestId && state.pending.context === context() && state.pending.input === editor() && read() === canonical(value.translated)) {
+            state.ready = approval(composerRequestId, read()); state.pending = null; editor()!.dataset.dfTranslatorReadyRequestId = composerRequestId;
+            hint(value.reviewStatus === 'ready' ? '回译完成，核对下方中文后按 Enter 发送英文' : '翻译完成，再按 Enter 或点击发送即可发送英文');
           } else if (!value.translated && !state.pending) reset();
         }
         if (value.status) { hint(value.status); if (/失败|超时|取消|重试/.test(value.status)) reset(); }
+        if (value.reviewStatus === 'error') setComposerReview('error', String(value.reviewText || ''));
         return true;
       }
       if (cmd.action === 'composer') {
@@ -544,7 +669,7 @@ export function appleRuntime(command: any, cacheMatchesPhone: typeof appleTransl
       for (const request of pendingPaints) request.resolve(false); pendingPaints = [];
       document.removeEventListener('input', onSpaceInput, true); for (const name of ['focusout', 'pointerdown']) document.removeEventListener(name, clearSpaceRun, true); for (const name of ['compositionstart', 'compositionend']) document.removeEventListener(name, onSpaceComposition, true); window.removeEventListener('keydown', onKey, true); window.removeEventListener('click', onClick, true); document.removeEventListener('input', onInput, true);
       document.removeEventListener('compositionstart', onCompositionStart, true); document.removeEventListener('compositionend', onCompositionEnd, true);
-      readingControl.remove(); areaHint.remove(); document.documentElement.style.removeProperty('--df-apple-reading-font');
+      readingControl.remove(); areaHint.remove(); document.getElementById('df-apple-composer-review')?.remove(); document.documentElement.style.removeProperty('--df-apple-reading-font');
       document.querySelectorAll('#messages .df-chat-refresh-translation').forEach(node => node.remove());
       style.remove(); document.querySelectorAll('#messages .df-smart-reply-host').forEach(node => node.remove()); document.getElementById('df-apple-composer-status')?.remove(); delete document.documentElement.dataset.dfAppleGuard;
     };
@@ -560,7 +685,7 @@ export function buildAppleScript(command: Record<string, unknown>) {
 }
 
 export function buildAppleRuntimeCheck() {
-  return 'window.__dfApple?.version === "2026-11-18-apple-composer-handoff-v13"';
+  return 'window.__dfApple?.version === "2026-11-19-apple-composer-handoff-v17"';
 }
 
 export function buildAppleCommandScript(command: Record<string, unknown>) {

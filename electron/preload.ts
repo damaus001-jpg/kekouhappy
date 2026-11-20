@@ -176,7 +176,13 @@ contextBridge.exposeInMainWorld('chatTranslator', api);
 const windowControl: WindowControlApi = {
   minimize: () => ipcRenderer.invoke('window:minimize'),
   toggleMaximize: () => ipcRenderer.invoke('window:toggle-maximize'),
-  close: () => ipcRenderer.invoke('window:close')
+  close: () => ipcRenderer.invoke('window:close'),
+  getExpandedState: () => ipcRenderer.invoke('window:get-expanded-state'),
+  onExpandedStateChanged: (handler) => {
+    const listener = (_event: Electron.IpcRendererEvent, expanded: boolean) => handler(expanded);
+    ipcRenderer.on('window:expanded-state-changed', listener);
+    return () => ipcRenderer.removeListener('window:expanded-state-changed', listener);
+  }
 };
 
 contextBridge.exposeInMainWorld('windowControl', windowControl);

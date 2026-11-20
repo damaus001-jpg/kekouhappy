@@ -911,4 +911,6 @@ export type WindowControlApi = {
   minimize: () => Promise<void>;
   toggleMaximize: () => Promise<void>;
   close: () => Promise<void>;
+  getExpandedState: () => Promise<boolean>;
+  onExpandedStateChanged: (handler: (expanded: boolean) => void) => () => void;
 };

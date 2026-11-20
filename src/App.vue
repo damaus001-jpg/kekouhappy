@@ -331,6 +331,7 @@ const activeSensitiveDialog = computed(() => sensitiveDialogs.value[0]);
 const sensitiveDialogBusy = ref(false);
 let removeSensitiveDialogListener: (() => void) | undefined;
 let removeSensitiveDialogClosedListener: (() => void) | undefined;
+let removeWindowExpandedListener: (() => void) | undefined;
 
 async function respondSensitiveDialog(response: number) {
   const current = activeSensitiveDialog.value;
@@ -662,6 +663,7 @@ const appEntryTiles = appTiles.filter(tile => tile.app !== 'apple').map(tile => 
 
 const activeProfile = computed(() => profiles.value.find((profile) => profile.id === activeProfileId.value) ?? null);
 const activeSignalProfile = computed(() => (activeProfile.value?.platform === 'signal' ? activeProfile.value : null));
+const windowExpanded = ref(false);
 const hasBlockingModal = computed(() => Boolean(
   lockScreenVisible.value ||
   activeSensitiveDialog.value ||
@@ -1643,10 +1645,24 @@ function signalWorkspaceBoundsFromDom(visible: boolean): SignalWorkspaceBounds |
   const host = document.querySelector<HTMLElement>('.runtime-web-main');
   if (!host) return null;
   const rect = host.getBoundingClientRect();
+  const shouldReserveAssistantPanel = Boolean(
+    activeSignalProfile.value &&
+    assistantOpen.value
+  );
+  const width = rect.width + signalWorkspaceBleedPx * 2;
+  const signalWidth = shouldReserveAssistantPanel
+    ? Math.min(
+        width,
+        Math.max(
+          320,
+          window.innerWidth - 488 - (rect.left - signalWorkspaceBleedPx)
+        )
+      )
+    : width;
   return {
     x: rect.left - signalWorkspaceBleedPx,
     y: rect.top - signalWorkspaceBleedPx,
-    width: rect.width + signalWorkspaceBleedPx * 2,
+    width: signalWidth,
     height: rect.height + signalWorkspaceBleedPx * 2,
     visible
   };
@@ -3023,12 +3039,12 @@ function enqueueComposerTranslation(
   conversationSignature = '',
   clientRequestId = '',
   composerKind: ComposerKind = 'default',
-  signalReviewEnabled = true
+  composerReviewEnabled = true
 ) {
   const text = normalizeComposerSourceText(sourceText);
   if (isDirectSendHttpUrl(text)) return false;
   const isSignalProfile = profile.platform === 'signal';
-  const shouldReview = isSignalProfile && signalReviewEnabled;
+  const shouldReview = (isSignalProfile || profile.platform === 'apple') && composerReviewEnabled;
   const sourceIsChinese = hasChineseText(text);
   const sourceIsEnglish = hasEnglishText(text) && !sourceIsChinese;
   if (!text || (!sourceIsChinese && !(shouldReview && sourceIsEnglish)) || !window.chatTranslator) return false;
@@ -3058,7 +3074,7 @@ function enqueueComposerTranslation(
       const currentProfile = profiles.value.find((item) => item.id === profile.id);
       if (!currentProfile || !window.chatTranslator) return;
       setComposerFeedbackState(profile.id, 'translating');
-      const currentShouldReview = currentProfile.platform === 'signal' && signalReviewEnabled;
+      const currentShouldReview = (currentProfile.platform === 'signal' || currentProfile.platform === 'apple') && composerReviewEnabled;
       const pendingStatus = currentShouldReview
         ? (sourceIsChinese ? '翻译并回译中' : '回译中')
         : '翻译中';
@@ -3195,6 +3211,7 @@ function enqueueComposerTranslation(
       await setInjectedComposerState(profile.id, {
         translated: englishText,
         requestId: reviewRequestId,
+        composerRequestId: effectiveRequestId,
         conversationSignature: normalizedSignature,
         reviewStatus: 'ready',
         reviewText
@@ -3233,7 +3250,7 @@ function enqueueComposerTranslation(
         requestId: '',
         status: failedStatus,
         reviewStatus: reviewFailed ? 'error' : 'hidden',
-        reviewText: ''
+        reviewText: reviewFailed && profile.platform === 'apple' ? '回译失败，英文草稿已保留，请核对后再发送。' : ''
       });
     }
   });
@@ -4177,7 +4194,7 @@ async function handleInjectedComposerEvent(
       effectiveSignature,
       requestId,
       composerKind,
-      profile.platform === 'signal' ? signalReviewEnabled : false
+      profile.platform === 'signal' || profile.platform === 'apple' ? signalReviewEnabled : false
     );
     return;
   }
@@ -12679,6 +12696,15 @@ watch(activePanel, (panel, previousPanel) => {
 });
 
 onMounted(() => {
+  const removeExpandedStateListener = window.windowControl.onExpandedStateChanged((expanded) => {
+    windowExpanded.value = expanded;
+    void nextTick(() => scheduleSignalWorkspaceSyncBurst());
+  });
+  removeWindowExpandedListener = removeExpandedStateListener;
+  void window.windowControl.getExpandedState().then((expanded) => {
+    windowExpanded.value = expanded;
+    void nextTick(() => scheduleSignalWorkspaceSyncBurst());
+  }).catch(() => {});
   removeSensitiveDialogListener = window.chatTranslator.onSensitiveSendDialog(dialog => {
     sensitiveDialogs.value.push(dialog);
   });
@@ -12750,6 +12776,7 @@ onMounted(() => {
 onUnmounted(() => {
   removeSensitiveDialogListener?.();
   removeSensitiveDialogClosedListener?.();
+  removeWindowExpandedListener?.();
   if (diagnosticQueueTimer) clearInterval(diagnosticQueueTimer);
   stopPokeballSequence();
   if (memoryStatusTimer) clearInterval(memoryStatusTimer);
@@ -13042,7 +13069,7 @@ onUnmounted(() => {
   <main
     v-show="signedIn && activePanel === 'session'"
     class="page workspace-page"
-    :class="[themeClass, { 'workspace-header-collapsed': workspaceHeaderCollapsed, 'assistant-library-enabled': !lockScreenVisible, 'assistant-library-open': assistantOpen, 'conversation-export-menu-open': conversationExportMenuOpen }]"
+    :class="[themeClass, { 'workspace-header-collapsed': workspaceHeaderCollapsed, 'assistant-library-enabled': !lockScreenVisible, 'assistant-library-open': assistantOpen, 'workspace-window-expanded': windowExpanded, 'conversation-export-menu-open': conversationExportMenuOpen }]"
   >
     <header v-show="!workspaceHeaderCollapsed" class="runtime-header">
       <div class="runtime-brand">
