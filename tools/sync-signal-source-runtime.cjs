@@ -3,7 +3,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 
 const projectRoot = path.resolve(__dirname, '..');
-const baselineVersion = '8.18.0';
+const baselineVersion = '8.36.0';
 const sourceRoot = path.join(
   projectRoot,
   '.tmp',

@@ -9,8 +9,8 @@ const preparedRuntime = path.join(
   root,
   '.tmp',
   'signal-source',
-  'v8.18.0',
-  'Signal-Desktop-8.18.0',
+  'v8.36.0',
+  'Signal-Desktop-8.36.0',
   'release',
   'win-unpacked'
 );
@@ -26,7 +26,7 @@ for (const [needle, message] of [
 }
 
 const requiredContracts = [
-  ["const baselineVersion = '8.18.0';", 'runtime synchronization is not bound to Signal 8.18.0'],
+  ["const baselineVersion = '8.36.0';", 'runtime synchronization is not bound to Signal 8.36.0'],
   ["requiredFile(sourceRoot, 'Signal.exe');", 'runtime synchronization does not require Signal.exe'],
   ["requiredFile(sourceRoot, path.join('resources', 'app.asar'));", 'runtime synchronization does not require app.asar'],
   ["const sourceHash = sha256(sourceAsar);", 'runtime synchronization does not hash the verified source'],
@@ -55,7 +55,7 @@ if (fs.statSync(preparedRuntime, { throwIfNoEntry: false })?.isDirectory()) {
   process.exit(0);
 }
 
-const baseline = spawnSync(process.execPath, [experimentPath, 'check', '--version', '8.18.0'], {
+const baseline = spawnSync(process.execPath, [experimentPath, 'check', '--version', '8.36.0'], {
   cwd: root,
   encoding: 'utf8',
   stdio: 'inherit'

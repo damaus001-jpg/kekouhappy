@@ -14,7 +14,7 @@ if(!process.versions.electron){
   const loadTs=(file,dependencies={})=>{const code=ts.transpileModule(fs.readFileSync(path.join(root,file),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;return new Function('exports','require',code+';return exports;')({},name=>{if(dependencies[name])return dependencies[name];throw new Error('Unexpected dependency '+name);});};
   app.whenReady().then(async()=>{
     const materialIdentity=await import('../dist-electron/assistant-material-identity.js');
-    const {buildOpenSmsScript}=loadTs('src/opensms-runtime.ts',{'../electron/assistant-material-identity':materialIdentity});
+    const {buildOpenSmsScript}=loadTs('src/opensms-runtime.ts',{'../electron/assistant-material-identity':materialIdentity,'./phone-area-codes':loadTs('src/phone-area-codes.ts')});
     const shared=await import('../dist-electron/shared.js');
     const {buildGptClipboardText}=await import('../dist-electron/gpt-handoff.js');
     const source=fs.readFileSync(path.join(root,'src/App.vue'),'utf8');

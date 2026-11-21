@@ -1,8 +1,8 @@
 {
   "name": "maoyi",
   "productName": "皮卡丘翻译器",
-  "version": "1.16.26",
-  "shortVersionWindows": "1.16.26",
+  "version": "1.16.29",
+  "shortVersionWindows": "1.16.29",
   "private": true,
   "description": "皮卡丘翻译器多账号聊天翻译工作台。",
   "main": "dist-electron/main.js",
@@ -30,7 +30,7 @@
     "test:opensms-login": "node tools/test-opensms-login.cjs",
     "test:conversation-export": "node tools/test-conversation-export.mjs",
     "dev:diagnostics": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/start-translation-diagnostics.ps1",
-    "predev": "npm run build && npm run prepare:whatsapp-filter-runtime && npm run prepare:local-speech-assets && npm run test:signal-source-artifact:v8.18 && node tools/sync-signal-source-runtime.cjs",
+    "predev": "npm run build && npm run prepare:whatsapp-filter-runtime && npm run prepare:local-speech-assets && npm run test:signal-source-artifact:v8.36 && node tools/sync-signal-source-runtime.cjs",
     "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
     "build": "vue-tsc --noEmit && vite build && tsc -p electron/tsconfig.json",
     "start": "electron .",
@@ -108,6 +108,8 @@
     "test:signal-render-cache": "node tools/test-signal-render-cache-runtime.cjs",
     "test:signal-source-artifact": "node tools/test-signal-source-artifact.cjs",
     "test:signal-source-artifact:v8.18": "node tools/test-signal-source-artifact.cjs --version 8.18.0",
+    "test:signal-source-artifact:v8.36": "node tools/test-signal-source-artifact.cjs --version 8.36.0",
+    "test:signal-upgrade-preservation": "node tools/test-signal-upgrade-preservation.cjs",
     "test:dev-runtime-sync": "node tools/test-dev-runtime-sync.cjs",
     "test:signal-source-compatibility": "node tools/test-signal-source-compatibility.cjs",
     "test:signal-source-compatibility:v8.18": "node tools/test-signal-source-compatibility.cjs --version 8.18.0",
@@ -164,7 +166,7 @@
     "wait-on": "^8.0.3"
   },
   "build": {
-    "buildVersion": "1.16.26",
+    "buildVersion": "1.16.29",
     "appId": "com.maoyi.translator",
     "productName": "皮卡丘翻译器",
     "executableName": "maoyi",

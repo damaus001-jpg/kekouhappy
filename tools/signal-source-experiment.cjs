@@ -17,6 +17,11 @@ const supportedBaselines = Object.freeze({
     manifestFile: 'v8.18.0.json',
     archiveSha256: 'A1FE955608134DAA81FC4EDDBEA35F8BA57E4CA54B43391B845364965D6C1A66',
     patchSetSha256: '66FD642BEDA089526EBCBA83AAD4B602A36236A983F6FD7C57D18084A2CD4692'
+  }),
+  '8.36.0': Object.freeze({
+    manifestFile: 'v8.36.0.json',
+    archiveSha256: '38B003DC2C65F1D17D6E99CB864CC923A63B1A37A574DD1BB3F67F4CA9620FEA',
+    patchSetSha256: '70F83C1F9E9AE6E0F5C7185E4724B137860A39783C28C538A9ABECF652FA6B0A'
   })
 });
 
@@ -213,7 +218,9 @@ function verifyPackage(sourcePath, manifest, label) {
     name: packageJson.name,
     version: packageJson.version,
     node: packageJson.engines?.node,
-    packageManager: packageJson.packageManager,
+    packageManager: packageJson.packageManager || (packageJson.devEngines?.packageManager
+      ? `${packageJson.devEngines.packageManager.name}@${packageJson.devEngines.packageManager.version}`
+      : undefined),
     electron: packageJson.devDependencies?.electron
   };
   for (const [key, expected] of Object.entries(manifest.package)) {
@@ -281,6 +288,13 @@ function run(command, args, options = {}) {
     stdio: options.inherit ? 'inherit' : 'pipe',
     shell: false
   };
+  const pnpmCli = process.env.MAOYI_SIGNAL_PNPM_CLI;
+  if (command === 'corepack' && pnpmCli) {
+    const allowedRoot = path.join(projectRoot, '.toolchains');
+    const cli = fs.realpathSync.native(pnpmCli);
+    assertWithin(allowedRoot, cli, 'Pinned pnpm CLI');
+    return spawnSync(process.execPath, [cli, ...(args[0] === 'pnpm' ? args.slice(1) : args)], spawnOptions);
+  }
   if (process.platform === 'win32' && command === 'corepack') {
     const safeArgs = args.map(quoteWindowsCommandArgument);
     return spawnSync(process.env.ComSpec || 'cmd.exe', [
@@ -557,7 +571,27 @@ function applyPatchSet(sourcePath, patchSet) {
   }
 }
 
-function expandArchive(archivePath, destinationPath) {
+function expandArchive(archivePath, destinationPath, upstreamRoot) {
+  if (upstreamRoot) {
+    if (upstreamRoot !== 'signalapp-Signal-Desktop-ceafb48') fail('Unexpected upstream archive root');
+    const script = [
+      'import pathlib,sys,zipfile',
+      'dest=pathlib.Path(sys.argv[2]).resolve()',
+      'root=sys.argv[3]+"/"',
+      'z=zipfile.ZipFile(sys.argv[1])',
+      'for member in z.infolist():',
+      ' if not member.filename.startswith(root): raise RuntimeError("Archive root mismatch")',
+      ' relative=member.filename[len(root):]',
+      ' if not relative or member.is_dir(): continue',
+      ' target=dest/"Signal-Desktop-8.36.0"/relative',
+      ' if not target.resolve().is_relative_to(dest): raise RuntimeError("Archive path escape")',
+      ' target.parent.mkdir(parents=True,exist_ok=True)',
+      ' target.write_bytes(z.read(member))'
+    ].join('\n');
+    const result = spawnSync('python', ['-c', script, archivePath, destinationPath, upstreamRoot], { stdio: 'inherit', windowsHide: true });
+    if (result.error || result.status !== 0) fail('Failed to expand pinned upstream source');
+    return;
+  }
   const escapeLiteral = value => value.replace(/'/g, "''");
   const script = [
     "$ErrorActionPreference = 'Stop'",
@@ -595,7 +629,7 @@ async function prepare(manifest, paths) {
   assertWithin(paths.experimentBase, stagingPath, 'Preparation staging path');
   fs.mkdirSync(stagingPath, { recursive: false });
   try {
-    expandArchive(paths.archivePath, stagingPath);
+    expandArchive(paths.archivePath, stagingPath, manifest.archive.upstreamExtractedRoot);
     const stagingSourcePath = resolveWithin(
       stagingPath,
       manifest.archive.extractedRoot,
@@ -888,7 +922,7 @@ function verifyReleasePackagingInputs(manifest, paths) {
       fail(`Signal release packaging input is missing: ${filePath}`);
     }
   }
-  if (manifest.version === '8.18.0') {
+  if (['8.18.0', '8.36.0'].includes(manifest.version)) {
     const mainBundle = fs.readFileSync(
       path.join(paths.experimentSourcePath, 'bundles', 'main.js'),
       'utf8'

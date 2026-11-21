@@ -16,6 +16,11 @@ const supportedBaselines = Object.freeze({
     manifestFile: 'v8.18.0.json',
     archiveSha256: 'A1FE955608134DAA81FC4EDDBEA35F8BA57E4CA54B43391B845364965D6C1A66',
     patchSetSha256: '66FD642BEDA089526EBCBA83AAD4B602A36236A983F6FD7C57D18084A2CD4692'
+  }),
+  '8.36.0': Object.freeze({
+    manifestFile: 'v8.36.0.json',
+    archiveSha256: '38B003DC2C65F1D17D6E99CB864CC923A63B1A37A574DD1BB3F67F4CA9620FEA',
+    patchSetSha256: '70F83C1F9E9AE6E0F5C7185E4724B137860A39783C28C538A9ABECF652FA6B0A'
   })
 });
 
@@ -125,7 +130,7 @@ assert.deepEqual(
 const defaultConfig = JSON.parse(fs.readFileSync(path.join(sourceRoot, 'config', 'default.json'), 'utf8'));
 assert.equal(defaultConfig.updatesEnabled, false, 'the source experiment must keep Signal updates disabled');
 
-const asar = require(path.join(sourceRoot, 'node_modules', '@electron', 'asar'));
+const asar = require('@electron/asar');
 const fileEntries = asar.listPackage(appAsarPath)
   .map(archivePath => ({
     archivePath,
@@ -137,12 +142,12 @@ const bundleEntries = fileEntries.filter(({ normalizedPath }) => (
   normalizedPath === 'bundles/main.js' ||
   normalizedPath === 'bundles/signal-main.js' ||
   /^bundles\/chunks\/windowController\.main-.*\.js$/.test(normalizedPath) ||
-  (baselineVersion === '8.18.0' && (
+  (['8.18.0', '8.36.0'].includes(baselineVersion) && (
     normalizedPath === 'bundles/preload/main.js' ||
     /^bundles\/chunks\/messageBridge\.main-.*\.js$/.test(normalizedPath)
   ))
 ));
-if (baselineVersion === '8.18.0') {
+if (['8.18.0', '8.36.0'].includes(baselineVersion)) {
   const messageProjectionEntry = fileEntries.find(({ normalizedPath }) => (
     /(?:^|\/)bundles\/chunks\/messageBridgeChannels\.std-[^/]+\.js$/.test(normalizedPath)
   ));
@@ -164,10 +169,10 @@ assert.ok(bundlePaths.includes('bundles/main.js'), 'bundles/main.js is missing f
 assert.ok(bundlePaths.includes('bundles/signal-main.js'), 'bundles/signal-main.js is missing from app.asar');
 assert.ok(
   bundlePaths.some(file => file.includes('windowController.main-')) ||
-    (baselineVersion === '8.18.0' && bundlePaths.some(file => file.includes('messageBridge.main-'))),
+    (['8.18.0', '8.36.0'].includes(baselineVersion) && bundlePaths.some(file => file.includes('messageBridge.main-'))),
   'the Maoyi window-security bundle is missing from app.asar'
 );
-if (baselineVersion === '8.18.0') {
+if (['8.18.0', '8.36.0'].includes(baselineVersion)) {
   const stylesheetEntry = fileEntries.find(
     ({ normalizedPath }) => normalizedPath === 'stylesheets/manifest.css'
   );
@@ -187,8 +192,11 @@ if (baselineVersion === '8.18.0') {
     'the Signal source artifact is missing the approved WhatsApp dark bubble colors or still exposes the default outgoing gradient'
   );
   assert.ok(
-    stylesheetSource.includes('.module-message__container--outgoing{background-color:#2c6bed;color:#fff}') &&
-      stylesheetSource.includes('.module-message__container--incoming{background-color:#e9e9e9;color:#1b1b1b}'),
+    baselineVersion === '8.36.0'
+      ? stylesheetSource.includes('.module-message__container--outgoing{background:var(--axo-color-surface-message-outgoing);color:var(--axo-color-label-primary-oncolor)}') &&
+        stylesheetSource.includes('.module-message__container--incoming{background:var(--axo-color-surface-message-incoming);color:var(--axo-color-label-primary)}')
+      : stylesheetSource.includes('.module-message__container--outgoing{background-color:#2c6bed;color:#fff}') &&
+        stylesheetSource.includes('.module-message__container--incoming{background-color:#e9e9e9;color:#1b1b1b}'),
     'the Signal source artifact must preserve the native light-theme bubble colors'
   );
   assert.match(
@@ -246,7 +254,7 @@ for (const markerText of [
   'window.owner',
   'script.execute',
   'maoyi-signal-control-message-v1',
-  ...(baselineVersion === '8.18.0' ? [
+  ...(['8.18.0', '8.36.0'].includes(baselineVersion) ? [
     'window.present',
     'window.presentation-applied',
     'Signal window presentation is unavailable while locked',
@@ -277,7 +285,7 @@ for (const markerText of [
 const ownerAddon = fs.readFileSync(ownerAddonPath).toString('latin1');
 for (const markerText of [
   'setWindowOwner',
-  ...(baselineVersion === '8.18.0' ? ['hasWindowOwner'] : []),
+  ...(['8.18.0', '8.36.0'].includes(baselineVersion) ? ['hasWindowOwner'] : []),
   'Window ownership validation failed',
   'Windows rejected the owner relationship'
 ]) {
@@ -297,7 +305,7 @@ console.log(JSON.stringify({
     sha256: sha256(appAsarPath),
     fileCount: files.length,
     verifiedBundles: bundlePaths,
-    windowsUcvRuntimeEntry: baselineVersion === '8.18.0'
+    windowsUcvRuntimeEntry: ['8.18.0', '8.36.0'].includes(baselineVersion)
       ? windowsUcvRuntimeEntry
       : undefined
   },

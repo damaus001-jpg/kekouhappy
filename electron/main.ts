@@ -204,7 +204,8 @@ const signalSourceExperimentValue = !app.isPackaged
   : '';
 const supportedSignalSourcePatchSets: Readonly<Record<string, string>> = Object.freeze({
   '8.17.0': 'B692DD94A5CBE9AC7969B0FF0C51B4DA05B2CE82B5F055A6264889251901CD57',
-  '8.18.0': '66FD642BEDA089526EBCBA83AAD4B602A36236A983F6FD7C57D18084A2CD4692'
+  '8.18.0': '66FD642BEDA089526EBCBA83AAD4B602A36236A983F6FD7C57D18084A2CD4692',
+  '8.36.0': '70F83C1F9E9AE6E0F5C7185E4724B137860A39783C28C538A9ABECF652FA6B0A'
 });
 const signalSourceOnlyAcceptanceValue =
   process.env.MAOYI_SIGNAL_SOURCE_ONLY_ACCEPTANCE?.trim() || '';
@@ -4389,6 +4390,10 @@ async function hasSignalStartupCorruption(dataDir: string) {
   }
 }
 
+// A kernel upgrade can fail without corrupting the account database. Preserve
+// credentials and history for diagnosis or restoration from the pre-upgrade backup.
+const preserveSignalProfileOnStartupFailure = true;
+
 async function quarantineSignalDataDir(dataDir: string) {
   if (!(await pathExists(dataDir))) return false;
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -6509,6 +6514,9 @@ async function launchSignalProfileNow(id: string) {
   const dataDir = profile.signalDataDir || signalInstancePath(profile.id);
   let recovered = false;
   if (await hasSignalStartupCorruption(dataDir)) {
+    if (preserveSignalProfileOnStartupFailure) {
+      throw new Error('Signal 数据库启动检查失败，原登录信息和聊天记录已保留。请先检查日志或恢复升级前备份，程序不会自动清空账号。');
+    }
     await killSignalProcessesByDataDir(dataDir);
     const existingCorruptProcess = signalProcesses.get(id);
     if (existingCorruptProcess) {
@@ -6643,6 +6651,13 @@ async function recoverSignalStartupIfCorrupt(profileId: string, dataDir: string)
   if (!(await hasSignalStartupCorruption(dataDir))) return;
 
   signalStartupRecoveryAttempts.add(profileId);
+  if (preserveSignalProfileOnStartupFailure) {
+    failSignalPresentationForApp(
+      signalAppId(profileId),
+      'Signal 启动失败，原登录信息和聊天记录已保留，请检查日志或恢复升级前备份'
+    );
+    return;
+  }
   await killSignalProcessesByDataDir(dataDir);
   const child = signalProcesses.get(profileId);
   if (child) {

@@ -2,13 +2,16 @@ const fs=require('node:fs'),fsp=require('node:fs/promises'),path=require('node:p
 const root=path.resolve(__dirname,'..');
 if(!process.versions.electron){
  const env={...process.env};delete env.ELECTRON_RUN_AS_NODE;delete env.NODE_OPTIONS;
- const child=require('node:child_process').spawn(require('electron'),[__filename],{cwd:root,env,windowsHide:true,stdio:'inherit'});
+ const child=require('node:child_process').spawn(require('electron'),[__filename,...process.argv.slice(2)],{cwd:root,env,windowsHide:true,stdio:'inherit'});
  child.on('exit',code=>{process.exitCode=code??1;});child.on('error',error=>{console.error(error);process.exitCode=1;});
 }else{
+ process.noAsar=true;
  const electron=require('electron'),{app,safeStorage}=electron;
  const {extractLicenseManager}=require('./upgrade-bundle-extract.cjs');
  const source=path.resolve('D:/new huancun 001/maoyi Data');
- const testRoot=fs.mkdtempSync(path.join(root,'.tmp/upgrade-data-copy-'));
+ const reuseSnapshot=process.argv.find(value=>value.startsWith('--snapshot='))?.slice('--snapshot='.length);
+ const testRoot=reuseSnapshot?fs.realpathSync(path.resolve(reuseSnapshot)):fs.mkdtempSync(path.join(root,'.tmp/upgrade-data-copy-'));
+ if(!testRoot.startsWith(path.join(root,'.tmp','upgrade-data-copy-')))throw new Error('Snapshot must be a workspace upgrade-data-copy fixture');
  const dataRoot=path.join(testRoot,'business-data'),appData=path.join(testRoot,'app-data'),cryptoRoot=path.join(testRoot,'oscrypt');
  fs.mkdirSync(cryptoRoot,{recursive:true});
  const originalLocalState=path.join(process.env.APPDATA,'maoyi/Local State');
@@ -38,14 +41,15 @@ if(!process.versions.electron){
    await fsp.mkdir(path.dirname(to),{recursive:true});
    let matched=false;
    for(let attempt=0;attempt<3;attempt++){
-    const before=await fsp.readFile(from);await fsp.writeFile(to,before);
+    const before=await fsp.readFile(reuseSnapshot?to:from);if(!reuseSnapshot)await fsp.writeFile(to,before);
     const after=await fsp.readFile(from);
     if(hash(before)===hash(after)){hashes.set(file.relative,hash(before));matched=true;break;}
    }
    if(!matched)throw new Error('A live persistent file kept changing; snapshot must be retried');
    if(index&&index%1000===0)console.log('Snapshot copied '+index+' / '+files.length);
   }
-  const versions=[{label:'installed-old',resources:path.resolve('D:/fanyiqi/maoyi/resources')},{label:'new-package',resources:path.resolve('release/1.16.26-complete-upgrade/win-unpacked/resources')}];
+  const newResources=process.argv.find(value=>value.startsWith('--new-resources='))?.slice('--new-resources='.length);
+  const versions=[{label:'installed-old',resources:path.resolve('D:/fanyiqi/maoyi/resources')},{label:'new-package',resources:path.resolve(newResources||'release/1.16.26-complete-upgrade/win-unpacked/resources')}];
   const publicSuite=JSON.parse(fs.readFileSync(path.join(versions[0].resources,'license-suite-public.json'),'utf8'));
   const originalGuard=path.join(process.env.APPDATA,'maoyi Security',publicSuite.suiteId,'authorization-guard.dat');
   if(fs.existsSync(originalGuard)){
@@ -80,5 +84,5 @@ if(!process.versions.electron){
   fs.writeFileSync(path.join(testRoot,'verification.json'),JSON.stringify(report,null,2)+'\n');
   console.log(JSON.stringify(report,null,2));console.log('upgradeDataReport='+path.join(testRoot,'verification.json'));
   clearTimeout(timeout);app.exit(0);
- }).catch(error=>{console.error(error.message);clearTimeout(timeout);app.exit(1);});
+ }).catch(error=>{console.error(error);clearTimeout(timeout);app.exit(1);});
 }

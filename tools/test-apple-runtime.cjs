@@ -15,10 +15,9 @@ if (!process.versions.electron) {
   app.setPath('userData', path.join(root, '.tmp', 'apple-runtime-test'));
   const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
   app.whenReady().then(async () => {
-    const runtimeCode = ts.transpileModule(fs.readFileSync(path.join(root, 'src/apple-runtime.ts'), 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
-    const { buildAppleScript } = new Function('exports', runtimeCode + ';return exports;')({});
     const shared = await import('../dist-electron/shared.js');
     const loadTs=(relative,modules={})=>new Function('exports','require',ts.transpileModule(fs.readFileSync(path.join(root,relative),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText+';return exports;')({},name=>{assert.ok(name in modules,name);return modules[name];});
+    const { buildAppleScript } = loadTs('src/apple-runtime.ts',{'./phone-area-codes':loadTs('src/phone-area-codes.ts')});
     const exportDates=await import('../dist-electron/conversation-export-dates.js');
     const {buildConversationExportScript,unwrapConversationExportResult,mergeConversationExportRows}=loadTs('src/conversation-export-runtime.ts',{'../electron/shared':shared,'../electron/conversation-export-dates':exportDates});
     const {buildAssistantRuntimeScript}=loadTs('src/assistant-material-runtime.ts',{'../electron/assistant-material-identity':await import('../dist-electron/assistant-material-identity.js')});
