@@ -28,6 +28,11 @@
 .filter-app-menu button { display:block;width:100%;padding:12px 14px;text-align:left;border-radius:6px;color:var(--text); }
 .filter-app-menu button:hover,.filter-app-menu button:focus-visible { background:var(--panel-muted);color:var(--accent-bright);outline:1px solid var(--line-strong); }
 .filter-launch-status { color:var(--muted-strong);font-size:13px; }
+.backend8070-menu { width:260px;max-width:calc(100vw - 24px); }
+.backend8070-state { margin:6px 12px 8px;font-size:14px; }
+.backend8070-state small { display:block;margin-top:5px;font-size:12px;color:var(--muted-strong);overflow-wrap:anywhere; }
+.backend8070-menu button:disabled { opacity:.45;cursor:default; }
+.backend8070-note { display:block;margin:6px 12px;color:var(--muted-strong);font-size:12px; }
 
 html,
 body,

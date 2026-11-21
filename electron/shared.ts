@@ -819,6 +819,7 @@ export type ElectronApi = {
   probeDiagnostics: () => Promise<{ state: string; elapsedMs: number }>;
   getInitialTheme: () => AppTheme;
   openWhatsAppNumberFilter: () => Promise<{ opened: boolean }>;
+  controlBackend8070: (action: import('./backend8070-types.js').Backend8070Action) => Promise<import('./backend8070-types.js').Backend8070Result>;
   getClientAuthorizationStatus: () => Promise<ClientAuthorizationStatus>;
   setClientUsername: (username: string) => Promise<ClientAuthorizationResult>;
   activateClientLicense: (licenseCode: string) => Promise<ClientAuthorizationResult>;

@@ -20,6 +20,7 @@ import {
   type Session,
 } from 'electron';
 import { workspaceAccessHeaders } from './workspace-access.js';
+import { Backend8070Control } from './backend8070-control.js';
 import { installMainWindowRecovery } from './main-window-recovery.js';
 import { appendFile, cp, readdir, readFile, writeFile, mkdir, rename, rm, stat } from 'node:fs/promises';
 import { createReadStream, lstatSync, readFileSync, realpathSync, statSync, type Dirent } from 'node:fs';
@@ -8087,6 +8088,7 @@ function openSmsLoginScope(event: IpcMainEvent) {
   const profileId = entry?.[0].match(/^persist:chat-([0-9a-f-]{36})$/i)?.[1];
   return profileId ? { profileId, origin: new URL(event.senderFrame.url).origin } : null;
 }
+const backend8070Control = new Backend8070Control();
 function registerIpc() {
   installOpenSmsLoginPersistence(openSmsLoginScope);
   const assertAssistantUnlocked = () => {
@@ -8106,6 +8108,10 @@ function registerIpc() {
   trustedHandle('customer:preview-import',true,async (_event,target:CustomerTarget)=>{await validateCustomerTarget(target);return previewCustomerFile(target,()=>validateCustomerTarget(target));});
   trustedHandle('customer:import',true,async (_event,target:CustomerTarget,token:string,selectedStage?:string)=>{await validateCustomerTarget(target);assertText(token,'Customer import token',80);if(selectedStage!==undefined)assertText(selectedStage,'Customer stage',40);return importCustomerFile(target,token,selectedStage);});
   trustedHandle('assistant:get', true, () => { assertAssistantUnlocked(); return readAssistantLibrary(); });
+  trustedHandle('backend8070:control', true, (_event, action: import('./backend8070-types.js').Backend8070Action) => {
+    assertAssistantUnlocked();
+    return backend8070Control.control(action);
+  });
   trustedHandle('whatsapp-filter:open', true, async () => {
     assertAssistantUnlocked();
     const expected = clientLicenseManager?.getRuntimeSecurityExpectation();

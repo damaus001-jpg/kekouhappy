@@ -5,7 +5,7 @@ import { createHmac, randomBytes } from 'node:crypto';
 export const workspaceAuthHeader = 'X-Pikachu-Workspace-Auth';
 let cachedKey: Buffer | undefined;
 
-function loadWorkspaceKey(): Buffer {
+export function loadWorkspaceKey(): Buffer {
   if (cachedKey) return cachedKey;
   const parent = process.env.LOCALAPPDATA;
   if (!parent) throw new Error('缺少本机用户数据目录');

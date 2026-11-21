@@ -20,6 +20,7 @@ import { buildWhatsAppContactListResizeScript } from './whatsapp-contact-list-re
 import { buildOpenSmsContactListResizeScript } from './opensms-contact-list-resize-runtime';
 import { buildVoiceConversationSignatureScript, buildVoiceMessageActionButtonStateScript, buildVoiceMessageScanScript, buildVoiceMessageAudioChunkScript } from './local-speech-runtime';
 import opensmsIcon from './assets/opensms-bubble.svg';
+import type { Backend8070Action, Backend8070Result } from '../electron/backend8070-types';
 import androidIcon from './assets/android.svg';
 import appleIcon from './assets/apple.svg';
 import { installTranslationLayoutWatchersFromDom } from './translation-layout-runtime';
@@ -238,16 +239,56 @@ const isCreatingProfile = ref(false);
 const whatsappFilterMenu = ref<{ x: number; y: number } | null>(null);
 const whatsappFilterOpening = ref(false);
 const whatsappFilterStatus = ref('');
+const backend8070Menu = ref<{ x: number; y: number } | null>(null);
+const backend8070Busy = ref(false);
+const backend8070Result = ref<Backend8070Result>({ ok: false, state: 'unknown', message: '正在查询后台状态…' });
+const backend8070StateText = computed(() => ({ running: '后台运行中', stopped: '后台已关闭', residual: '后台存在残留进程', unknown: '后台状态未知', starting: '后台启动中…', stopping: '后台关闭中…' }[backend8070Result.value.state]));
+function closeBackend8070Menu() { backend8070Menu.value = null; }
+function backend8070OutsidePointer(event: PointerEvent) {
+  if (!(event.target instanceof Element) || !event.target.closest('.backend8070-menu')) closeBackend8070Menu();
+}
+function backend8070Escape(event: KeyboardEvent) { if (event.key === 'Escape') closeBackend8070Menu(); }
+async function controlBackend8070(action: Backend8070Action) {
+  if (backend8070Busy.value) return;
+  backend8070Busy.value = true;
+  backend8070Result.value = { ...backend8070Result.value,
+    state: action === 'start' ? 'starting' : action === 'stop' ? 'stopping' : backend8070Result.value.state,
+    message: action === 'status' ? '正在查询后台状态…' : action === 'start' ? '正在启动后台…' : '正在彻底关闭后台…' };
+  try { backend8070Result.value = await window.chatTranslator.controlBackend8070(action); }
+  catch { backend8070Result.value = { ok: false, state: 'unknown', message: '后台控制不可用，请重启客户端后重试' }; }
+  finally { backend8070Busy.value = false; }
+}
+function showBackend8070Menu(event: MouseEvent) {
+  if (!signedIn.value || lockScreenVisible.value || !(event.currentTarget instanceof HTMLElement)) return;
+  closeWhatsAppFilterMenu();
+  const bounds = event.currentTarget.getBoundingClientRect();
+  const width = 260, height = 210, gap = 12;
+  backend8070Menu.value = {
+    x: Math.max(gap, Math.min(bounds.right + gap, window.innerWidth - width - gap)),
+    y: Math.max(gap, Math.min(bounds.top, window.innerHeight - height - gap))
+  };
+  void controlBackend8070('status');
+  void nextTick(() => document.querySelector<HTMLElement>('.backend8070-menu')?.focus());
+}
 function closeWhatsAppFilterMenu() { whatsappFilterMenu.value = null; }
 onMounted(() => {
+  window.addEventListener('resize', closeBackend8070Menu);
+  window.addEventListener('scroll', closeBackend8070Menu, true);
+  window.addEventListener('pointerdown', backend8070OutsidePointer, true);
+  window.addEventListener('keydown', backend8070Escape);
   window.addEventListener('resize', closeWhatsAppFilterMenu);
   window.addEventListener('scroll', closeWhatsAppFilterMenu, true);
 });
 onUnmounted(() => {
+  window.removeEventListener('resize', closeBackend8070Menu);
+  window.removeEventListener('scroll', closeBackend8070Menu, true);
+  window.removeEventListener('pointerdown', backend8070OutsidePointer, true);
+  window.removeEventListener('keydown', backend8070Escape);
   window.removeEventListener('resize', closeWhatsAppFilterMenu);
   window.removeEventListener('scroll', closeWhatsAppFilterMenu, true);
 });
 function showWhatsAppFilterMenu(event: MouseEvent) {
+  closeBackend8070Menu();
   const icon = event.currentTarget;
   if (!(icon instanceof HTMLElement)) return;
   const bounds = icon.getBoundingClientRect();
@@ -665,6 +706,7 @@ const activeProfile = computed(() => profiles.value.find((profile) => profile.id
 const activeSignalProfile = computed(() => (activeProfile.value?.platform === 'signal' ? activeProfile.value : null));
 const windowExpanded = ref(false);
 const hasBlockingModal = computed(() => Boolean(
+  backend8070Menu.value ||
   lockScreenVisible.value ||
   activeSensitiveDialog.value ||
   lockSetupDialogStage.value ||
@@ -680,6 +722,7 @@ const hasBlockingModal = computed(() => Boolean(
 ));
 watch([assistantOpen,conversationExportMenuOpen], async () => { await nextTick(); scheduleSignalWorkspaceSyncBurst(); });
 watch([signedIn, lockScreenVisible, activePanel], () => { assistantOpen.value = false; });
+watch([signedIn, lockScreenVisible, activePanel], closeBackend8070Menu);
 watch([signedIn, lockScreenVisible, activePanel], () => { openSmsEntryOpen.value = false; });
 const translationCustomizationDirty = computed(() => (
   translationCustomizationDraft.value.trim() !== translationCustomizationSaved.value.trim()
@@ -12977,7 +13020,7 @@ onUnmounted(() => {
 
         <div class="app-card-row">
           <button v-for="tile in appEntryTiles" :key="tile.app" class="launch-card" type="button" :disabled="isCreatingProfile" @click="openAppEntry(tile.app)">
-            <span class="app-logo" @contextmenu.stop.prevent="tile.app === 'whatsapp' && showWhatsAppFilterMenu($event)"><img :src="tile.icon" :alt="tile.label" /></span>
+            <span class="app-logo" @contextmenu.stop.prevent="tile.app === 'whatsapp' ? showWhatsAppFilterMenu($event) : tile.app === 'opensms' && showBackend8070Menu($event)"><img :src="tile.icon" :alt="tile.label" /></span>
             <strong>{{ tile.label }}</strong>
           </button>
         </div>
@@ -13166,7 +13209,7 @@ onUnmounted(() => {
         <img :src="multiSignalIcon" alt="Signal" />
         <span v-if="unreadCountForApp('signal') > 0" class="app-unread-dot" aria-hidden="true"></span>
       </button>
-      <button type="button" class="app-short sms" :class="{active:currentApp==='opensms'||currentApp==='apple',unread:unreadCountForApp('opensms')>0}" title="打新增" aria-label="打新增" @click="openAppEntry('opensms')">
+      <button type="button" class="app-short sms" :class="{active:currentApp==='opensms'||currentApp==='apple',unread:unreadCountForApp('opensms')>0}" title="打新增" aria-label="打新增" @click="openAppEntry('opensms')" @contextmenu.stop.prevent="showBackend8070Menu($event)">
         <img :src="opensmsIcon" alt="打新增" /><small class="opensms-label">打新增</small>
         <span v-if="unreadCountForApp('opensms')>0" class="app-unread-dot" aria-hidden="true"></span>
       </button>
@@ -13709,4 +13752,13 @@ onUnmounted(() => {
       </button>
     </section>
   </div>
+  <Teleport to="body">
+    <div v-if="backend8070Menu" class="filter-app-menu backend8070-menu" :class="themeClass" role="menu" aria-label="打新增后台控制" tabindex="-1"
+      :style="{ left: backend8070Menu.x + 'px', top: backend8070Menu.y + 'px' }" @click.stop @contextmenu.prevent>
+      <p class="backend8070-state" role="status" aria-live="polite">{{ backend8070StateText }}<small>{{ backend8070Result.message }}</small></p>
+      <button type="button" role="menuitem" :disabled="backend8070Busy || backend8070Result.code === 'MISSING_FILES' || backend8070Result.state === 'running'" @click="controlBackend8070('start')">启动后台</button>
+      <button type="button" role="menuitem" :disabled="backend8070Busy || backend8070Result.code === 'MISSING_FILES' || backend8070Result.state === 'stopped'" @click="controlBackend8070('stop')">彻底关闭后台</button>
+      <small class="backend8070-note">关闭将断开全部设备连接</small>
+    </div>
+  </Teleport>
 </template>
