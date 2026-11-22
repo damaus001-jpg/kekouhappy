@@ -18,6 +18,7 @@ import { buildOpenSmsCommandScript as buildOpenSmsScript, buildOpenSmsScript as 
 import { buildAppleCommandScript as buildAppleScript, executeAppleRuntimeScript, appleTranslationCacheMatchesPhone } from './apple-runtime';
 import { buildWhatsAppContactListResizeScript } from './whatsapp-contact-list-resize-runtime';
 import { buildOpenSmsContactListResizeScript } from './opensms-contact-list-resize-runtime';
+import { buildWorkspaceThemeScript, syncWorkspaceThemes } from './workspace-theme-runtime';
 import { buildVoiceConversationSignatureScript, buildVoiceMessageActionButtonStateScript, buildVoiceMessageScanScript, buildVoiceMessageAudioChunkScript } from './local-speech-runtime';
 import opensmsIcon from './assets/opensms-bubble.svg';
 import type { Backend8070Action, Backend8070Result } from '../electron/backend8070-types';
@@ -888,6 +889,18 @@ async function refreshMemoryStatus() {
   } catch {
     memoryStatus.value = null;
   }
+}
+
+watch([activeTheme, () => profiles.value], () => {
+  void syncWorkspaceThemes(profiles.value, activeTheme.value, profileId =>
+    document.querySelector<Electron.WebviewTag>(`webview[data-profile-id="${profileId}"]`)
+  );
+}, { flush: 'post' });
+
+function syncWorkspaceThemeOnLoad(event: Event, profile: ChatProfile) {
+  if (profile.platform !== 'apple' || !profiles.value.some(item => item.id === profile.id)) return;
+  const webview = event.currentTarget as Electron.WebviewTag | null;
+  if (webview) void webview.executeJavaScript(buildWorkspaceThemeScript(activeTheme.value)).catch(() => undefined);
 }
 
 function setTheme(theme: ThemeName) {
@@ -9542,6 +9555,7 @@ function refreshTelegramUnreadCountsOnResume() {
 function handleWebviewDomReady(event: Event, profile: ChatProfile) {
   const webview = event.currentTarget as Electron.WebviewTag | null;
   if (!webview || !profiles.value.some(item => item.id === profile.id)) return;
+  syncWorkspaceThemeOnLoad(event, profile);
   resetWebTranslationRuntime(profile.id);
   webRuntimeReloadAttempts.delete(profile.id);
   void webview.executeJavaScript(`window.__dfTranslationRuntimeGeneration = ${webRuntimeGenerations.get(profile.id)};`, true).catch(() => undefined);
@@ -13294,6 +13308,7 @@ onUnmounted(() => {
         :partition="item.profile.partition"
         :useragent="item.profile.fingerprint.userAgent"
         @dom-ready="(event: Event) => handleWebviewDomReady(event, item.profile)"
+        @did-finish-load="(event: Event) => syncWorkspaceThemeOnLoad(event, item.profile)"
         @page-title-updated="() => refreshUnreadCount(item.profile.id)"
         @render-process-gone="(event: Event) => handleWebviewRuntimeFailure(event, item.profile)"
         @did-fail-load="(event: Event) => handleWebviewRuntimeFailure(event, item.profile)"
