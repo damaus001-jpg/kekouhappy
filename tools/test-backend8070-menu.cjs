@@ -8,11 +8,32 @@ if (!process.versions.electron) {
   child.on('error', error => { console.error(error); process.exitCode = 1; });
   child.on('exit', code => { process.exitCode = code ?? 1; });
 } else {
-  const { app, BrowserWindow } = require('electron');
+  const { app, BrowserWindow, ipcMain } = require('electron');
+  app.on('window-all-closed', () => {});
   fs.mkdirSync(path.join(root, '.tmp'), { recursive: true });
   app.setPath('userData', fs.mkdtempSync(path.join(root, '.tmp', 'backend-menu-')));
   const timeout = setTimeout(() => { console.error('backend8070-menu timeout'); app.exit(1); }, 45000);
   app.whenReady().then(async () => {
+    // Use the preload loaded by the application, not the unused compiled TS copy.
+    // All commands terminate at this isolated IPC fixture; no backend is invoked.
+    const bridgeCalls = [];
+    ipcMain.handle('backend8070:control', (_event, action) => {
+      bridgeCalls.push(action);
+      return { ok: true, state: action === 'start' ? 'running' : 'stopped', message: 'fixture' };
+    });
+    const bridgeWindow = new BrowserWindow({ show: false, webPreferences: {
+      preload: path.join(root, 'electron/preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false
+    } });
+    try {
+      await bridgeWindow.loadURL('data:text/html;charset=utf-8,<html><body>bridge fixture</body></html>');
+      assert.equal(await bridgeWindow.webContents.executeJavaScript('typeof window.chatTranslator?.controlBackend8070'), 'function', 'actual preload exposes the backend control bridge');
+      for (const action of ['status', 'start', 'stop']) {
+        const result = await bridgeWindow.webContents.executeJavaScript(`window.chatTranslator.controlBackend8070(${JSON.stringify(action)})`);
+        assert.equal(result.ok, true);
+        assert.equal(result.state, action === 'start' ? 'running' : 'stopped');
+      }
+      assert.deepEqual(bridgeCalls, ['status', 'start', 'stop']);
+    } finally { bridgeWindow.destroy(); ipcMain.removeHandler('backend8070:control'); }
     const ts = require('typescript');
     const source = fs.readFileSync(path.join(root, 'src/App.vue'), 'utf8');
     const script = source.slice(source.indexOf('>') + 1, source.indexOf('</script>'));

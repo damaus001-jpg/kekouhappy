@@ -40,6 +40,10 @@ if (!String(packageScripts['package:win'] || '').includes('prepare:package-signa
 if (!String(packageScripts['package:win'] || '').includes('verify-packaged-output.cjs')) {
   failures.push('package:win must verify the real packaged output');
 }
+const packagedOutputVerifier = fs.readFileSync(path.join(projectRoot, 'tools', 'verify-packaged-output.cjs'), 'utf8');
+for (const requiredCheck of ['electron/preload.cjs', 'controlBackend8070', 'packagedPreload.equals(sourcePreload)', '.device-data', 'df-runtime-binding\\.dat']) {
+  if (!packagedOutputVerifier.includes(requiredCheck)) failures.push(`packaged-output verifier is missing required check: ${requiredCheck}`);
+}
 if (packageJson.build?.appId !== windowsPackagedAppId) {
   failures.push('default client builder AppUserModelID does not match the Windows runtime identity');
 }

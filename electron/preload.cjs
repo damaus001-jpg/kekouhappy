@@ -11,6 +11,7 @@ const initialTheme = (
 
 const api = {
   openWhatsAppNumberFilter: () => ipcRenderer.invoke('whatsapp-filter:open'),
+  controlBackend8070: (action) => ipcRenderer.invoke('backend8070:control', action),
   getAssistantLibrary: () => ipcRenderer.invoke('assistant:get'),
   getCustomer: (target) => ipcRenderer.invoke('customer:get',target),
   saveCustomer: (target,value) => ipcRenderer.invoke('customer:save',target,value),

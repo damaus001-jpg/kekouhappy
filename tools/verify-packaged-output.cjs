@@ -68,6 +68,8 @@ function verifyNoForbiddenResources(resources) {
     /(?:^|[\\/])client-license-suite\.json$/i,
     /(?:^|[\\/])\.package-secrets(?:[\\/]|$)/i,
     /(?:^|[\\/])df-runtime-binding\.dat$/i,
+    /(?:^|[\\/])(?:\.device-data|\.tmp|diagnostics|logs)(?:[\\/]|$)/i,
+    /(?:^|[\\/])(?:service-key|.*private.*key|.*\.pem)$/i,
     /(?:^|[\\/])app\.(?:original|patched|before[^\\/]*)\.asar(?:\.unpacked)?(?:[\\/]|$)/i
   ];
   const paths = collectPaths(resources);
@@ -218,6 +220,19 @@ async function verifyClient(clientRoot) {
   }
   const clientMainEntry = entries.find((entry) => /(?:^|[\\/])dist-electron[\\/]main\.js$/.test(entry));
   if (!clientMainEntry) throw new Error('Client app.asar is missing the bundled main process.');
+  const clientPreloadEntry = entries.find((entry) => entry.replace(/\\/g, '/').replace(/^\//, '') === 'electron/preload.cjs');
+  if (!clientPreloadEntry) throw new Error('Client app.asar is missing the active Electron preload.');
+  const packagedPreload = Buffer.from(await asar.extractFile(appAsar, clientPreloadEntry.replace(/^[/\\]/, '')));
+  const sourcePreload = fs.readFileSync(path.join(__dirname, '..', 'electron', 'preload.cjs'));
+  if (!packagedPreload.equals(sourcePreload)) throw new Error('Packaged Electron preload differs from the reviewed source.');
+  for (const api of ['controlBackend8070', 'openWhatsAppNumberFilter', 'getAssistantLibrary', 'getClientAuthorizationStatus']) {
+    if (!packagedPreload.toString('utf8').includes(`${api}:`)) throw new Error(`Packaged Electron preload is missing API ${api}.`);
+  }
+  const mainSource = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.ts'), 'utf8');
+  const mainBundle = Buffer.from(await asar.extractFile(appAsar, clientMainEntry.replace(/^[/\\]/, ''))).toString('utf8');
+  if (mainSource.includes("join(__dirname, '../electron/preload.cjs')") && !mainBundle.includes('preload.cjs')) {
+    throw new Error('Packaged main bundle does not reference the reviewed preload path.');
+  }
   if (entries.some((entry) => /(?:^|[\\/])dist-electron[\\/].+\.map$/.test(entry))) {
     throw new Error('Client app.asar contains Electron main-process source maps.');
   }
