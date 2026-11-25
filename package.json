@@ -24,6 +24,7 @@
     "test:signal-composer-install": "node tools/test-signal-composer-install-loop.cjs",
     "test:opensms": "npm run test:opensms-area-codes && node tools/test-opensms-runtime.cjs",
     "test:apple": "node tools/test-apple-runtime.cjs",
+    "test:apple-background-throttling": "node tools/test-apple-background-throttling.cjs",
     "test:backend8070": "node tools/test-backend8070-control.mjs && node tools/test-backend8070-menu.cjs",
     "test:apple-assistant-store": "node tools/test-apple-assistant-store.cjs",
     "test:opensms-area-codes": "node tools/test-opensms-area-codes.mjs",

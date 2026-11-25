@@ -8830,6 +8830,19 @@ async function createWindow() {
     webPreferences.sandbox = true;
     webPreferences.webSecurity = true;
     webPreferences.allowRunningInsecureContent = false;
+    if (platform === 'apple') {
+      // The Apple workbench keeps long-lived device screen streams open while
+      // the page is hidden. Leave this guest unthrottled so Chromium does not
+      // stall its timers/rendering or reclaim those connections in background.
+      webPreferences.backgroundThrottling = false;
+    }
+  });
+  mainWindow.webContents.on('did-attach-webview', (_event, guestContents) => {
+    // Runtime guarantee for the same policy, in case the guest is attached
+    // through a path that does not replay the will-attach preferences.
+    if (!guestContents.isDestroyed() && sessionPolicies.get(guestContents.session) === 'apple') {
+      guestContents.setBackgroundThrottling(false);
+    }
   });
   mainWindow.on('minimize', prepareSignalWindowsForMainMinimize);
   mainWindow.on('hide', () => {

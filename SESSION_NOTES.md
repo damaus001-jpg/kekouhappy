@@ -1,5 +1,18 @@
 # 当前接续记录
 
+## 2026-11-25 苹果 8070 页面防断流（后台节流关闭）交付
+
+- 8070 侧需求：8070 工作台在宿主 Apple webview 中后台化 15–20 分钟后 10 台设备画面订阅陆续断流。协作经 `C:\xiangmu\qunkong\PIKACHU_CHAT.md` 完成。
+- 修复：`electron/main.ts` `will-attach-webview` 仅对 apple/8070 分区设 `backgroundThrottling=false`；新增 `did-attach-webview` 按 guest session 识别 apple 后 `setBackgroundThrottling(false)` 兜底。其余平台保持默认节流，安全/防克隆守卫未动。
+- 新增 `tools/test-apple-background-throttling.cjs`（npm `test:apple-background-throttling`）：真实 Electron 43 窗口回放生产监听器，六场景通过（apple 关节流、两种机制单独生效、非 apple 默认、未注册 partition 拦截）。
+- 验证：完整构建、安全门、diff 检查、`verify-packaged-output --client=release` 均通过；包内 asar 主进程确认含两处 apple 作用域节流代码。
+- 实测（开发版）：场景① Signal 标签+最小化 59 分钟，8070 采样 60 轮 **0 断流**；场景② 可见静止 20:45 → 次日 06:57 约 10 小时无断流上报，用户确认 10 台画面正常。8070 最终报告见对话文件。
+- 新安装包：`release/pikaqiufanyiqi-1.16.29-Setup.exe`，398711441 字节，SHA256 `f0bece3b98f07dec94ebc90a7af0796baa1336d1f3b368cbf61e643c572360d0`。**未安装，未操作真实账号/手机。**
+- 打包事故与规则：本次 electron-builder 未带 `--config`，读 package.json `build.directories.output=release`，覆盖了 11-21 顶层旧安装器（SHA `194EDD…`，398711367 字节）。用户确认接受丢失；其余历史包仍保留（`release-1.16.29-preload-fix/`、`release/1.16.29-signal-mainline/`、`.recovery/`）。**今后打包必须显式 `--config electron-builder.client-suite.cjs` 并设 `MAOYI_CLIENT_BUILD_OUTPUT=独立新目录`，禁止裸 `package:win` 覆盖历史包。**
+- 未推送远端；未操作 8070 仓库与设备。Git 本地存档见最后提交。
+
+## 历史接续（2026-11-22 及更早）
+
 最新进展（2026-11-22）：修复实际加载的 `electron/preload.cjs` 缺少 `controlBackend8070`，并加入安装包内 preload 与源码逐字节比对、敏感开发文件排除的成品门禁。使用真实 preload 的隔离 IPC 测试、8070 菜单回归、控制模块回归及安全门通过。新安装包输出到独立目录 `release-1.16.29-preload-fix`，未清空历史 `release`；成品安全检查和隔离启动通过。新包 SHA256 `26DF9CC3D8510D27084FC9304EE6531B145A94C4EB3024E336008DB642DB67F0`，旧包哈希保持 `194EDD0879743FF3C5067F8BF143D0C6D61C3925FE02FF4D1305282C4E9DB79C`。Signal 8.36 登录保留、覆盖升级及跨设备实测已由用户确认验收。详细记录见 [2026-11-22 打包与后台菜单修复存档](SESSION_ARCHIVE_2026-11-22_BACKEND-PRELOAD-PACKAGE.md)。与 8070 会话 `01a1ffb3-f4ae-7052-8ef1-cfe7f8b2e08d` 协作；8070 隧道/设备投屏问题由对方跟进，本项目未改动其源码或操作设备。旧标签及下方历史记录保留。
 
 本次交付已整理为 [2026-11-21 / 1.16.29 存档](SESSION_ARCHIVE_2026-11-21_1.16.29.md)。构建提交 `64d459081b713f83d885c55573acdf1048af470d` / 标签 `v1.16.29` 保持不动；用户本轮要求将补充存档保存本地 Git，沿用同次交付版本、不重复打包、不推送。存档恢复标签为 `archive/1.16.29-2026-11-21`。用户仅要求打开过安装包文件夹，尚未报告 1.16.29 安装成功。
