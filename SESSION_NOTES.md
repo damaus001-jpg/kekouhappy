@@ -1,5 +1,13 @@
 # 当前接续记录
 
+## 2026-11-26 Signal 8.36 导出修复 / 1.16.30 打包
+
+- 用户反馈：皮卡丘在 Signal 里导出不了聊天内容。定位为 8.36 会话面板外层类名改为仅 `ConversationPanel`（8.18 为 `ConversationView ConversationPanel`），导出脚本旧 scope 选择器 `.module-conversation,.ConversationView` 落空后退化到 `.CompositionArea` 父容器（仅输入区，无消息列表），四种组合（中/英 × 当日/全部）全部失败。
+- 修复：`src/conversation-export-runtime.ts` scope 加 `.ConversationPanel`，退化路径改 `closest` 到 `.ConversationView__pane,.ConversationView,.ConversationPanel,.module-conversation`；8.18 兼容保留。测试 `tools/test-conversation-export-runtime.cjs` 改 8.36 结构夹具并保留 8.18 回归。
+- 验证：完整构建、运行时回归、生产序列化脚本回归、渲染层四组合、中文缓存、安全门全部通过。**用户在开发版实测 Signal 四种组合导出并保存文件，全部通过。**
+- 用户确认后打包：版本推进 **1.16.30**（跳过含 4 的版本号），输出独立目录，不覆盖历史包。套装仍 572987197。详见 `CONVERSATION_EXPORT.md` 与打包记录。
+- 同类隐患待用户决定：`src/assistant-material-runtime.ts:29` 素材面板在 Signal 8.36 下 scope 同样退化，联系人标题可能显示“当前联系人”（ID 读取不受影响）。
+
 ## 2026-11-25 新包已装机 + 8070 新包待装
 
 - 用户已在本机安装新皮卡丘包（SHA256 `f0bece3b…`，约 07:55）。只读核对：安装版 `D:\fanyiqi\maoyi\maoyi.exe` 与 `resources\app.asar` 与 `release/win-unpacked` 成品逐字节一致，且安装版 asar 主进程含 apple/8070 节流修复。

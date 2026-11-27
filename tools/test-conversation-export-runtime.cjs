@@ -24,9 +24,11 @@ app.whenReady().then(async()=>{
     const win=new BrowserWindow({show:false,width:1100,height:800,webPreferences:{sandbox:true,contextIsolation:true}});await win.loadURL('data:text/html,<html><body></body></html>');
     const execute=async script=>{const result=await win.webContents.executeJavaScript(script,true);return result?.exportResult?unwrapConversationExportResult(result):result;};
     const message=(id,text,chinese='')=>platform==='whatsapp'?`<div data-id="false_15550000001@c.us_${id}" class="message-in" style="height:120px"><div data-pre-plain-text="[10:00, 10/12/2026] Customer: "><span class="selectable-text">${text}<div class="df-chat-translation">${chinese}<button>refresh</button></div></span></div></div>`:platform==='telegram'?`<div class="bubble is-in" data-mid="${id}" style="height:120px"><div class="bubble-content"><div class="message"><span class="translatable-message">${text}</span><div class="df-chat-translation">${chinese}<button>refresh</button></div></div></div><span class="time">10:00</span></div>`:`<div class="module-message__wrapper" role="article" aria-labelledby="message-accessibility-contents:${id}"><div class="module-message module-message--incoming" style="height:120px"><div class="module-message__text">${text}</div><div class="module-message__maoyi-translation${chinese?'':' module-message__maoyi-translation--missing'}">${chinese}<button>refresh</button></div></div></div>`;
-    const wrap=platform==='whatsapp'?'<div id="main" data-jid="15550000001@c.us">':platform==='telegram'?'<div id="MiddleColumn" data-peer-id="101">':'<div class="ConversationView ConversationPanel"><div class="CompositionArea" data-df-signal-conversation-id="11111111-1111-4111-8111-111111111111"></div>';
+    const wrap=platform==='whatsapp'?'<div id="main" data-jid="15550000001@c.us">':platform==='telegram'?'<div id="MiddleColumn" data-peer-id="101">':'';
     const header=platform==='telegram'?'<div class="chat-info"><span class="title">Fixture</span></div>':'<header><span title="Fixture">Fixture</span></header>';
-    const html=wrap+header+'<div id="history" class="scrollable" style="height:200px;overflow-y:auto">'+message('1','Hello','你好')+message('2','Hello')+message('3','Bye')+'</div></div><div class="bubble" data-mid="outside">OTHER CONVERSATION</div>';
+    const html=platform==='signal'
+      ?'<div class="ConversationPanel"><div class="ConversationView__header">'+header+'</div><div class="ConversationView__pane"><div class="ConversationView__timeline--container"><div id="history" class="scrollable" style="height:200px;overflow-y:auto">'+message('1','Hello','你好')+message('2','Hello')+message('3','Bye')+'</div></div><div class="ConversationView__composition-area"><div class="CompositionArea" data-df-signal-conversation-id="11111111-1111-4111-8111-111111111111"></div></div></div></div><div class="bubble" data-mid="outside">OTHER CONVERSATION</div>'
+      :wrap+header+'<div id="history" class="scrollable" style="height:200px;overflow-y:auto">'+message('1','Hello','你好')+message('2','Hello')+message('3','Bye')+'</div></div><div class="bubble" data-mid="outside">OTHER CONVERSATION</div>';
     await execute(`document.body.innerHTML=${JSON.stringify(html)};true`);
     await execute(`document.querySelector('#history').scrollTop=42;window.fixtureScrollEvents=0;document.querySelector('#history').addEventListener('scroll',()=>window.fixtureScrollEvents++);true`);
     const scrollBefore=await execute(`document.querySelector('#history').scrollTop`);
@@ -76,7 +78,7 @@ app.whenReady().then(async()=>{
       const nativeHeader=day=>`<div class="flex justify-center p-5"><div class="type-body-medium"><time datetime="${day}">${day}</time></div></div>`;
       const gif=media('today-gif','<video loop autoplay muted></video>');
       const quoted=media('today-quote','<div class="module-quoted-message"><time datetime="2026-10-01">quoted old date</time></div><div class="module-message__text">Today reply</div><div class="module-message__metadata"><time class="module-message__metadata__date" datetime="2026-10-12T12:00:00">12:00</time></div>');
-      const signalHtml=wrap+header+'<div id="history" style="height:200px;overflow-y:auto">'+nativeHeader('2026-10-11')+media('yesterday-gif','<video loop muted></video>')+nativeHeader('2026-10-12')+gif+quoted+'</div></div>';
+      const signalHtml='<div class="ConversationPanel"><div class="ConversationView__header">'+header+'</div><div class="ConversationView__pane"><div class="ConversationView__timeline--container"><div id="history" style="height:200px;overflow-y:auto">'+nativeHeader('2026-10-11')+media('yesterday-gif','<video loop muted></video>')+nativeHeader('2026-10-12')+gif+quoted+'</div></div><div class="ConversationView__composition-area"><div class="CompositionArea" data-df-signal-conversation-id="11111111-1111-4111-8111-111111111111"></div></div></div></div>';
       await execute(`document.body.innerHTML=${JSON.stringify(signalHtml)};true`);
       const signal=await execute(buildConversationExportScript({action:'begin',platform}));
       assert.equal(signal.rows[0].timestamp,'2026-10-11');assert.equal(signal.rows[1].timestamp,'2026-10-12','first GIF without its own metadata inherits the native Signal day header');
@@ -88,6 +90,12 @@ app.whenReady().then(async()=>{
       assert.equal(noDate.rows[1].timestamp,'','a later dated text cannot assign a date to the preceding GIF');
       assert.throws(()=>renderConversationExport({profileId:'fixture',platform:'signal',contactId:signal.contactId,contactTitle:'Fixture',mode:'english',scope:'today',exportDate:'2026-10-12',coverage:'history-top',coverageNote:'',rows:noDate.rows}),/日期无法识别/);
       console.log('PASS Signal media dates: native date-only time headers, first GIF with collapsed metadata, midnight boundary, quote exclusion and no guessing from later messages');
+      const legacy818='<div class="ConversationView ConversationPanel">'+header+'<div id="history" class="scrollable" style="height:200px;overflow-y:auto">'+message('818-1','Legacy text')+'</div><div class="CompositionArea" data-df-signal-conversation-id="11111111-1111-4111-8111-111111111111"></div></div>';
+      await execute(`document.body.innerHTML=${JSON.stringify(legacy818)};true`);
+      const legacy=await execute(buildConversationExportScript({action:'snapshot',platform}));
+      assert.equal(legacy.contactId,'signal:11111111-1111-4111-8111-111111111111');
+      assert.equal(legacy.rows.length,1);assert.equal(legacy.rows[0].originalText,'Legacy text');
+      console.log('PASS Signal 8.18 legacy ConversationView container still exports after the 8.36 scope fix');
     }
     win.destroy();
     console.log(`PASS ${platform}: both history pages, repeated text kept, inline cache, UI exclusion, contact-switch abort`);

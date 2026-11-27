@@ -12,7 +12,7 @@ function conversationExportRuntime(command:ExportCommand,readTelegram:()=>string
     return w.__dfApple.apply({action:'export',command});
   }
   const visible=(n:Element)=>!!n.getClientRects().length&&getComputedStyle(n).display!=='none'&&getComputedStyle(n).visibility!=='hidden';
-  const scope=platform==='opensms'?document.querySelector('.im-chat'):platform==='whatsapp'?document.querySelector('#main'):platform==='telegram'?document.querySelector('#MiddleColumn,.chat.active,.middle-column'):document.querySelector('.module-conversation,.ConversationView')||document.querySelector('.CompositionArea')?.parentElement;
+  const scope=platform==='opensms'?document.querySelector('.im-chat'):platform==='whatsapp'?document.querySelector('#main'):platform==='telegram'?document.querySelector('#MiddleColumn,.chat.active,.middle-column'):document.querySelector('.module-conversation,.ConversationView,.ConversationPanel')||document.querySelector('.CompositionArea')?.closest('.ConversationView__pane,.ConversationView,.ConversationPanel,.module-conversation');
   if(!scope)fail('conversation-not-open','请先打开需要导出的联系人会话');
   const heading=scope.querySelector('.im-chat-top .info-other .info-value,.chat-info .peer-title,.chat-info .title,.ChatInfo .title,.module-ConversationHeader__header__info__title,.module-conversation-header__title,header [title],header [dir="auto"]');
   const contactTitle=(heading?.getAttribute('title')||heading?.textContent||'当前联系人').replace(/\s+/g,' ').trim().slice(0,200);

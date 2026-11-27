@@ -10,6 +10,14 @@ TXT 使用 UTF-8 BOM，直接以第一天日期开始，不再包含平台、联
 
 验证：生产构建、`tools/test-conversation-export.mjs`、中文缓存回归、生产序列化脚本回归、OpenSMS 集成回归及包含两级菜单四种组合的隐藏界面回归。
 
+## 导出兼容修正（Signal 8.36.0，2026-11-26）
+
+Signal 8.36.0 把会话面板外层类名从 `ConversationView ConversationPanel` 改为仅 `ConversationPanel`（上游 `ConversationView.dom.tsx`）。旧 scope 选择器 `.module-conversation,.ConversationView` 落空后，脚本退化为 `.CompositionArea` 的父容器 `ConversationView__composition-area`，其中没有消息列表，Signal 导出在开始阶段报“没有可读取的聊天记录或历史滚动区域”，中文/英文与当天/全部四种组合全部失败。WhatsApp、Telegram、OpenSMS、苹果走各自选择器，不受影响。
+
+修复：Signal scope 选择器加入 `.ConversationPanel`，退化路径改为从 `.CompositionArea` 向上 `closest` 到 `.ConversationView__pane,.ConversationView,.ConversationPanel,.module-conversation`；8.18 外层同时带 `ConversationView` 类，仍命中第一组选择器，旧内核保持可导出。导出运行时测试的 Signal 夹具改为 8.36 的 `ConversationPanel / ConversationView__header / ConversationView__pane / ConversationView__timeline--container / ConversationView__composition-area` 结构，并保留 8.18 旧结构回归。
+
+验证：完整构建、运行时回归（8.36 新结构与 8.18 旧结构、媒体日期、GIF、引用排除、联系人切换中止）、生产序列化脚本回归（从生产 bundle 提取执行）、渲染层回归（中/英、当日/全部、收款排除、暂无译文、媒体标记、日期分组）、中文导出缓存回归及安全门全部通过。用户在开发版实测 Signal 四种组合导出并保存文件全部通过。本轮随 1.16.30 安装包交付。
+
 ## 导出兼容修正
 
 Signal 省略单条时间的媒体消息，使用消息外的原生 `time[datetime="YYYY-MM-DD"]` 日期分隔归属当天；不把引用消息中的日期作为当前消息日期，不凭后续文字消息的日期推断前一条 GIF。Signal 原生组件的 `Time` 和 `TimelineDateHeader` 结构见本机 Signal 8.18.0 参考源码。该结构已在生产脚本测试中覆盖昨天 GIF、今天首条 GIF、引用旧消息及确实无日期时继续拒绝当天筛选的场景；用户现场根因尚未直接抓取 DOM 确认。
